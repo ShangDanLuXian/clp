@@ -20,6 +20,7 @@
 #include "../../Utils.hpp"
 #include "../Constants.hpp"
 #include "utils.hpp"
+#include "../../BloomFilter.hpp"
 
 using clp::ir::eight_byte_encoded_variable_t;
 using clp::ir::four_byte_encoded_variable_t;
@@ -220,6 +221,105 @@ void Archive::close() {
 
     // Persist all metadata including dictionaries
     write_dir_snapshot();
+// In Archive::close(), after write_dir_snapshot():
+
+constexpr size_t N = 12;  // 4-gram size (like ClickHouse)
+
+SPDLOG_INFO("Building {}-gram bloom filter for archive {}", N, m_id_as_string);
+
+// Calculate actual statistics from dictionaries
+size_t total_chars_in_logtypes = 0;
+size_t total_tokens_in_logtypes = 0;
+
+for (auto const& [logtype_value, logtype_id] : m_logtype_dict.get_value_to_id_map()) {
+    std::string token;
+    for (char c : logtype_value) {
+        if (std::isalnum(static_cast<unsigned char>(c)) || c == '_') {
+            token += c;
+        } else if (!token.empty()) {
+            total_chars_in_logtypes += token.length();
+            total_tokens_in_logtypes++;
+            token.clear();
+        }
+    }
+    if (!token.empty()) {
+        total_chars_in_logtypes += token.length();
+        total_tokens_in_logtypes++;
+    }
+}
+
+size_t total_chars_in_vars = 0;
+size_t num_var_entries = m_var_dict.get_value_to_id_map().size();
+for (auto const& [var_value, var_id] : m_var_dict.get_value_to_id_map()) {
+    for (char c : var_value) {
+        if (std::isalnum(static_cast<unsigned char>(c)) || c == '_') {
+            total_chars_in_vars++;
+        }
+    }
+}
+
+// Calculate average token length
+double avg_logtype_token_length = total_tokens_in_logtypes > 0 
+    ? static_cast<double>(total_chars_in_logtypes) / total_tokens_in_logtypes 
+    : 10.0;
+double avg_var_length = num_var_entries > 0 
+    ? static_cast<double>(total_chars_in_vars) / num_var_entries 
+    : 10.0;
+
+// Calculate n-grams per token: max(0, avg_length - N + 1)
+size_t ngrams_per_logtype_token = avg_logtype_token_length > N 
+    ? static_cast<size_t>(avg_logtype_token_length - N + 1) 
+    : 0;
+size_t ngrams_per_var = avg_var_length > N 
+    ? static_cast<size_t>(avg_var_length - N + 1) 
+    : 0;
+
+// Estimate total n-grams
+size_t estimated_ngrams = total_tokens_in_logtypes * ngrams_per_logtype_token 
+                        + num_var_entries * ngrams_per_var;
+
+// Use 10 bits per n-gram for ~1% false positive rate
+size_t bloom_size = estimated_ngrams * 5;
+bloom_size = std::max(size_t(100000), bloom_size);
+
+SPDLOG_INFO("Bloom filter stats: {} logtype tokens (avg len {:.1f}), {} vars (avg len {:.1f}), estimated {} {}-grams",
+            total_tokens_in_logtypes, avg_logtype_token_length,
+            num_var_entries, avg_var_length,
+            estimated_ngrams, N);
+
+BloomFilter bloom_filter(bloom_size, 3);
+
+// Add n-grams from each token in logtypes
+for (auto const& [logtype_value, logtype_id] : m_logtype_dict.get_value_to_id_map()) {
+    std::string token;
+    for (char c : logtype_value) {
+        if (std::isalnum(static_cast<unsigned char>(c)) || c == '_') {
+            token += std::tolower(static_cast<unsigned char>(c));
+        } else if (!token.empty()) {
+            bloom_filter.add_ngrams(token, N);
+            token.clear();
+        }
+    }
+    if (!token.empty()) {
+        bloom_filter.add_ngrams(token, N);
+    }
+}
+
+// Add n-grams from variables
+for (auto const& [var_value, var_id] : m_var_dict.get_value_to_id_map()) {
+    bloom_filter.add_ngrams(var_value, N);
+}
+
+std::string bloom_path = m_path + "/bloom.filter";
+if (bloom_filter.write_to_file(bloom_path)) {
+    SPDLOG_INFO("Wrote {}-gram bloom filter: {} items added, {:.2f}MB ({:.1f}% of estimated)", 
+                N,
+                bloom_filter.get_num_items_added(),
+                bloom_filter.get_size() / 8.0 / 1024 / 1024,
+                100.0 * bloom_filter.get_num_items_added() / std::max(size_t(1), estimated_ngrams));
+} else {
+    SPDLOG_WARN("Failed to write bloom filter");
+}
 
     m_logtype_dict.close();
     m_logtype_dict_entry.clear();

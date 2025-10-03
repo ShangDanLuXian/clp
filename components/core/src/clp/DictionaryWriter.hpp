@@ -24,6 +24,7 @@ namespace clp {
 template <typename DictionaryIdType, typename EntryType>
 class DictionaryWriter {
 public:
+using value_to_id_t = absl::flat_hash_map<std::string, DictionaryIdType>;
     // Types
     class OperationFailed : public TraceableException {
     public:
@@ -85,9 +86,10 @@ public:
      */
     size_t get_data_size() const { return m_data_size; }
 
+    value_to_id_t const& get_value_to_id_map() const { return m_value_to_id; }
+
 protected:
     // Types
-    using value_to_id_t = absl::flat_hash_map<std::string, DictionaryIdType>;
 
     // Variables
     bool m_is_open;

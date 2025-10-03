@@ -17,6 +17,7 @@
 #include "../streaming_archive/Constants.hpp"
 #include "../Utils.hpp"
 #include "CommandLineArguments.hpp"
+#include "../BloomFilter.hpp"
 
 using clp::clg::CommandLineArguments;
 using clp::CommandLineArgumentsBase;
@@ -46,6 +47,13 @@ using std::endl;
 using std::string;
 using std::to_string;
 using std::vector;
+
+
+static size_t g_total_archives = 0;
+static size_t g_archives_skipped_by_bloom = 0;
+static size_t g_archives_searched = 0;
+static size_t g_archives_with_results = 0;
+static size_t g_false_positives = 0;
 
 /**
  * Opens the archive and reads the dictionaries
@@ -194,7 +202,7 @@ static bool open_archive(string const& archive_path, Archive& archive_reader) {
     return true;
 }
 
-static bool search(
+static ssize_t search(
         vector<string> const& search_strings,
         CommandLineArguments& command_line_args,
         Archive& archive,
@@ -310,7 +318,9 @@ static bool search(
                 }
             }
             SPDLOG_DEBUG("# matches found: {}", num_matches);
+            return num_matches;
         }
+        return 0;
     } catch (TraceableException& e) {
         error_code = e.get_error_code();
         if (ErrorCode_errno == error_code) {
@@ -334,7 +344,6 @@ static bool search(
         }
     }
 
-    return true;
 }
 
 static bool open_compressed_file(
@@ -570,8 +579,29 @@ int main(int argc, char const* argv[]) {
             );
             continue;
         }
+        g_total_archives++;
 
-        // Open archive
+        // Bloom filter check
+        clp::BloomFilter bloom_filter;
+        auto bloom_path = archive_path / "bloom.filter";
+        if (std::filesystem::exists(bloom_path)) {
+            if (bloom_filter.load_from_file(bloom_path.string())) {
+                bool might_match = false;
+                
+                for (auto const& search_string : search_strings) {
+                    if (bloom_filter.might_contain_ngrams(search_string, 12)) {
+                        might_match = true;
+                        break;
+                    }
+                }
+                
+                if (!might_match) {
+                    SPDLOG_INFO("Bloom filter: Skipping archive {}", archive_id);
+                    g_archives_skipped_by_bloom++;
+                    continue;
+                }
+            }
+        }
         if (!open_archive(archive_path.string(), archive_reader)) {
             return -1;
         }
@@ -604,14 +634,38 @@ int main(int argc, char const* argv[]) {
             }
         }
 
-        // Perform search
-        if (!search(search_strings, command_line_args, archive_reader, *lexer_ptr, use_heuristic)) {
+        ssize_t matches_in_archive = search(search_strings, command_line_args, archive_reader, *lexer_ptr, use_heuristic);
+    
+        if (matches_in_archive < 0) {
+            // Error occurred
             return -1;
+        }
+        
+        g_archives_searched++;
+        
+        if (matches_in_archive == 0) {
+            g_false_positives++;
+        } else {
+            g_archives_with_results++;
         }
         archive_reader.close();
     }
 
     global_metadata_db->close();
+
+    if (g_total_archives > 0) {
+        SPDLOG_INFO("=== Bloom Filter Statistics ===");
+        SPDLOG_INFO("Total archives: {}", g_total_archives);
+        SPDLOG_INFO("Archives skipped: {}", g_archives_skipped_by_bloom);
+        SPDLOG_INFO("Archives searched: {}", g_archives_searched);
+        SPDLOG_INFO("  - With results: {}", g_archives_with_results);
+        SPDLOG_INFO("  - False positives: {} ({:.1f}%)", 
+                    g_false_positives,
+                    100.0 * g_false_positives / std::max(size_t(1), g_archives_searched));
+        SPDLOG_INFO("Skip rate: {:.1f}%", 
+                    100.0 * g_archives_skipped_by_bloom / g_total_archives);
+    }
+    
 
     Profiler::stop_continuous_measurement<Profiler::ContinuousMeasurementIndex::Search>();
     LOG_CONTINUOUS_MEASUREMENT(Profiler::ContinuousMeasurementIndex::Search)

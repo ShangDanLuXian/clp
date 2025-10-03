@@ -22,6 +22,7 @@
 #include "../../VariableDictionaryWriter.hpp"
 #include "../ArchiveMetadata.hpp"
 #include "../MetadataDB.hpp"
+#include "../../BloomFilter.hpp"
 
 namespace clp::streaming_archive::writer {
 class Archive {

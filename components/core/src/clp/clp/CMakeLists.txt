@@ -169,6 +169,8 @@ set(
         run.hpp
         utils.cpp
         utils.hpp
+        ../BloomFilter.cpp
+        ../BloomFilter.hpp
 )
 
 if(CLP_BUILD_EXECUTABLES)

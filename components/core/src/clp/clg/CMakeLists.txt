@@ -132,6 +132,7 @@ set(
         clg.cpp
         CommandLineArguments.cpp
         CommandLineArguments.hpp
+        ../BloomFilter.cpp
 )
 
 if(CLP_BUILD_EXECUTABLES)
