@@ -7,6 +7,7 @@
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 
+#include "../clp/Stopwatch.hpp"
 #include "archive_constants.hpp"
 #include "Defs.hpp"
 #include "SchemaTree.hpp"
@@ -46,7 +47,14 @@ void ArchiveWriter::open(ArchiveWriterOption const& option) {
 
     std::string var_dict_path = m_archive_path + constants::cArchiveVarDictFile;
     m_var_dict = std::make_shared<VariableDictionaryWriter>();
-    m_var_dict->open(var_dict_path, m_compression_level, UINT64_MAX);
+    // Bloom filter will be sized correctly at close time based on actual entry count
+    // Pass 0 as estimate since it's not used - filter is created when closing the archive
+    m_var_dict->open_with_bloom_filter(
+            var_dict_path,
+            m_compression_level,
+            UINT64_MAX,
+            0  // Not used - bloom filter sized at close time
+    );
 
     std::string log_dict_path = m_archive_path + constants::cArchiveLogDictFile;
     m_log_dict = std::make_shared<LogTypeDictionaryWriter>();
@@ -63,7 +71,15 @@ auto ArchiveWriter::close(bool is_split) -> ArchiveStats {
             throw OperationFailed(rc, __FILENAME__, __LINE__);
         }
     }
+    // Write bloom filter for variable dictionary BEFORE closing (close() clears m_value_to_id)
+    std::string var_bloom_path = m_archive_path + constants::cArchiveVarDictBloomFile;
+    auto var_bloom_compressed_size = m_var_dict->write_bloom_filter(
+            var_bloom_path,
+            m_compression_level
+    );
+
     auto var_dict_compressed_size = m_var_dict->close();
+
     auto log_dict_compressed_size = m_log_dict->close();
     auto array_dict_compressed_size = m_array_dict->close();
     auto schema_tree_compressed_size = m_schema_tree.store(m_archive_path, m_compression_level);
@@ -75,6 +91,7 @@ auto ArchiveWriter::close(bool is_split) -> ArchiveStats {
             {constants::cArchiveSchemaMapFile, schema_map_compressed_size},
             {constants::cArchiveTableMetadataFile, table_metadata_compressed_size},
             {constants::cArchiveVarDictFile, var_dict_compressed_size},
+            {constants::cArchiveVarDictBloomFile, var_bloom_compressed_size},
             {constants::cArchiveLogDictFile, log_dict_compressed_size},
             {constants::cArchiveArrayDictFile, array_dict_compressed_size},
             {constants::cArchiveTablesFile, table_compressed_size}
@@ -351,6 +368,16 @@ void ArchiveWriter::initialize_schema_writer(SchemaWriter* writer, Schema const&
 }
 
 std::pair<size_t, size_t> ArchiveWriter::store_tables() {
+    clp::Stopwatch stopwatch_total;
+    clp::Stopwatch stopwatch_step;
+    spdlog::info("[ERT] Starting ERT (Encoded Record Table) storage");
+    spdlog::info(
+            "[ERT] Total schemas to store: {}, Min table size: {}",
+            m_id_to_schema_writer.size(),
+            m_min_table_size
+    );
+
+    stopwatch_step.start();
     m_tables_file_writer.open(
             m_archive_path + constants::cArchiveTablesFile,
             FileWriter::OpenMode::CreateForWriting
@@ -360,6 +387,8 @@ std::pair<size_t, size_t> ArchiveWriter::store_tables() {
             FileWriter::OpenMode::CreateForWriting
     );
     m_table_metadata_compressor.open(m_table_metadata_file_writer, m_compression_level);
+    stopwatch_step.stop();
+    spdlog::info("[ERT] Step 1: Opened table files - took {} ms", stopwatch_step.get_time_taken_in_seconds() * 1000);
 
     /**
      * Packed stream metadata schema
@@ -406,30 +435,68 @@ std::pair<size_t, size_t> ArchiveWriter::store_tables() {
     for (auto it = m_id_to_schema_writer.begin(); it != m_id_to_schema_writer.end(); ++it) {
         schemas.push_back(it);
     }
+
+    stopwatch_step.reset();
+    stopwatch_step.start();
     auto comp = [](schema_map_it const& lhs, schema_map_it const& rhs) -> bool {
         return lhs->second->get_total_uncompressed_size()
                > rhs->second->get_total_uncompressed_size();
     };
     std::sort(schemas.begin(), schemas.end(), comp);
+    stopwatch_step.stop();
+    spdlog::info("[ERT] Step 2: Sorted {} ERTs by size - took {} ms", schemas.size(), stopwatch_step.get_time_taken_in_seconds() * 1000);
 
     uint64_t current_stream_offset = 0;
     uint64_t current_stream_id = 0;
     uint64_t current_table_file_offset = 0;
+    size_t total_erts_stored = 0;
+    size_t total_messages_stored = 0;
+    uint64_t total_uncompressed_bytes = 0;
+
+    stopwatch_step.reset();
+    stopwatch_step.start();
+    spdlog::info("[ERT] Step 3: Starting ERT compression and storage");
+
     m_tables_compressor.open(m_tables_file_writer, m_compression_level);
     for (auto it : schemas) {
+        clp::Stopwatch ert_stopwatch;
+        ert_stopwatch.start();
+
+        size_t num_messages = it->second->get_num_messages();
+        size_t uncompressed_size = it->second->get_total_uncompressed_size();
+
         it->second->store(m_tables_compressor);
+
+        ert_stopwatch.stop();
+        spdlog::info(
+                "[ERT]   - Compressed ERT (schema_id={}, messages={}, uncompressed_size={} bytes) in {} ms",
+                it->first,
+                num_messages,
+                uncompressed_size,
+                ert_stopwatch.get_time_taken_in_seconds() * 1000
+        );
+
         schema_metadata.emplace_back(
                 current_stream_id,
                 current_stream_offset,
                 it->first,
-                it->second->get_num_messages()
+                num_messages
         );
-        current_stream_offset += it->second->get_total_uncompressed_size();
+        current_stream_offset += uncompressed_size;
+        total_erts_stored++;
+        total_messages_stored += num_messages;
+        total_uncompressed_bytes += uncompressed_size;
         delete it->second;
 
         if (current_stream_offset > m_min_table_size || schemas.size() == schema_metadata.size()) {
             stream_metadata.emplace_back(current_table_file_offset, current_stream_offset);
             m_tables_compressor.close();
+            spdlog::info(
+                    "[ERT]   * Closed compression stream {} (ERTs: {}, uncompressed: {} bytes)",
+                    current_stream_id,
+                    total_erts_stored,
+                    current_stream_offset
+            );
             current_stream_offset = 0;
             ++current_stream_id;
             current_table_file_offset = m_tables_file_writer.get_pos();
@@ -439,6 +506,18 @@ std::pair<size_t, size_t> ArchiveWriter::store_tables() {
             }
         }
     }
+    stopwatch_step.stop();
+    spdlog::info(
+            "[ERT] Step 3 complete: Compressed and stored {} ERTs ({} messages, {} bytes uncompressed) in {} ms",
+            total_erts_stored,
+            total_messages_stored,
+            total_uncompressed_bytes,
+            stopwatch_step.get_time_taken_in_seconds() * 1000
+    );
+
+    stopwatch_step.reset();
+    stopwatch_step.start();
+    spdlog::info("[ERT] Step 4: Writing ERT metadata ({} streams, {} schemas)", stream_metadata.size(), schema_metadata.size());
 
     m_table_metadata_compressor.write_numeric_value(stream_metadata.size());
     for (auto& stream : stream_metadata) {
@@ -459,12 +538,37 @@ std::pair<size_t, size_t> ArchiveWriter::store_tables() {
         m_table_metadata_compressor.write_numeric_value(schema.num_messages);
     }
     m_table_metadata_compressor.close();
+    stopwatch_step.stop();
+    spdlog::info("[ERT] Step 4 complete: Wrote ERT metadata - took {} ms", stopwatch_step.get_time_taken_in_seconds() * 1000);
 
     auto table_metadata_compressed_size = m_table_metadata_file_writer.get_pos();
     auto table_compressed_size = m_tables_file_writer.get_pos();
 
     m_table_metadata_file_writer.close();
     m_tables_file_writer.close();
+
+    stopwatch_total.stop();
+    double compression_ratio = total_uncompressed_bytes > 0
+                                       ? static_cast<double>(total_uncompressed_bytes)
+                                                 / static_cast<double>(table_compressed_size)
+                                       : 0.0;
+    spdlog::info(
+            "[ERT] === ERT Storage Complete ===\n"
+            "[ERT] Total time (store + compress): {} ms\n"
+            "[ERT] ERTs stored: {}\n"
+            "[ERT] Messages stored: {}\n"
+            "[ERT] Uncompressed size: {} bytes\n"
+            "[ERT] Compressed tables size: {} bytes\n"
+            "[ERT] Compressed metadata size: {} bytes\n"
+            "[ERT] Compression ratio: {:.2f}:1",
+            stopwatch_total.get_time_taken_in_seconds() * 1000,
+            total_erts_stored,
+            total_messages_stored,
+            total_uncompressed_bytes,
+            table_compressed_size,
+            table_metadata_compressed_size,
+            compression_ratio
+    );
 
     return {table_metadata_compressed_size, table_compressed_size};
 }

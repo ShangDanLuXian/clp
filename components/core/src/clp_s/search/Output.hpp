@@ -13,6 +13,7 @@
 #include "../SchemaReader.hpp"
 #include "../Utils.hpp"
 #include "ast/Expression.hpp"
+#include "ast/FilterExpr.hpp"
 #include "ast/StringLiteral.hpp"
 #include "OutputHandler.hpp"
 #include "QueryRunner.hpp"
@@ -36,7 +37,8 @@ public:
               m_expr(expr),
               m_match(match),
               m_output_handler(std::move(output_handler)),
-              m_should_marshal_records(m_output_handler->should_marshal_records()) {}
+              m_should_marshal_records(m_output_handler->should_marshal_records()),
+              m_ignore_case(ignore_case) {}
 
     /**
      * Filters messages within the archive and outputs the filtered messages to the configured
@@ -47,12 +49,33 @@ public:
     auto filter() -> bool;
 
 private:
+    /**
+     * Checks if the variable dictionary needs to be loaded by testing search strings
+     * against the bloom filter.
+     *
+     * @param ignore_case Whether the search is case-insensitive
+     * @return true if the dictionary should be loaded, false if bloom filter rules out all searches
+     */
+    auto should_load_variable_dictionary(bool ignore_case) const -> bool;
+
+    /**
+     * Extracts variable string search terms from a filter expression.
+     *
+     * @param expr The expression to extract strings from
+     * @param search_strings Output set to store extracted search strings
+     */
+    void extract_var_search_strings(
+            std::shared_ptr<ast::Expression> const& expr,
+            std::unordered_set<std::string>& search_strings
+    ) const;
+
     QueryRunner m_query_runner;
     std::shared_ptr<ArchiveReader> m_archive_reader;
     std::shared_ptr<ast::Expression> m_expr;
     std::shared_ptr<SchemaMatch> m_match;
     std::unique_ptr<OutputHandler> m_output_handler;
     bool m_should_marshal_records{true};
+    bool m_ignore_case{false};
 };
 }  // namespace clp_s::search
 

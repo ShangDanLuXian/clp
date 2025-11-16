@@ -3,6 +3,9 @@
 #include <filesystem>
 #include <string_view>
 
+#include <spdlog/spdlog.h>
+
+#include "../clp/Stopwatch.hpp"
 #include "archive_constants.hpp"
 #include "ArchiveReaderAdaptor.hpp"
 #include "InputConfig.hpp"
@@ -38,6 +41,9 @@ void ArchiveReader::open(Path const& archive_path, NetworkAuthOption const& netw
 }
 
 void ArchiveReader::read_metadata() {
+    clp::Stopwatch stopwatch;
+    stopwatch.start();
+
     constexpr size_t cDecompressorFileReadBufferCapacity = 64 * 1024;  // 64 KB
     auto table_metadata_reader = m_archive_reader_adaptor->checkout_reader_for_section(
             constants::cArchiveTableMetadataFile
@@ -127,13 +133,72 @@ void ArchiveReader::read_metadata() {
     m_table_metadata_decompressor.close();
 
     m_archive_reader_adaptor->checkin_reader_for_section(constants::cArchiveTableMetadataFile);
+
+    stopwatch.stop();
+    SPDLOG_INFO(
+            "[PERF] Read metadata - num_schemas={}, time={:.3f}ms",
+            m_schema_ids.size(),
+            stopwatch.get_time_taken_in_seconds() * 1000.0
+    );
 }
 
 void ArchiveReader::read_dictionaries_and_metadata() {
+    clp::Stopwatch dict_stopwatch;
+
     read_metadata();
-    m_var_dict->read_entries();
+
+    // Use the new read_variable_dictionary method which includes bloom filter loading
+    read_variable_dictionary();
+
+    dict_stopwatch.start();
     m_log_dict->read_entries();
+    dict_stopwatch.stop();
+    SPDLOG_INFO(
+            "[PERF] Read log type dictionary - time={:.3f}ms",
+            dict_stopwatch.get_time_taken_in_seconds() * 1000.0
+    );
+
+    dict_stopwatch.reset();
+    dict_stopwatch.start();
     m_array_dict->read_entries();
+    dict_stopwatch.stop();
+    SPDLOG_INFO(
+            "[PERF] Read array dictionary - time={:.3f}ms",
+            dict_stopwatch.get_time_taken_in_seconds() * 1000.0
+    );
+}
+
+std::shared_ptr<VariableDictionaryReader> ArchiveReader::read_variable_dictionary(bool lazy) {
+    clp::Stopwatch dict_stopwatch;
+
+    // Load bloom filter FIRST if not already loaded (it's tiny and fast - ~1ms)
+    // This allows early filtering before loading the full dictionary
+    if (!m_var_dict->has_bloom_filter()) {
+        dict_stopwatch.start();
+        if (m_var_dict->load_bloom_filter(constants::cArchiveVarDictBloomFile)) {
+            dict_stopwatch.stop();
+            SPDLOG_INFO(
+                    "[BLOOM] Loaded bloom filter - time={:.3f}ms, status=ENABLED",
+                    dict_stopwatch.get_time_taken_in_seconds() * 1000.0
+            );
+        } else {
+            dict_stopwatch.stop();
+            SPDLOG_INFO("[BLOOM] Bloom filter not available - will use full dictionary lookup");
+        }
+    }
+
+    // Now load the full dictionary (this is the expensive part - hundreds of ms)
+    dict_stopwatch.reset();
+    dict_stopwatch.start();
+    m_var_dict->read_entries(lazy);
+    dict_stopwatch.stop();
+    SPDLOG_INFO(
+            "[PERF] Read variable dictionary - entries={}, time={:.3f}ms",
+            m_var_dict->get_entries().size(),
+            dict_stopwatch.get_time_taken_in_seconds() * 1000.0
+    );
+
+    return m_var_dict;
 }
 
 void ArchiveReader::open_packed_streams() {
@@ -145,21 +210,58 @@ SchemaReader& ArchiveReader::read_schema_table(
         bool should_extract_timestamp,
         bool should_marshal_records
 ) {
+    clp::Stopwatch stopwatch;
+    clp::Stopwatch step_stopwatch;
+    stopwatch.start();
+
     if (m_id_to_schema_metadata.count(schema_id) == 0) {
         throw OperationFailed(ErrorCodeFileNotFound, __FILENAME__, __LINE__);
     }
 
+    auto& schema_metadata = m_id_to_schema_metadata[schema_id];
+    spdlog::info(
+            "[ERT] === Reading ERT (Encoded Record Table) ===\n"
+            "[ERT] Schema ID: {}\n"
+            "[ERT] Stream ID: {}\n"
+            "[ERT] Stream offset: {} bytes\n"
+            "[ERT] Uncompressed size: {} bytes\n"
+            "[ERT] Number of messages: {}",
+            schema_id,
+            schema_metadata.stream_id,
+            schema_metadata.stream_offset,
+            schema_metadata.uncompressed_size,
+            schema_metadata.num_messages
+    );
+
+    step_stopwatch.start();
     initialize_schema_reader(
             m_schema_reader,
             schema_id,
             should_extract_timestamp,
             should_marshal_records
     );
+    step_stopwatch.stop();
+    spdlog::info("[ERT] Initialized schema reader - took {} ms", step_stopwatch.get_time_taken_in_seconds() * 1000);
 
-    auto& schema_metadata = m_id_to_schema_metadata[schema_id];
+    step_stopwatch.reset();
+    step_stopwatch.start();
     auto stream_buffer = read_stream(schema_metadata.stream_id, true);
+    step_stopwatch.stop();
+    spdlog::info("[ERT] Read and decompressed stream - took {} ms", step_stopwatch.get_time_taken_in_seconds() * 1000);
+
     m_schema_reader
             .load(stream_buffer, schema_metadata.stream_offset, schema_metadata.uncompressed_size);
+
+    stopwatch.stop();
+    spdlog::info(
+            "[ERT] === ERT Read Complete (schema_id={}) ===\n"
+            "[ERT] Total time (decomp + load): {} ms\n"
+            "[ERT] Messages available: {}",
+            schema_id,
+            stopwatch.get_time_taken_in_seconds() * 1000,
+            schema_metadata.num_messages
+    );
+
     return m_schema_reader;
 }
 
@@ -386,6 +488,7 @@ void ArchiveReader::close() {
 
 std::shared_ptr<char[]> ArchiveReader::read_stream(size_t stream_id, bool reuse_buffer) {
     if (nullptr != m_stream_buffer && m_cur_stream_id == stream_id) {
+        spdlog::info("[ERT] Reusing already decompressed stream buffer (stream_id={})", stream_id);
         return m_stream_buffer;
     }
 
@@ -394,8 +497,21 @@ std::shared_ptr<char[]> ArchiveReader::read_stream(size_t stream_id, bool reuse_
         m_stream_buffer_size = 0;
     }
 
+    clp::Stopwatch stopwatch;
+    stopwatch.start();
+    spdlog::info("[ERT] Decompressing ERT stream (stream_id={})", stream_id);
+
     m_stream_reader.read_stream(stream_id, m_stream_buffer, m_stream_buffer_size);
     m_cur_stream_id = stream_id;
+
+    stopwatch.stop();
+    spdlog::info(
+            "[ERT] Decompressed stream (stream_id={}, size={} bytes) in {} ms",
+            stream_id,
+            m_stream_buffer_size,
+            stopwatch.get_time_taken_in_seconds() * 1000
+    );
+
     return m_stream_buffer;
 }
 }  // namespace clp_s

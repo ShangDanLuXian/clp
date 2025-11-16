@@ -1,6 +1,9 @@
 #include "PackedStreamReader.hpp"
 
+#include <spdlog/spdlog.h>
+
 #include "../clp/BoundedReader.hpp"
+#include "../clp/Stopwatch.hpp"
 #include "archive_constants.hpp"
 #include "ArchiveReaderAdaptor.hpp"
 
@@ -81,6 +84,9 @@ void PackedStreamReader::close() {
 
 void
 PackedStreamReader::read_stream(size_t stream_id, std::shared_ptr<char[]>& buf, size_t& buf_size) {
+    clp::Stopwatch stopwatch;
+    stopwatch.start();
+
     constexpr size_t cDecompressorFileReadBufferCapacity = 64 * 1024;  // 64 KB
     if (stream_id >= m_stream_metadata.size()) {
         throw OperationFailed(ErrorCodeCorrupt, __FILE__, __LINE__);
@@ -128,5 +134,13 @@ PackedStreamReader::read_stream(size_t stream_id, std::shared_ptr<char[]>& buf, 
         throw OperationFailed(error, __FILE__, __LINE__);
     }
     m_packed_stream_decompressor.close_for_reuse();
+
+    stopwatch.stop();
+    SPDLOG_INFO(
+            "[PERF] Archive IO - stream_id={}, uncompressed_size={} bytes, time={:.3f}ms",
+            stream_id,
+            uncompressed_size,
+            stopwatch.get_time_taken_in_seconds() * 1000.0
+    );
 }
 }  // namespace clp_s

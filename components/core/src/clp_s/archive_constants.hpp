@@ -23,6 +23,7 @@ constexpr char cArchiveTablesFile[] = "/0";
 constexpr char cArchiveArrayDictFile[] = "/array.dict";
 constexpr char cArchiveLogDictFile[] = "/log.dict";
 constexpr char cArchiveVarDictFile[] = "/var.dict";
+constexpr char cArchiveVarDictBloomFile[] = "/var.dict.bloom";
 
 // Schema tree constants
 constexpr char cRootNodeName[] = "";

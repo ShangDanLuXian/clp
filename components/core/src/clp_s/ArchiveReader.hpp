@@ -47,14 +47,11 @@ public:
     void open_packed_streams();
 
     /**
-     * Reads the variable dictionary from the archive.
+     * Reads the variable dictionary from the archive and loads the bloom filter if available.
      * @param lazy
      * @return the variable dictionary reader
      */
-    std::shared_ptr<VariableDictionaryReader> read_variable_dictionary(bool lazy = false) {
-        m_var_dict->read_entries(lazy);
-        return m_var_dict;
-    }
+    std::shared_ptr<VariableDictionaryReader> read_variable_dictionary(bool lazy = false);
 
     /**
      * Reads the log type dictionary from the archive.

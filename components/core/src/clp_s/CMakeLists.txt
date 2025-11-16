@@ -26,6 +26,8 @@ set(
         ../clp/EncodedVariableInterpreter.cpp
         ../clp/EncodedVariableInterpreter.hpp
         ../clp/ErrorCode.hpp
+        ../clp/Stopwatch.cpp
+        ../clp/Stopwatch.hpp
         ../clp/ffi/encoding_methods.cpp
         ../clp/ffi/encoding_methods.hpp
         ../clp/ffi/encoding_methods.inc
@@ -227,6 +229,8 @@ set(
         archive_constants.hpp
         ArchiveWriter.cpp
         ArchiveWriter.hpp
+        BloomFilter.cpp
+        BloomFilter.hpp
         ColumnWriter.cpp
         ColumnWriter.hpp
         Defs.hpp
@@ -297,6 +301,8 @@ set(
         ArchiveReader.hpp
         ArchiveReaderAdaptor.cpp
         ArchiveReaderAdaptor.hpp
+        BloomFilter.cpp
+        BloomFilter.hpp
         BufferViewReader.hpp
         ColumnReader.cpp
         ColumnReader.hpp

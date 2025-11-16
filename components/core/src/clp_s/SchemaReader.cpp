@@ -3,6 +3,9 @@
 #include <stack>
 #include <string>
 
+#include <spdlog/spdlog.h>
+
+#include "../clp/Stopwatch.hpp"
 #include "archive_constants.hpp"
 #include "BufferViewReader.hpp"
 #include "Schema.hpp"
@@ -53,14 +56,63 @@ int64_t SchemaReader::get_next_log_event_idx() const {
 
 void
 SchemaReader::load(std::shared_ptr<char[]> stream_buffer, size_t offset, size_t uncompressed_size) {
+    clp::Stopwatch stopwatch_total;
+    clp::Stopwatch stopwatch_step;
+
+    stopwatch_total.start();
+    spdlog::info(
+            "[ERT] Loading ERT (schema_id={}, messages={}, columns={}, uncompressed_size={} bytes)",
+            m_schema_id,
+            m_num_messages,
+            m_columns.size(),
+            uncompressed_size
+    );
+
     m_stream_buffer = stream_buffer;
     BufferViewReader buffer_reader{m_stream_buffer.get() + offset, uncompressed_size};
+
+    stopwatch_step.start();
+    size_t columns_loaded = 0;
     for (auto& reader : m_columns) {
+        clp::Stopwatch column_stopwatch;
+        column_stopwatch.start();
         reader->load(buffer_reader, m_num_messages);
+        column_stopwatch.stop();
+
+        if (columns_loaded < 5 || columns_loaded % 100 == 0) {
+            spdlog::info(
+                    "[ERT]   - Loaded column {} (node_id={}) in {} ms",
+                    columns_loaded,
+                    reader->get_id(),
+                    column_stopwatch.get_time_taken_in_seconds() * 1000
+            );
+        }
+        columns_loaded++;
     }
+    stopwatch_step.stop();
+    spdlog::info(
+            "[ERT] Loaded {} columns in {} ms",
+            columns_loaded,
+            stopwatch_step.get_time_taken_in_seconds() * 1000
+    );
+
     if (buffer_reader.get_remaining_size() > 0) {
         throw OperationFailed(ErrorCodeCorrupt, __FILENAME__, __LINE__);
     }
+
+    stopwatch_total.stop();
+    spdlog::info(
+            "[ERT] === ERT Load Complete (schema_id={}) ===\n"
+            "[ERT] Total load time: {} ms\n"
+            "[ERT] Messages: {}\n"
+            "[ERT] Columns loaded: {}\n"
+            "[ERT] Uncompressed size: {} bytes",
+            m_schema_id,
+            stopwatch_total.get_time_taken_in_seconds() * 1000,
+            m_num_messages,
+            columns_loaded,
+            uncompressed_size
+    );
 }
 
 auto SchemaReader::generate_json_string(uint64_t message_index) -> std::string {
@@ -212,8 +264,23 @@ bool SchemaReader::get_next_message(std::string& message) {
 }
 
 bool SchemaReader::get_next_message(std::string& message, FilterClass* filter) {
+    static thread_local clp::Stopwatch filter_stopwatch;
+    static thread_local clp::Stopwatch serialization_stopwatch;
+    static thread_local uint64_t filter_count = 0;
+    static thread_local uint64_t serialization_count = 0;
+    static thread_local double total_filter_time = 0.0;
+    static thread_local double total_serialization_time = 0.0;
+
     while (m_cur_message < m_num_messages) {
-        if (false == filter->filter(m_cur_message)) {
+        filter_stopwatch.start();
+        bool passes_filter = filter->filter(m_cur_message);
+        filter_stopwatch.stop();
+        double iteration_time = filter_stopwatch.get_time_taken_in_seconds();
+        filter_stopwatch.reset();
+        total_filter_time += iteration_time;
+        filter_count++;
+
+        if (false == passes_filter) {
             m_cur_message++;
             continue;
         }
@@ -222,15 +289,61 @@ bool SchemaReader::get_next_message(std::string& message, FilterClass* filter) {
             if (false == m_serializer_initialized) {
                 initialize_serializer();
             }
+
+            serialization_stopwatch.start();
             message = generate_json_string(m_cur_message);
 
             if (message.back() != '\n') {
                 message += '\n';
             }
+            serialization_stopwatch.stop();
+            double serialization_time = serialization_stopwatch.get_time_taken_in_seconds();
+            serialization_stopwatch.reset();
+            total_serialization_time += serialization_time;
+            serialization_count++;
         }
 
         m_cur_message++;
+
+        // Log stats every 10000 messages
+        if (filter_count % 10000 == 0) {
+            SPDLOG_INFO(
+                    "[PERF] Message processing - filter_count={}, avg_filter_time={:.3f}ms, "
+                    "serialization_count={}, avg_serialization_time={:.3f}ms",
+                    filter_count,
+                    (total_filter_time / filter_count) * 1000.0,
+                    serialization_count,
+                    serialization_count > 0 ? (total_serialization_time / serialization_count)
+                                                      * 1000.0
+                                            : 0.0
+            );
+        }
+
         return true;
+    }
+
+    // Log final stats when iteration completes
+    if (filter_count > 0) {
+        SPDLOG_INFO(
+                "[PERF] Message processing complete - total_filter_count={}, "
+                "total_filter_time={:.3f}ms, avg_filter_time={:.6f}ms, "
+                "total_serialization_count={}, total_serialization_time={:.3f}ms, "
+                "avg_serialization_time={:.6f}ms",
+                filter_count,
+                total_filter_time * 1000.0,
+                (total_filter_time / filter_count) * 1000.0,
+                serialization_count,
+                total_serialization_time * 1000.0,
+                serialization_count > 0 ? (total_serialization_time / serialization_count) * 1000.0
+                                        : 0.0
+        );
+        // Reset stats for next schema
+        filter_count = 0;
+        serialization_count = 0;
+        total_filter_time = 0.0;
+        total_serialization_time = 0.0;
+        filter_stopwatch.reset();
+        serialization_stopwatch.reset();
     }
 
     return false;

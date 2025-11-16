@@ -88,6 +88,8 @@ public:
 
     bool get_ignore_case() const { return m_ignore_case; }
 
+    bool get_use_bloom_filter() const { return m_use_bloom_filter; }
+
     std::string const& get_reducer_host() const { return m_reducer_host; }
 
     int get_reducer_port() const { return m_reducer_port; }
@@ -207,6 +209,7 @@ private:
     std::optional<epochtime_t> m_search_begin_ts;
     std::optional<epochtime_t> m_search_end_ts;
     bool m_ignore_case{false};
+    bool m_use_bloom_filter{true};  // Default to true (enabled)
     std::vector<std::string> m_projection_columns;
 
     // Search aggregation variables

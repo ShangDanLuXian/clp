@@ -4,8 +4,10 @@
 #define CLP_S_DICTIONARYWRITER_HPP
 
 #include <absl/container/flat_hash_map.h>
+#include <absl/container/flat_hash_set.h>
 
 #include "../clp/Defs.h"
+#include "BloomFilter.hpp"
 #include "DictionaryEntry.hpp"
 
 namespace clp_s {
@@ -84,11 +86,43 @@ public:
     };
 
     /**
+     * Opens dictionary for writing with bloom filter
+     * @param dictionary_path
+     * @param compression_level
+     * @param max_id
+     * @param expected_num_entries Expected number of entries for bloom filter sizing
+     */
+    void open_with_bloom_filter(
+            std::string const& dictionary_path,
+            int compression_level,
+            clp::variable_dictionary_id_t max_id,
+            size_t expected_num_entries
+    );
+
+    /**
      * Adds the given variable to the dictionary if it doesn't exist.
      * @param value
      * @param id ID of the variable matching the given entry
      */
     bool add_entry(std::string_view value, clp::variable_dictionary_id_t& id);
+
+    /**
+     * Writes the bloom filter to disk
+     * @param bloom_filter_path Path to write the bloom filter
+     * @param compression_level Compression level for the bloom filter
+     * @return Size of the compressed bloom filter file in bytes
+     */
+    [[nodiscard]] size_t write_bloom_filter(
+            std::string const& bloom_filter_path,
+            int compression_level
+    );
+
+private:
+    BloomFilter m_bloom_filter;
+    bool m_use_bloom_filter{false};
+    // Track ALL values seen for bloom filter, even if they're later removed from m_value_to_id
+    // (e.g., invariant values that get stored in MPT instead of variable dictionary)
+    absl::flat_hash_set<std::string> m_bloom_filter_values;
 };
 
 class LogTypeDictionaryWriter

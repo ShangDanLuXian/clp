@@ -128,6 +128,14 @@ bool search_archive(
 ) {
     auto const& query = command_line_arguments.get_query();
 
+    // Configure bloom filter usage based on command-line argument
+    auto var_dict = archive_reader->get_variable_dictionary();
+    var_dict->set_use_bloom_filter(command_line_arguments.get_use_bloom_filter());
+    SPDLOG_INFO(
+            "Bloom filter for variable dictionary: {}",
+            command_line_arguments.get_use_bloom_filter() ? "ENABLED" : "DISABLED"
+    );
+
     auto timestamp_dict = archive_reader->get_timestamp_dictionary();
     AddTimestampConditions add_timestamp_conditions(
             timestamp_dict->get_authoritative_timestamp_tokenized_column(),
@@ -146,24 +154,28 @@ bool search_archive(
         return false;
     }
 
+    SPDLOG_INFO("[SEARCH] Step 1: Standardizing query to OR-of-AND form");
     ast::OrOfAndForm standardize_pass;
     if (expr = standardize_pass.run(expr); std::dynamic_pointer_cast<ast::EmptyExpr>(expr)) {
         SPDLOG_ERROR("Query '{}' is logically false", query);
         return false;
     }
 
+    SPDLOG_INFO("[SEARCH] Step 2: Narrowing types");
     ast::NarrowTypes narrow_pass;
     if (expr = narrow_pass.run(expr); std::dynamic_pointer_cast<ast::EmptyExpr>(expr)) {
         SPDLOG_ERROR("Query '{}' is logically false", query);
         return false;
     }
 
+    SPDLOG_INFO("[SEARCH] Step 3: Converting to EXISTS form");
     ast::ConvertToExists convert_pass;
     if (expr = convert_pass.run(expr); std::dynamic_pointer_cast<ast::EmptyExpr>(expr)) {
         SPDLOG_ERROR("Query '{}' is logically false", query);
         return false;
     }
 
+    SPDLOG_INFO("[SEARCH] Step 4: Evaluating range index filters");
     EvaluateRangeIndexFilters metadata_filter_pass{
             archive_reader->get_range_index(),
             false == command_line_arguments.get_ignore_case()
@@ -175,6 +187,7 @@ bool search_archive(
 
     // skip decompressing the archive if we won't match based on
     // the timestamp index
+    SPDLOG_INFO("[SEARCH] Step 5: Evaluating timestamp index");
     EvaluateTimestampIndex timestamp_index(timestamp_dict);
     if (clp_s::EvaluatedValue::False == timestamp_index.run(expr)) {
         SPDLOG_INFO("No matching timestamp ranges for query '{}'", query);
@@ -182,6 +195,7 @@ bool search_archive(
     }
 
     // Narrow against schemas
+    SPDLOG_INFO("[SEARCH] Step 6: Matching query against schemas");
     auto match_pass = std::make_shared<SchemaMatch>(
             archive_reader->get_schema_tree(),
             archive_reader->get_schema_map()
@@ -268,6 +282,7 @@ bool search_archive(
     }
 
     // output result
+    SPDLOG_INFO("[SEARCH] Step 7: Executing search and filtering results");
     Output output(
             match_pass,
             expr,

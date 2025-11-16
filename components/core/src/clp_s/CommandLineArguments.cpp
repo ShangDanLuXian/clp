@@ -513,6 +513,10 @@ CommandLineArguments::parse_arguments(int argc, char const** argv) {
                 po::bool_switch(&m_ignore_case),
                 "Ignore case distinctions between values in the query and the compressed data"
             )(
+                "no-bloom-filter",
+                po::value<bool>(&m_use_bloom_filter)->zero_tokens()->default_value(true)->implicit_value(false),
+                "Disable bloom filter for dictionary lookups (useful for debugging or benchmarking)"
+            )(
                 "archive-id",
                 po::value<std::string>(&archive_id)->value_name("ID"),
                 "Limit search to the archive with the given ID in a subdirectory of archive-path"
