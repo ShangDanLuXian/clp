@@ -3,10 +3,16 @@
 #ifndef CLP_S_DICTIONARYWRITER_HPP
 #define CLP_S_DICTIONARYWRITER_HPP
 
+#include <cstddef>
+#include <string>
 #include <absl/container/flat_hash_map.h>
+#include <absl/container/flat_hash_set.h>
 
 #include "../clp/Defs.h"
 #include "DictionaryEntry.hpp"
+#include "clp_s/ZstdCompressor.hpp"
+#include "clp_s/archive_constants.hpp"
+#include "filter/ProbabilisticFilter.hpp"
 
 namespace clp_s {
 template <typename DictionaryIdType, typename EntryType>
@@ -37,6 +43,16 @@ public:
      */
     void open(std::string const& dictionary_path, int compression_level, DictionaryIdType max_id);
 
+        /**
+     * Opens dictionary for writing with a filter
+     * @param dictionary_path
+     * @param compression_level
+     * @param max_id
+     * @param filter_path
+     * @param filter_type
+     */
+     void open(std::string const& dictionary_path, int compression_level, DictionaryIdType max_id, FilterType filter_type);
+
     /**
      * Closes the dictionary
      * @return the compressed size of the dictionary in bytes
@@ -53,6 +69,12 @@ public:
      * @return The size (in-memory) of the data contained in the dictionary
      */
     size_t get_data_size() const { return m_data_size; }
+
+    /**
+     * Writes the filter to disk
+     * @return Size of the compressed filter file in bytes
+     */
+     [[nodiscard]] size_t write_filter();
 
 protected:
     // Types
@@ -71,6 +93,16 @@ protected:
 
     // Size (in-memory) of the data contained in the dictionary
     size_t m_data_size{};
+
+    // Filter related to on-disck storage
+    FileWriter m_filter_file_writer;
+    ZstdCompressor m_filter_compressor;
+
+    ProbabilisticFilter m_filter;
+    FilterType m_filter_type = FilterType::None;
+    // Track ALL values seen for filter, even if they're later removed from m_value_to_id
+    // (e.g., invariant values that get stored in MPT instead of variable dictionary)
+    absl::flat_hash_set<std::string> m_filter_values;
 };
 
 class VariableDictionaryWriter
@@ -130,6 +162,22 @@ void DictionaryWriter<DictionaryIdType, EntryType>::open(
 
     m_data_size = 0;
     m_is_open = true;
+
+}
+
+template <typename DictionaryIdType, typename EntryType>
+void DictionaryWriter<DictionaryIdType, EntryType>::open(
+        std::string const& dictionary_path,
+        int compression_level,
+        DictionaryIdType max_id,
+        FilterType filter_type
+) {
+    open(dictionary_path, compression_level, max_id);
+    m_filter_type = filter_type;
+    if (m_filter_type != FilterType::None) {
+        m_filter_file_writer.open(dictionary_path + constants::cArchiveFilterFileSuffix, FileWriter::OpenMode::CreateForWriting);
+        m_filter_compressor.open(m_filter_file_writer, compression_level);
+    }
 }
 
 template <typename DictionaryIdType, typename EntryType>
@@ -142,6 +190,11 @@ size_t DictionaryWriter<DictionaryIdType, EntryType>::close() {
     m_dictionary_compressor.close();
     size_t compressed_size = m_dictionary_file_writer.get_pos();
     m_dictionary_file_writer.close();
+
+    if (m_filter_type != FilterType::None) {
+        // TODO Make use of compressed bytes
+        (void)write_filter();
+    }
 
     m_value_to_id.clear();
 
@@ -163,6 +216,33 @@ void DictionaryWriter<DictionaryIdType, EntryType>::write_header_and_flush_to_di
 
     m_dictionary_compressor.flush();
     m_dictionary_file_writer.flush();
+}
+
+template <typename DictionaryIdType, typename EntryType>
+size_t DictionaryWriter<DictionaryIdType, EntryType>::write_filter(
+) {
+if (m_filter_type == FilterType::None) {
+    return 0;
+}
+
+size_t actual_entries = m_filter_values.size();
+
+m_filter = ProbabilisticFilter(m_filter_type, actual_entries, 0.07);
+
+for (auto const& value : m_filter_values) {
+    m_filter.add(value);
+}
+
+
+m_filter.write_to_file(m_filter_file_writer, m_filter_compressor);
+
+m_filter_compressor.close();
+size_t compressed_size = m_filter_file_writer.get_pos();
+m_filter_file_writer.close();
+
+m_filter_values.clear();
+
+return compressed_size;
 }
 }  // namespace clp_s
 

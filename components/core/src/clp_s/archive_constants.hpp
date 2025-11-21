@@ -24,6 +24,9 @@ constexpr char cArchiveArrayDictFile[] = "/array.dict";
 constexpr char cArchiveLogDictFile[] = "/log.dict";
 constexpr char cArchiveVarDictFile[] = "/var.dict";
 
+// Filter files
+constexpr char cArchiveFilterFileSuffix[] = ".filter";
+
 // Schema tree constants
 constexpr char cRootNodeName[] = "";
 constexpr int32_t cRootNodeId = -1;

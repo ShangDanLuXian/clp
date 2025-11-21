@@ -8,6 +8,7 @@
 #include <string_view>
 #include <unordered_set>
 #include <utility>
+#include <spdlog/spdlog.h>
 
 #include <boost/algorithm/string/case_conv.hpp>
 #include <string_utils/string_utils.hpp>
@@ -15,6 +16,8 @@
 #include "../clp/Defs.h"
 #include "ArchiveReaderAdaptor.hpp"
 #include "DictionaryEntry.hpp"
+#include "filter/ProbabilisticFilter.hpp"
+
 
 namespace clp_s {
 template <typename DictionaryIdType, typename EntryType>
@@ -89,12 +92,32 @@ public:
             std::unordered_set<EntryType const*>& entries
     ) const;
 
+    /**
+     * Loads the filter from disk if available
+     * @param filter_path Path to the filter file
+     * @return true if filter was loaded successfully, false otherwise
+     */
+     bool load_filter(std::string const& filter_path);
+
+    /**
+     * Check if a string possibly exists in the dictionary using the filter.
+     * This can be called before loading the dictionary entries.
+     *
+     * @param search_string The string to check
+     * @return true if the string might exist (or filter not loaded), false if definitely doesn't exist
+     */
+     [[nodiscard]] bool filter_might_contain(std::string_view search_string) const {
+        return m_filter.possibly_contains(search_string);
+    }
+
+
 protected:
     bool m_is_open;
     ArchiveReaderAdaptor& m_adaptor;
     std::string m_dictionary_path;
     ZstdDecompressor m_dictionary_decompressor;
     std::vector<EntryType> m_entries;
+    ProbabilisticFilter m_filter;
 };
 
 using VariableDictionaryReader
@@ -213,6 +236,33 @@ void DictionaryReader<DictionaryIdType, EntryType>::get_entries_matching_wildcar
         {
             entries.insert(&entry);
         }
+    }
+}
+
+
+template <typename DictionaryIdType, typename EntryType>
+bool DictionaryReader<DictionaryIdType, EntryType>::load_filter(
+        std::string const& filter_path
+) {
+    if (false == m_is_open) {
+        throw OperationFailed(ErrorCodeNotInit, __FILENAME__, __LINE__);
+    }
+
+    try {
+        constexpr size_t cDecompressorFileReadBufferCapacity = 64 * 1024;  // 64 KB
+        auto filter_reader = m_adaptor.checkout_reader_for_section(filter_path);
+
+        ZstdDecompressor filter_decompressor;
+        filter_decompressor.open(*filter_reader, cDecompressorFileReadBufferCapacity);
+
+        bool success = m_filter.read_from_file(*filter_reader, filter_decompressor);
+
+        filter_decompressor.close();
+        m_adaptor.checkin_reader_for_section(filter_path);
+
+        return success;
+    } catch (...) {
+        return false;
     }
 }
 }  // namespace clp_s

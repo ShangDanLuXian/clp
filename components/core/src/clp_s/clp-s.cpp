@@ -105,6 +105,7 @@ bool compress(CommandLineArguments const& command_line_arguments) {
     option.single_file_archive = command_line_arguments.get_single_file_archive();
     option.structurize_arrays = command_line_arguments.get_structurize_arrays();
     option.record_log_order = command_line_arguments.get_record_log_order();
+    option.archive_var_filter_type = command_line_arguments.get_archive_var_filter_type();
 
     clp_s::JsonParser parser(option);
     if (false == parser.ingest()) {
@@ -273,7 +274,8 @@ bool search_archive(
             expr,
             archive_reader,
             std::move(output_handler),
-            command_line_arguments.get_ignore_case()
+            command_line_arguments.get_ignore_case(),
+            command_line_arguments.get_use_archive_var_filter()
     );
     return output.filter();
 }

@@ -30,13 +30,16 @@ public:
            std::shared_ptr<ast::Expression> const& expr,
            std::shared_ptr<ArchiveReader> const& archive_reader,
            std::unique_ptr<OutputHandler> output_handler,
-           bool ignore_case)
+           bool ignore_case,
+           bool use_filter)
             : m_query_runner(match, expr, archive_reader, ignore_case),
               m_archive_reader(archive_reader),
               m_expr(expr),
               m_match(match),
               m_output_handler(std::move(output_handler)),
-              m_should_marshal_records(m_output_handler->should_marshal_records()) {}
+              m_should_marshal_records(m_output_handler->should_marshal_records()),
+              m_use_filter(use_filter),
+              m_ignore_case(ignore_case) {}
 
     /**
      * Filters messages within the archive and outputs the filtered messages to the configured
@@ -46,6 +49,13 @@ public:
      */
     auto filter() -> bool;
 
+    void extract_var_search_strings(
+        std::shared_ptr<ast::Expression> const& expr,
+        std::unordered_set<std::string>& search_strings
+    );
+
+    auto filter_passed(bool ignore_case) -> bool;
+
 private:
     QueryRunner m_query_runner;
     std::shared_ptr<ArchiveReader> m_archive_reader;
@@ -53,6 +63,8 @@ private:
     std::shared_ptr<SchemaMatch> m_match;
     std::unique_ptr<OutputHandler> m_output_handler;
     bool m_should_marshal_records{true};
+    bool m_use_filter{false};
+    bool m_ignore_case{false};
 };
 }  // namespace clp_s::search
 

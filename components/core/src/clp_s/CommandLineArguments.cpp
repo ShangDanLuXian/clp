@@ -21,6 +21,10 @@ namespace {
 constexpr std::string_view cNoAuth{"none"};
 constexpr std::string_view cS3Auth{"s3"};
 
+// filter type
+constexpr std::string_view no_filter("no_filter");
+constexpr std::string_view bloom("bloom");
+
 /**
  * Read a list of newline-delimited paths from a file and put them into a vector passed by reference
  * TODO: deduplicate this code with the version in clp
@@ -113,6 +117,20 @@ void validate_archive_paths(
         throw std::invalid_argument("No archive paths specified");
     }
 }
+
+void validate_filter_type(std::string_view filter_type_string, FilterType& filter_type) {
+    if (filter_type_string == bloom) {
+        filter_type = FilterType::Bloom;
+    } else if (filter_type_string == no_filter) {
+        filter_type = FilterType::None; 
+    } else {
+        throw std::invalid_argument(
+            fmt::format("Invalid global filter type \"{}\"", filter_type_string)
+        );
+    }
+}
+
+
 }  // namespace
 
 CommandLineArguments::ParsingResult
@@ -207,6 +225,7 @@ CommandLineArguments::parse_arguments(int argc, char const** argv) {
             po::options_description compression_options("Compression options");
             std::string input_path_list_file_path;
             std::string auth{cNoAuth};
+            std::string archive_var_filter_type{no_filter };
             // clang-format off
             compression_options.add_options()(
                     "compression-level",
@@ -269,6 +288,12 @@ CommandLineArguments::parse_arguments(int argc, char const** argv) {
                     "Type of authentication required for network requests (s3 | none). Authentication"
                     " with s3 requires the AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY environment"
                     " variables, and optionally the AWS_SESSION_TOKEN environment variable."
+            )(
+                "archive-var-filter",
+                po::value<std::string>(&archive_var_filter_type)
+                    ->value_name("ARCHIVE_VAR_FILTER")
+                    ->default_value(archive_var_filter_type),
+                "Global var dict filter"
             );
             // clang-format on
 
@@ -329,6 +354,8 @@ CommandLineArguments::parse_arguments(int argc, char const** argv) {
             }
 
             validate_network_auth(auth, m_network_auth);
+            validate_filter_type(archive_var_filter_type, m_archive_var_filter);
+
         } else if ((char)Command::Extract == command_input) {
             po::options_description extraction_options;
             std::string archive_path;
@@ -532,6 +559,10 @@ CommandLineArguments::parse_arguments(int argc, char const** argv) {
                 "Type of authentication required for network requests (s3 | none). Authentication"
                 " with s3 requires the AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY environment"
                 " variables, and optionally the AWS_SESSION_TOKEN environment variable."
+            )(
+                "no-archive-var-filter",
+                po::value<bool>(&m_use_archive_var_filter)->zero_tokens()->default_value(true)->implicit_value(false),
+                "Disable filter for dictionary lookups (useful for debugging or benchmarking)"
             );
             // clang-format on
             search_options.add(match_options);

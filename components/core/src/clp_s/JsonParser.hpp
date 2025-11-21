@@ -28,6 +28,8 @@
 #include "SchemaTree.hpp"
 #include "SchemaWriter.hpp"
 #include "TimestampDictionaryWriter.hpp"
+#include "clp_s/filter/ProbabilisticFilter.hpp"
+
 
 namespace clp_s {
 struct JsonParserOption {
@@ -44,6 +46,8 @@ struct JsonParserOption {
     bool retain_float_format{false};
     bool single_file_archive{false};
     NetworkAuthOption network_auth{};
+    FilterType archive_var_filter_type;
+
 };
 
 class JsonParser {

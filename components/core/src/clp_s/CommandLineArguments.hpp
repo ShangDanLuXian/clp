@@ -12,6 +12,8 @@
 #include "../reducer/types.hpp"
 #include "Defs.hpp"
 #include "InputConfig.hpp"
+#include "clp_s/filter/ProbabilisticFilter.hpp"
+
 
 namespace clp_s {
 class CommandLineArguments {
@@ -120,6 +122,11 @@ public:
 
     bool get_record_log_order() const { return false == m_disable_log_order; }
 
+
+    FilterType get_archive_var_filter_type() const {return m_archive_var_filter; };
+
+    bool get_use_archive_var_filter() const { return m_use_archive_var_filter; }
+
 private:
     // Methods
     /**
@@ -208,6 +215,8 @@ private:
     std::optional<epochtime_t> m_search_end_ts;
     bool m_ignore_case{false};
     std::vector<std::string> m_projection_columns;
+    FilterType m_archive_var_filter{0}; // Default not write any filter
+    bool m_use_archive_var_filter{true};  // Default to true (enabled)
 
     // Search aggregation variables
     std::string m_reducer_host;

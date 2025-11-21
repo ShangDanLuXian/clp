@@ -8,6 +8,7 @@
 #include <spdlog/spdlog.h>
 
 #include "../clp/Defs.h"
+#include "clp_s/filter/ProbabilisticFilter.hpp"
 
 namespace clp_s {
 bool
@@ -39,6 +40,8 @@ VariableDictionaryWriter::add_entry(std::string_view value, clp::variable_dictio
 
         entry.write_to_file(m_dictionary_compressor);
     }
+
+    if (m_filter_type != FilterType::None) m_filter_values.insert(std::string{value});
     return new_entry;
 }
 

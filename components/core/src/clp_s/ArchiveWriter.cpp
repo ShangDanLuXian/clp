@@ -10,6 +10,8 @@
 #include "archive_constants.hpp"
 #include "Defs.hpp"
 #include "SchemaTree.hpp"
+#include "../clp/Stopwatch.hpp"
+#include "clp_s/filter/ProbabilisticFilter.hpp"
 
 namespace clp_s {
 void ArchiveWriter::open(ArchiveWriterOption const& option) {
@@ -46,7 +48,7 @@ void ArchiveWriter::open(ArchiveWriterOption const& option) {
 
     std::string var_dict_path = m_archive_path + constants::cArchiveVarDictFile;
     m_var_dict = std::make_shared<VariableDictionaryWriter>();
-    m_var_dict->open(var_dict_path, m_compression_level, UINT64_MAX);
+    m_var_dict->open(var_dict_path, m_compression_level, UINT64_MAX, option.archive_var_filter_type);
 
     std::string log_dict_path = m_archive_path + constants::cArchiveLogDictFile;
     m_log_dict = std::make_shared<LogTypeDictionaryWriter>();
@@ -78,6 +80,7 @@ auto ArchiveWriter::close(bool is_split) -> ArchiveStats {
             {constants::cArchiveLogDictFile, log_dict_compressed_size},
             {constants::cArchiveArrayDictFile, array_dict_compressed_size},
             {constants::cArchiveTablesFile, table_compressed_size}
+            // TODO Handle single file filter
     };
     uint64_t offset = 0;
     for (auto& file : files) {

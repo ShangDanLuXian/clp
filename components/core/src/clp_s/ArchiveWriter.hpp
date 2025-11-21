@@ -20,6 +20,7 @@
 #include "SchemaWriter.hpp"
 #include "SingleFileArchiveDefs.hpp"
 #include "TimestampDictionaryWriter.hpp"
+#include "clp_s/filter/ProbabilisticFilter.hpp"
 
 namespace clp_s {
 struct ArchiveWriterOption {
@@ -31,6 +32,8 @@ struct ArchiveWriterOption {
     size_t min_table_size;
     std::vector<std::string> authoritative_timestamp;
     std::string authoritative_timestamp_namespace;
+    FilterType archive_var_filter_type;
+
 };
 
 class ArchiveStats {

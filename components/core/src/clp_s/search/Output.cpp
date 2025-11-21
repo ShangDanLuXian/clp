@@ -16,6 +16,8 @@
 #include "ast/Literal.hpp"
 #include "ast/OrExpr.hpp"
 #include "EvaluateTimestampIndex.hpp"
+#include "clp_s/DictionaryReader.hpp"
+#include "clp_s/archive_constants.hpp"
 
 using clp_s::search::ast::AndExpr;
 using clp_s::search::ast::ColumnDescriptor;
@@ -62,6 +64,11 @@ bool Output::filter() {
     EvaluateTimestampIndex timestamp_index(m_archive_reader->get_timestamp_dictionary());
     if (EvaluatedValue::False == timestamp_index.run(m_expr)) {
         m_archive_reader->close();
+        return true;
+    }
+
+    // skip if not in the filter
+    if (m_use_filter && !filter_passed(m_ignore_case)) {
         return true;
     }
 
@@ -128,5 +135,115 @@ bool Output::filter() {
         return false;
     }
     return true;
+}
+
+void Output::extract_var_search_strings(
+    std::shared_ptr<ast::Expression> const& expr,
+    std::unordered_set<std::string>& search_strings
+) {
+if (nullptr == expr) {
+    return;
+}
+
+// Recursively process nested expressions
+if (expr->has_only_expression_operands()) {
+    for (auto const& op : expr->get_op_list()) {
+        extract_var_search_strings(std::static_pointer_cast<ast::Expression>(op), search_strings);
+    }
+    return;
+}
+
+// Check if this is a filter expression
+auto filter = std::dynamic_pointer_cast<ast::FilterExpr>(expr);
+if (nullptr == filter) {
+    return;
+}
+
+// Skip EXISTS/NEXISTS operations
+if (filter->get_operation() == ast::FilterOperation::EXISTS
+    || filter->get_operation() == ast::FilterOperation::NEXISTS)
+{
+    return;
+}
+
+// Extract variable string literals
+if (filter->get_column()->matches_type(ast::LiteralType::VarStringT)) {
+    std::string query_string;
+    filter->get_operand()->as_var_string(query_string, filter->get_operation());
+
+    // Only extract non-wildcard strings (wildcards need full dictionary)
+    if (false == ast::has_unescaped_wildcards(query_string)) {
+        auto const unescaped_query_string{clp::string_utils::unescape_string(query_string)};
+        search_strings.insert(unescaped_query_string);
+    }
+}
+}
+
+bool Output::filter_passed(bool ignore_case) {
+
+    auto var_dict = m_archive_reader->get_variable_dictionary();
+
+    // If filter is not loaded or disabled, we must load the dictionary
+    if (!var_dict->load_filter(std::string(constants::cArchiveVarDictFile) + constants::cArchiveFilterFileSuffix)) {
+        SPDLOG_INFO("[FILTER] Filter not available, dictionary load required");
+        return true;
+    }
+
+    // Extract all variable string search terms from the query
+    std::unordered_set<std::string> search_strings;
+    extract_var_search_strings(m_expr, search_strings);
+
+    // If no exact-match search strings found (e.g., all wildcards), we need the dictionary
+    if (search_strings.empty()) {
+        SPDLOG_DEBUG(
+                "[FILTER] No exact-match search strings found (wildcards/complex query), "
+                "dictionary load required"
+        );
+        return true;
+    }
+
+    // For case-insensitive searches, filter can't help (it's case-sensitive)
+    if (ignore_case) {
+        SPDLOG_DEBUG("[FILTER] Case-insensitive search, dictionary load required");
+        return true;
+    }
+
+    // Check each search string against the filter
+    size_t strings_checked = 0;
+    size_t filter_passes = 0;
+    size_t filter_rejects = 0;
+
+    for (auto const& search_string : search_strings) {
+        strings_checked++;
+        if (var_dict->filter_might_contain(search_string)) {
+            filter_passes++;
+            SPDLOG_DEBUG("[FILTER] String '{}' might exist (filter pass)", search_string);
+        } else {
+            filter_rejects++;
+            SPDLOG_DEBUG(
+                    "[FILTER] String '{}' definitely doesn't exist (filter reject)",
+                    search_string
+            );
+        }
+    }
+
+    SPDLOG_INFO(
+            "[FILTER] Pre-check: {} search string(s), {} passed, {} rejected by filter",
+            strings_checked,
+            filter_passes,
+            filter_rejects
+    );
+
+    // Only load dictionary if at least one string passed the filter
+    if (filter_passes > 0) {
+        SPDLOG_INFO("[FILTER] Dictionary load required ({} string(s) might exist)", filter_passes);
+        return true;
+    } else {
+        SPDLOG_INFO(
+                "[FILTER] Skipping dictionary load - all {} search string(s) rejected by filter",
+                strings_checked
+        );
+        return false;
+    }
 }
 }  // namespace clp_s::search
