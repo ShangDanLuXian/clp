@@ -12,6 +12,7 @@
 #include "../clp/type_utils.hpp"
 #include "../reducer/types.hpp"
 #include "FileReader.hpp"
+#include "clp_s/filter/ProbabilisticFilter.hpp"
 
 namespace po = boost::program_options;
 
@@ -24,6 +25,9 @@ constexpr std::string_view cS3Auth{"s3"};
 // filter type
 constexpr std::string_view no_filter("no_filter");
 constexpr std::string_view bloom("bloom");
+constexpr std::string_view ngram_prefix("ngram-prefix");
+constexpr std::string_view binary_fuse("binary-fuse");
+constexpr std::string_view prefix_suffix("ps");
 
 /**
  * Read a list of newline-delimited paths from a file and put them into a vector passed by reference
@@ -121,8 +125,14 @@ void validate_archive_paths(
 void validate_filter_type(std::string_view filter_type_string, FilterType& filter_type) {
     if (filter_type_string == bloom) {
         filter_type = FilterType::Bloom;
+    } else if (filter_type_string == ngram_prefix) {
+        filter_type = FilterType::NGramPrefix;
     } else if (filter_type_string == no_filter) {
         filter_type = FilterType::None; 
+    } else if (filter_type_string == binary_fuse) {
+        filter_type = FilterType::BinaryFuse;
+    } else if (filter_type_string == prefix_suffix) {
+        filter_type = FilterType::PrefixSuffix;
     } else {
         throw std::invalid_argument(
             fmt::format("Invalid global filter type \"{}\"", filter_type_string)

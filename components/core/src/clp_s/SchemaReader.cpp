@@ -212,8 +212,11 @@ bool SchemaReader::get_next_message(std::string& message) {
 }
 
 bool SchemaReader::get_next_message(std::string& message, FilterClass* filter) {
+
     while (m_cur_message < m_num_messages) {
-        if (false == filter->filter(m_cur_message)) {
+        bool passes_filter = filter->filter(m_cur_message);
+
+        if (false == passes_filter) {
             m_cur_message++;
             continue;
         }
@@ -222,6 +225,7 @@ bool SchemaReader::get_next_message(std::string& message, FilterClass* filter) {
             if (false == m_serializer_initialized) {
                 initialize_serializer();
             }
+
             message = generate_json_string(m_cur_message);
 
             if (message.back() != '\n') {
@@ -230,6 +234,7 @@ bool SchemaReader::get_next_message(std::string& message, FilterClass* filter) {
         }
 
         m_cur_message++;
+
         return true;
     }
 

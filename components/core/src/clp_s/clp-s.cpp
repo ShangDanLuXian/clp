@@ -38,6 +38,7 @@
 #include "search/Projection.hpp"
 #include "search/SchemaMatch.hpp"
 #include "TimestampPattern.hpp"
+#include "clp/Stopwatch.hpp"
 
 using namespace clp_s::search;
 using clp_s::cArchiveFormatDevelopmentVersionFlag;
@@ -339,6 +340,10 @@ int main(int argc, char const* argv[]) {
             return 1;
         }
     } else {
+
+        clp::Stopwatch stopwatch;
+        stopwatch.start();
+
         auto const& query = command_line_arguments.get_query();
         auto query_stream = std::istringstream(query);
         auto expr = kql::parse_kql_expression(query_stream);
@@ -434,6 +439,12 @@ int main(int argc, char const* argv[]) {
             }
             archive_reader->close();
         }
+
+        stopwatch.stop();
+        SPDLOG_INFO(
+                "[INFO] search finished in {:.3f}ms",
+                stopwatch.get_time_taken_in_seconds() * 1000.0
+        );
     }
 
     return 0;

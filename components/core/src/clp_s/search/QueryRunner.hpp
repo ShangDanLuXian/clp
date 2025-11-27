@@ -14,6 +14,7 @@
 #include <utility>
 #include <vector>
 
+#include <absl/container/flat_hash_set.h>
 #include <simdjson.h>
 
 #include "../../clp/Query.hpp"
@@ -69,6 +70,13 @@ public:
     QueryRunner(QueryRunner&&) = delete;
     auto operator=(QueryRunner&&) -> QueryRunner& = delete;
 
+
+    void log_counts() {
+        // SPDLOG_INFO("total nums: {}, unique: {}", test_count, test_set.size());
+        test_count = 0;
+        test_set.clear();
+    }
+
     /**
      * Initializes the query processing context that is common to all schemas.
      */
@@ -85,6 +93,14 @@ public:
      * @param schema_id
      */
     auto schema_init(int32_t schema_id) -> EvaluatedValue;
+        
+    /**
+     * Gets all variable dictionary IDs that are being searched in the current query.
+     * This is used for filter checks.
+     * @return Set of variable dictionary IDs
+     */
+     [[nodiscard]] std::unordered_set<clp::variable_dictionary_id_t> get_searched_variable_ids() const;
+
 
 protected:
     // Methods inherited from FilterClass
@@ -114,6 +130,8 @@ private:
     std::shared_ptr<ast::Expression> m_expr;
     std::shared_ptr<SchemaMatch> m_match;
     bool m_ignore_case;
+    int test_count = 0;
+    absl::flat_hash_set<int64_t> test_set;
 
     // variables for the current schema being filtered
     int32_t m_schema{-1};

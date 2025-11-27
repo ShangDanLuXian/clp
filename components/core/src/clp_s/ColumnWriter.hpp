@@ -43,6 +43,8 @@ public:
      */
     virtual size_t get_total_header_size() const { return 0; }
 
+    virtual int32_t get_m_id() const { return m_id; };
+
 protected:
     int32_t m_id;
 };
@@ -233,6 +235,13 @@ public:
     size_t add_value(ParsedMessage::variable_t& value) override;
 
     void store(ZstdCompressor& compressor) override;
+
+    /**
+     * @return The vector of variable dictionary IDs
+     */
+    [[nodiscard]] std::vector<clp::variable_dictionary_id_t> const& get_var_dict_ids() const {
+        return m_var_dict_ids;
+    }
 
 private:
     std::shared_ptr<VariableDictionaryWriter> m_var_dict;

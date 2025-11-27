@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <memory>
 #include <string_view>
+#include <absl/container/flat_hash_set.h>
 
 #include "../clp/ReaderInterface.hpp"
 
@@ -16,6 +17,9 @@ namespace clp_s {
 enum class FilterType : uint8_t {
     None = 0,
     Bloom = 1,
+    NGramPrefix = 2,
+    BinaryFuse = 3,
+    PrefixSuffix = 4,  // Added Binary Fuse Filter
 };
 
 /**
@@ -60,6 +64,12 @@ public:
             FilterType type,
             size_t expected_num_elements,
             double false_positive_rate
+    );
+
+    ProbabilisticFilter(
+        FilterType type,
+        absl::flat_hash_set<std::string> const &key_set,
+        double false_positive_rate
     );
 
     /**

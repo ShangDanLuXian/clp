@@ -121,6 +121,8 @@ public:
      * @param id ID of the variable matching the given entry
      */
     bool add_entry(std::string_view value, clp::variable_dictionary_id_t& id);
+
+    bool add_int_for_filter(int value);
 };
 
 class LogTypeDictionaryWriter
@@ -225,13 +227,7 @@ if (m_filter_type == FilterType::None) {
     return 0;
 }
 
-size_t actual_entries = m_filter_values.size();
-
-m_filter = ProbabilisticFilter(m_filter_type, actual_entries, 0.07);
-
-for (auto const& value : m_filter_values) {
-    m_filter.add(value);
-}
+m_filter = ProbabilisticFilter(m_filter_type, m_filter_values, 0.07);
 
 
 m_filter.write_to_file(m_filter_file_writer, m_filter_compressor);

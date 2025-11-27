@@ -1,6 +1,7 @@
 #ifndef CLP_S_ARCHIVEREADER_HPP
 #define CLP_S_ARCHIVEREADER_HPP
 
+#include <cstdint>
 #include <map>
 #include <set>
 #include <span>
@@ -13,6 +14,7 @@
 #include "PackedStreamReader.hpp"
 #include "ReaderUtils.hpp"
 #include "SchemaReader.hpp"
+#include "clp_s/filter/SchemaIntColumnFilter.hpp"
 #include "search/Projection.hpp"
 #include "TimestampDictionaryReader.hpp"
 
@@ -92,6 +94,45 @@ public:
             int32_t schema_id,
             bool should_extract_timestamp,
             bool should_marshal_records
+    );
+
+
+        /**
+     * Sets whether to use schema filters for query optimization.
+     * @param use_schema_filter Whether to enable schema filters
+     */
+     void set_use_schema_filter(bool use_schema_filter) {
+        m_use_schema_filter = use_schema_filter;
+    }
+
+    /**
+     * Preloads filters for the given schema IDs before packed streams are opened.
+     * This must be called before open_packed_streams() to avoid reader checkout conflicts.
+     * @param schema_ids The schema IDs to preload filters for
+     */
+    void preload_schema_filters(std::vector<int32_t> const& schema_ids);
+
+
+    void preload_schema_int_filters(std::vector<int32_t> const& schema_ids);
+
+    /**
+     * Checks if any of the given variable IDs might be in the schema's filter.
+     * Uses preloaded filters cached in memory.
+     * @param schema_id The schema ID to check
+     * @param var_ids The set of variable dictionary IDs to check
+     * @return true if any variable might be in the schema (or if filter not available),
+     *         false if definitely none of the variables are in the schema
+     */
+    bool schema_filter_check(
+            int32_t schema_id,
+            std::unordered_set<clp::variable_dictionary_id_t> const& var_ids
+    );
+
+
+    bool schema_int_filter_check(
+        int32_t schema_id,
+        int32_t column_id,
+        int64_t value
     );
 
     /**
@@ -218,6 +259,11 @@ private:
     size_t m_stream_buffer_size{0ULL};
     size_t m_cur_stream_id{0ULL};
     int32_t m_log_event_idx_column_id{-1};
+
+    // Schema filter settings and cache
+    bool m_use_schema_filter{false};
+    std::map<int32_t, ProbabilisticFilter> m_schema_filters;
+    std::map<int32_t, SchemaIntColumnFilter> m_schema_int_filters;
 };
 }  // namespace clp_s
 

@@ -233,6 +233,14 @@ set(
         filter/ProbabilisticFilter.hpp
         filter/BloomFilter.cpp
         filter/BloomFilter.hpp
+        filter/NGramPrefixFilter.cpp
+        filter/NGramPrefixFilter.hpp
+        filter/BinaryFuseFilter.cpp
+        filter/BinaryFuseFilter.hpp
+        filter/PrefixSuffixFilter.cpp
+        filter/PrefixSuffixFilter.hpp
+        filter/SchemaIntColumnFilter.cpp
+        filter/SchemaIntColumnFilter.hpp
         ColumnWriter.cpp
         ColumnWriter.hpp
         Defs.hpp
@@ -307,6 +315,14 @@ set(
         filter/ProbabilisticFilter.hpp
         filter/BloomFilter.cpp
         filter/BloomFilter.hpp
+        filter/NGramPrefixFilter.cpp
+        filter/NGramPrefixFilter.hpp
+        filter/BinaryFuseFilter.cpp
+        filter/BinaryFuseFilter.hpp
+        filter/PrefixSuffixFilter.cpp
+        filter/PrefixSuffixFilter.hpp
+        filter/SchemaIntColumnFilter.cpp
+        filter/SchemaIntColumnFilter.hpp
         BufferViewReader.hpp
         ColumnReader.cpp
         ColumnReader.hpp

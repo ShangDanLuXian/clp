@@ -4,6 +4,7 @@
 #include <vector>
 
 #include <log_surgeon/Lexer.hpp>
+#include <spdlog/spdlog.h>
 #include <string_utils/string_utils.hpp>
 
 #include "../../clp/Defs.h"
@@ -58,6 +59,21 @@ auto QueryRunner::schema_init(int32_t schema_id) -> EvaluatedValue {
 
     add_wildcard_columns_to_searched_columns();
     return m_expression_value;
+}
+
+std::unordered_set<clp::variable_dictionary_id_t> QueryRunner::get_searched_variable_ids() const {
+    std::unordered_set<clp::variable_dictionary_id_t> var_ids;
+
+    // Collect all variable IDs from the var match maps
+    for (auto const& [expr, var_set_ptr] : m_expr_var_match_map) {
+        if (var_set_ptr != nullptr) {
+            for (auto var_id : *var_set_ptr) {
+                var_ids.insert(static_cast<clp::variable_dictionary_id_t>(var_id));
+            }
+        }
+    }
+
+    return var_ids;
 }
 
 void QueryRunner::clear_readers() {
@@ -337,6 +353,8 @@ bool QueryRunner::evaluate_int_filter(
 
     for (BaseColumnReader* reader : m_basic_readers[column_id]) {
         int64_t value = std::get<int64_t>(reader->extract_value(m_cur_message));
+        test_set.insert(value);
+        test_count += 1;
         if (evaluate_int_filter_core(op, value, op_value)) {
             return true;
         }

@@ -1,9 +1,14 @@
 #include "ProbabilisticFilter.hpp"
+#include <memory>
 
-#include "BloomFilter.hpp"
 #include "../ErrorCode.hpp"
 #include "../ZstdCompressor.hpp"
 #include "../ZstdDecompressor.hpp"
+
+#include "BloomFilter.hpp"
+#include "BinaryFuseFilter.hpp"
+#include "NGramPrefixFilter.hpp"
+#include "PrefixSuffixFilter.hpp"
 
 namespace clp_s {
 
@@ -15,6 +20,47 @@ ProbabilisticFilter::ProbabilisticFilter(
     switch (type) {
         case FilterType::Bloom:
             m_impl = std::make_unique<BloomFilter>(expected_num_elements, false_positive_rate);
+            break;
+        case FilterType::BinaryFuse:
+            m_impl = std::make_unique<BinaryFuseFilter>(
+                expected_num_elements,
+                false_positive_rate
+            );
+            break;
+        case FilterType::NGramPrefix:
+            throw std::logic_error(
+                "Invalid FilterType: NGramPrefixFilter does not support "
+                "pre-allocate constructor"
+            );
+            break;
+        case FilterType::PrefixSuffix:
+            throw std::logic_error(
+                "Invalid FilterType: PrefixSuffixFilter does not support "
+                "pre-allocate constructor"
+            );
+            break;
+        case FilterType::None:
+            throw std::logic_error("Invalid FilterType: unreachable code path");
+    }
+}
+
+ProbabilisticFilter::ProbabilisticFilter(
+    FilterType type,
+    absl::flat_hash_set<std::string> const &key_set,
+    double false_positive_rate
+) {
+    switch (type) {
+        case FilterType::Bloom:
+            m_impl = std::make_unique<BloomFilter>(key_set, false_positive_rate);
+            break;
+        case FilterType::BinaryFuse:
+            m_impl = std::make_unique<BinaryFuseFilter>(key_set, false_positive_rate);
+            break;
+        case FilterType::NGramPrefix:
+            m_impl = std::make_unique<NGramPrefixFilter>(key_set, false_positive_rate);
+            break;
+        case FilterType::PrefixSuffix:
+            m_impl = std::make_unique<PrefixSuffixFilter>(key_set, false_positive_rate);
             break;
         case FilterType::None:
             throw std::logic_error("Invalid FilterType: unreachable code path");
@@ -75,6 +121,12 @@ auto ProbabilisticFilter::read_from_file(
     switch (type) {
         case FilterType::Bloom:
             m_impl = std::make_unique<BloomFilter>();
+            break;
+        case FilterType::BinaryFuse:
+            m_impl = std::make_unique<BinaryFuseFilter>();
+            break;
+        case FilterType::NGramPrefix:
+            m_impl = std::make_unique<NGramPrefixFilter>();
             break;
         default:
             return false;

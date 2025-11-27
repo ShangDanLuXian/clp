@@ -1,12 +1,17 @@
 #include "ArchiveReader.hpp"
 
+#include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <string_view>
+#include <spdlog/spdlog.h>
 
 #include "archive_constants.hpp"
 #include "ArchiveReaderAdaptor.hpp"
 #include "InputConfig.hpp"
 #include "ReaderUtils.hpp"
+#include "clp_s/Utils.hpp"
+#include "clp_s/filter/SchemaIntColumnFilter.hpp"
 
 using std::string_view;
 
@@ -162,6 +167,137 @@ SchemaReader& ArchiveReader::read_schema_table(
             .load(stream_buffer, schema_metadata.stream_offset, schema_metadata.uncompressed_size);
     return m_schema_reader;
 }
+
+void ArchiveReader::preload_schema_filters(std::vector<int32_t> const& schema_ids) {
+    if (!m_use_schema_filter) {
+        return;
+    }
+
+    size_t loaded_count = 0;
+    size_t failed_count = 0;
+
+    for (auto schema_id : schema_ids) {
+        std::string schema_filter_path = "/schema." + std::to_string(schema_id) + ".filter";
+
+        try {
+            constexpr size_t cDecompressorFileReadBufferCapacity = 64 * 1024;  // 64 KB
+            auto filter_reader
+                    = m_archive_reader_adaptor->checkout_reader_for_section(schema_filter_path);
+
+            ZstdDecompressor filter_decompressor;
+            filter_decompressor.open(*filter_reader, cDecompressorFileReadBufferCapacity);
+
+            ProbabilisticFilter filter;
+            bool success = filter.read_from_file(*filter_reader, filter_decompressor);
+
+            filter_decompressor.close();
+            m_archive_reader_adaptor->checkin_reader_for_section(schema_filter_path);
+
+            if (success && !filter.is_empty()) {
+                m_schema_filters[schema_id] = std::move(filter);
+                loaded_count++;
+            } else {
+                failed_count++;
+            }
+        } catch (std::exception const& e) {
+            failed_count++;
+        } catch (...) {
+            failed_count++;
+        }
+    }
+
+}
+
+void ArchiveReader::preload_schema_int_filters(std::vector<int32_t> const& schema_ids) {
+    if (!m_use_schema_filter) {
+        return;
+    }
+
+    for (auto schema_id : schema_ids) {
+        std::string schema_filter_path = "/schema." + std::to_string(schema_id) + ".int.filter";
+
+        try {
+            constexpr size_t cDecompressorFileReadBufferCapacity = 64 * 1024;  // 64 KB
+            auto filter_reader
+                    = m_archive_reader_adaptor->checkout_reader_for_section(schema_filter_path);
+
+            ZstdDecompressor filter_decompressor;
+            filter_decompressor.open(*filter_reader, cDecompressorFileReadBufferCapacity);
+
+            SchemaIntColumnFilter filter;
+            bool success = filter.read_from_file(filter_decompressor);
+
+            filter_decompressor.close();
+            m_archive_reader_adaptor->checkin_reader_for_section(schema_filter_path);
+            if (success && !filter.is_empty()) {
+                m_schema_int_filters[schema_id] = std::move(filter);
+            } else {
+            }
+        } catch (std::exception const& e) {
+        } catch (...) {
+        }
+    }
+}
+
+bool ArchiveReader::schema_filter_check(
+        int32_t schema_id,
+        std::unordered_set<clp::variable_dictionary_id_t> const& var_ids
+) {
+    if (!m_use_schema_filter) {
+        // Schema filters disabled, proceed with search
+        return true;
+    }
+
+    if (var_ids.empty()) {
+        // No variables to check, proceed with search
+        return true;
+    }
+
+
+    // Look up the preloaded filter
+    auto it = m_schema_filters.find(schema_id);
+    if (it == m_schema_filters.end()) {
+        // filter not preloaded or not available, proceed with search
+        return true;
+    }
+
+    ProbabilisticFilter const& filter = it->second;
+
+    // Check if any of the variable IDs pass the filter
+    for (auto var_id : var_ids) {
+        if (filter.possibly_contains(std::to_string(var_id))) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+
+bool ArchiveReader::schema_int_filter_check(
+    int32_t schema_id,
+    int32_t column_id,
+    int64_t value
+) {
+    if (!m_use_schema_filter) {
+        // Schema filters disabled, proceed with search
+        return true;
+    }
+
+    auto it = m_schema_int_filters.find(schema_id);
+    if (it == m_schema_int_filters.end()) {
+
+        return true;
+    }
+
+    SchemaIntColumnFilter filter = it->second;
+
+    if (filter.contains(column_id, value)) {
+        return true;
+    }
+    return false;
+}
+
 
 std::vector<std::shared_ptr<SchemaReader>> ArchiveReader::read_all_tables() {
     std::vector<std::shared_ptr<SchemaReader>> readers;

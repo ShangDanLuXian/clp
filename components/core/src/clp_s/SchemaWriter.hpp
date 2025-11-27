@@ -1,8 +1,12 @@
 #ifndef CLP_S_SCHEMAWRITER_HPP
 #define CLP_S_SCHEMAWRITER_HPP
 
+#include <unordered_set>
 #include <vector>
 
+#include "../clp/Defs.h"
+#include "clp_s/filter/SchemaIntColumnFilter.hpp"
+#include "filter/ProbabilisticFilter.hpp"
 #include "ColumnWriter.hpp"
 #include "FileWriter.hpp"
 #include "ParsedMessage.hpp"
@@ -12,7 +16,7 @@ namespace clp_s {
 class SchemaWriter {
 public:
     // Constructor
-    SchemaWriter() : m_num_messages(0) {}
+    SchemaWriter() : m_num_messages(0), m_int_column_filter() {}
 
     // Destructor
     ~SchemaWriter();
@@ -50,12 +54,32 @@ public:
      */
     size_t get_total_uncompressed_size() const { return m_total_uncompressed_size; }
 
+    /**
+     * Writes the filter for this schema to disk
+     * @param filter_path Path to write the filter
+     * @param compression_level Compression level for the filter
+     * @return Size of the compressed filter file in bytes
+     */
+    [[nodiscard]] size_t write_filter(
+            std::string const& filter_path,
+            int compression_level
+    );
+
+    [[nodiscard]] size_t write_int_filter(
+        std::string const& filter_path,
+        int compression_level
+);
+
 private:
     uint64_t m_num_messages;
     size_t m_total_uncompressed_size{};
 
     std::vector<BaseColumnWriter*> m_columns;
     std::vector<BaseColumnWriter*> m_unordered_columns;
+    SchemaIntColumnFilter m_int_column_filter;
+
+    // Filter for this schema's variable dictionary IDs
+    ProbabilisticFilter m_filter;
 };
 }  // namespace clp_s
 

@@ -6,6 +6,7 @@
 #include <cstring>
 #include <string_view>
 #include <vector>
+#include <absl/container/flat_hash_set.h>
 
 #include "../../clp/ErrorCode.hpp"
 #include "../../clp/hash_utils.hpp"
@@ -17,44 +18,51 @@
 #include "ProbabilisticFilter.hpp"
 
 namespace clp_s {
-BloomFilter::BloomFilter(size_t expected_num_elements, double false_positive_rate) {
-    auto [bit_array_size, num_hash_functions]
-            = compute_optimal_parameters(expected_num_elements, false_positive_rate);
+// BloomFilter.cpp - Enforce minimum filter size
 
-    m_bit_array_size = bit_array_size;
-    m_num_hash_functions = num_hash_functions;
-
-    // Allocate bit array (round up to nearest byte)
-    size_t num_bytes = (m_bit_array_size + 7) / 8;
-    m_bit_array.resize(num_bytes, 0);
+BloomFilter::BloomFilter(
+    size_t expected_num_elements,
+    double false_positive_rate,
+    std::unique_ptr<IFilterPolicy> policy
+) : m_policy(std::move(policy)) {
+if (expected_num_elements == 0) {
+    return;  // Empty filter
 }
 
-auto BloomFilter::compute_optimal_parameters(
-        size_t expected_num_elements,
+auto const params = m_policy->compute_parameters(false_positive_rate);
+
+m_bit_array_size = static_cast<size_t>(
+        std::ceil(params.bits_per_key * expected_num_elements)
+);
+
+// **CRITICAL FIX**: Ensure minimum 1 byte (8 bits) per filter
+// This prevents 0-sized filters that cause segfaults
+m_bit_array_size = std::max(m_bit_array_size, size_t{8});
+
+m_num_hash_functions = params.num_hash_functions;
+
+// Round up to nearest byte
+size_t const num_bytes = (m_bit_array_size + 7) / 8;
+m_bit_array.resize(num_bytes, 0);
+}
+
+BloomFilter::BloomFilter(size_t expected_num_elements, double false_positive_rate)
+    : BloomFilter(
+            expected_num_elements,
+            false_positive_rate,
+            std::make_unique<BloomFilterPolicy>()
+    ) {}
+
+BloomFilter::BloomFilter(
+        absl::flat_hash_set<std::string> const& key_set,
         double false_positive_rate
-) -> std::pair<size_t, uint32_t> {
-    if (expected_num_elements == 0) {
-        return {64, 1};  // Minimal bloom filter
+) : BloomFilter(key_set.size(), false_positive_rate) {
+
+    std::map<size_t, size_t> length_histogram;
+
+    for (auto const& key : key_set) {
+        add(key);
     }
-
-    // Optimal bit array size: m = -n * ln(p) / (ln(2)^2)
-    // where n = expected_num_elements, p = false_positive_rate
-    double const ln2_squared = std::log(2.0) * std::log(2.0);
-    auto const bit_array_size = static_cast<size_t>(
-            -static_cast<double>(expected_num_elements) * std::log(false_positive_rate)
-            / ln2_squared
-    );
-
-    // Optimal number of hash functions: k = (m/n) * ln(2)
-    auto const num_hash_functions = static_cast<uint32_t>(
-            static_cast<double>(bit_array_size) / static_cast<double>(expected_num_elements)
-            * std::log(2.0)
-    );
-
-    // Ensure at least 1 hash function, and cap at 20 for performance
-    uint32_t const capped_num_hash_functions = std::max(1u, std::min(20u, num_hash_functions));
-
-    return {bit_array_size, capped_num_hash_functions};
 }
 
 void BloomFilter::add(std::string_view value) {

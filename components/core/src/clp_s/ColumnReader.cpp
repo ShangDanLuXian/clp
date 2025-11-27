@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <string>
 #include <variant>
+#include <spdlog/spdlog.h>
 
 #include "../clp/EncodedVariableInterpreter.hpp"
 #include "BufferViewReader.hpp"

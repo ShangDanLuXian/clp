@@ -262,6 +262,7 @@ bool DictionaryReader<DictionaryIdType, EntryType>::load_filter(
 
         return success;
     } catch (...) {
+        SPDLOG_INFO("jing gao jing gao");
         return false;
     }
 }

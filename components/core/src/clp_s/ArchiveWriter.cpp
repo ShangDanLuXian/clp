@@ -428,6 +428,17 @@ std::pair<size_t, size_t> ArchiveWriter::store_tables() {
                 it->second->get_num_messages()
         );
         current_stream_offset += it->second->get_total_uncompressed_size();
+
+        std::string schema_filter_path
+        = m_archive_path + "/schema." + std::to_string(it->first) + ".filter";
+        auto schema_filter_compressed_size
+                = it->second->write_filter(schema_filter_path, m_compression_level);
+        (void)schema_filter_compressed_size;
+
+        std::string schema_int_filter_path
+        = m_archive_path + "/schema." + std::to_string(it->first) + ".int.filter";
+        (void)it->second->write_int_filter(schema_int_filter_path, m_compression_level);
+        
         delete it->second;
 
         if (current_stream_offset > m_min_table_size || schemas.size() == schema_metadata.size()) {

@@ -1,0 +1,11 @@
+m: bits in the filter
+n: num entries
+k: hash functions
+optimal k = (m/n) * ln(2)
+
+FPR = (1 - e^(-kn/m))^k
+= 0.6185^BPK
+
+BPK = -ln(FPR) / (ln(2))²
+
+m = BPK * n
