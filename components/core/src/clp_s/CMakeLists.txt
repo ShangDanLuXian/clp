@@ -241,6 +241,8 @@ set(
         filter/PrefixSuffixFilter.hpp
         filter/SchemaIntColumnFilter.cpp
         filter/SchemaIntColumnFilter.hpp
+        filter/SchemaStringColumnFilter.cpp
+        filter/SchemaStringColumnFilter.hpp
         ColumnWriter.cpp
         ColumnWriter.hpp
         Defs.hpp
@@ -323,6 +325,8 @@ set(
         filter/PrefixSuffixFilter.hpp
         filter/SchemaIntColumnFilter.cpp
         filter/SchemaIntColumnFilter.hpp
+        filter/SchemaStringColumnFilter.cpp
+        filter/SchemaStringColumnFilter.hpp
         BufferViewReader.hpp
         ColumnReader.cpp
         ColumnReader.hpp

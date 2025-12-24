@@ -1,7 +1,8 @@
-#ifndef CLP_S_SCHEMAINTCOLUMNFILTER_HPP
-#define CLP_S_SCHEMAINTCOLUMNFILTER_HPP
+#ifndef CLP_S_SCHEMASTRINGCOLUMNFILTER_HPP
+#define CLP_S_SCHEMASTRINGCOLUMNFILTER_HPP
 
 #include <cstdint>
+#include <string>
 #include <absl/container/flat_hash_map.h>
 #include <absl/container/flat_hash_set.h>
 
@@ -11,13 +12,13 @@
 
 namespace clp_s {
 
-    class SchemaIntColumnFilter {
+    class SchemaStringColumnFilter {
     public:
-        SchemaIntColumnFilter();
-        ~SchemaIntColumnFilter() = default;
+        SchemaStringColumnFilter();
+        ~SchemaStringColumnFilter() = default;
     
-        SchemaIntColumnFilter(SchemaIntColumnFilter const&) = default;
-        SchemaIntColumnFilter& operator=(SchemaIntColumnFilter const& other);
+        SchemaStringColumnFilter(SchemaStringColumnFilter const&) = default;
+        SchemaStringColumnFilter& operator=(SchemaStringColumnFilter const& other);
     
         void add_value(int column_id, ParsedMessage::variable_t& value);
     
@@ -25,17 +26,15 @@ namespace clp_s {
         auto read_from_file(ZstdDecompressor& decompressor) -> bool;
     
         [[nodiscard]] bool is_empty() const;
-        [[nodiscard]] bool contains(int column_id, int64_t value) const;
-        [[nodiscard]] SchemaIntColumnFilter clone() const;
-        void print_everything();
+        [[nodiscard]] bool contains(int column_id, std::string const& value) const;
+        [[nodiscard]] SchemaStringColumnFilter clone() const;
     
     private:
-        absl::flat_hash_map<int, absl::flat_hash_set<int64_t>> m_column_values_map;
+        absl::flat_hash_map<int, absl::flat_hash_set<std::string>> m_column_values_map;
         absl::flat_hash_map<int, int64_t> m_column_count_map;
         const double m_threashold = 1.0 / 100.0;
     };
     
-    } // namespace clp_s
-    
+} // namespace clp_s
 
 #endif

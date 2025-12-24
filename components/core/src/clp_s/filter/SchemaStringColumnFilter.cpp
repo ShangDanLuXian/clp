@@ -1,16 +1,17 @@
-#include "SchemaIntColumnFilter.hpp"
+#include "SchemaStringColumnFilter.hpp"
 #include <spdlog/spdlog.h>
 
 #include "../ErrorCode.hpp"
 #include "../ZstdCompressor.hpp"
 #include "../ZstdDecompressor.hpp"
+#include "clp/Stopwatch.hpp"
 
 namespace clp_s {
 
-    SchemaIntColumnFilter::SchemaIntColumnFilter() = default;
+    SchemaStringColumnFilter::SchemaStringColumnFilter() = default;
     
-    SchemaIntColumnFilter& SchemaIntColumnFilter::operator=(
-            SchemaIntColumnFilter const& other
+    SchemaStringColumnFilter& SchemaStringColumnFilter::operator=(
+            SchemaStringColumnFilter const& other
     ) {
         if (this != &other) {
             m_column_values_map = other.m_column_values_map;
@@ -20,15 +21,15 @@ namespace clp_s {
         return *this;
     }
     
-    void SchemaIntColumnFilter::add_value(int column_id, ParsedMessage::variable_t& value) {
-        m_column_values_map[column_id].insert(std::get<int64_t>(value));
+    void SchemaStringColumnFilter::add_value(int column_id, ParsedMessage::variable_t& value) {
+        m_column_values_map[column_id].insert(std::get<std::string>(value));
         m_column_count_map[column_id] += 1;
     }
     
-    void SchemaIntColumnFilter::write_to_file(ZstdCompressor& compressor) const {
+    void SchemaStringColumnFilter::write_to_file(ZstdCompressor& compressor) const {
         struct ColumnEntry {
             int column_id;
-            absl::flat_hash_set<int64_t> const* values;
+            absl::flat_hash_set<std::string> const* values;
         };
     
         std::vector<ColumnEntry> selected_columns;
@@ -67,13 +68,15 @@ namespace clp_s {
             uint64_t const num_values = static_cast<uint64_t>(values.size());
             compressor.write_numeric_value<uint64_t>(num_values);
     
-            for (auto const v : values) {
-                compressor.write_numeric_value<int64_t>(v);
+            for (auto const& v : values) {
+                uint64_t const str_length = static_cast<uint64_t>(v.size());
+                compressor.write_numeric_value<uint64_t>(str_length);
+                compressor.write(v.data(), str_length);
             }
         }
     }
     
-    auto SchemaIntColumnFilter::read_from_file(
+    auto SchemaStringColumnFilter::read_from_file(
             ZstdDecompressor& decompressor
     ) -> bool {
         m_column_values_map.clear();
@@ -82,7 +85,8 @@ namespace clp_s {
         uint32_t num_columns = 0;
         if (ErrorCodeSuccess != decompressor.try_read_numeric_value(num_columns)) {
             return false;
-        }    
+        }
+    
         for (uint32_t i = 0; i < num_columns; ++i) {
             int32_t column_id = 0;
             if (ErrorCodeSuccess != decompressor.try_read_numeric_value(column_id)) {
@@ -98,32 +102,42 @@ namespace clp_s {
             values_set.reserve(static_cast<size_t>(num_values));
     
             for (uint64_t j = 0; j < num_values; ++j) {
-                int64_t value = 0;
-                if (ErrorCodeSuccess != decompressor.try_read_numeric_value(value)) {
+                uint64_t str_length = 0;
+                if (ErrorCodeSuccess != decompressor.try_read_numeric_value(str_length)) {
                     return false;
                 }
-                values_set.insert(value);
+                
+                std::string value;
+                value.resize(static_cast<size_t>(str_length));
+                
+                size_t num_bytes_read = 0;
+                if (ErrorCodeSuccess != decompressor.try_read(
+                        value.data(),
+                        str_length,
+                        num_bytes_read
+                )) {
+                    return false;
+                }
+                
+                if (num_bytes_read != str_length) {
+                    return false;
+                }
+                
+                values_set.insert(std::move(value));
             }
     
             // Only needed at build time; after read it's not used for logic.
             m_column_count_map[column_id] = 0;
-
-            // for (auto const & [id, values]: m_column_values_map) {
-            //     for (auto const value: values) {
-            //         spdlog::info("column id :{}, value: {}", column_id, value);
-            //     }
-                
-            // }
         }
     
         return true;
     }
     
-    bool SchemaIntColumnFilter::is_empty() const {
+    bool SchemaStringColumnFilter::is_empty() const {
         return m_column_values_map.empty();
     }
     
-    bool SchemaIntColumnFilter::contains(int column_id, int64_t value) const {
+    bool SchemaStringColumnFilter::contains(int column_id, std::string const& value) const {
         auto it = m_column_values_map.find(column_id);
         if (it == m_column_values_map.end()) {
             return true;
@@ -131,41 +145,10 @@ namespace clp_s {
         auto const& values = it->second;
         return values.find(value) != values.end();
     }
-
-    void SchemaIntColumnFilter::print_everything() {
-        spdlog::info("=== SchemaIntColumnFilter Dump ===");
-        spdlog::info("Threshold: {}", m_threashold);
-        spdlog::info("Total Columns Tracked: {}", m_column_values_map.size());
     
-        for (auto const& [column_id, values_set] : m_column_values_map) {
-            // Retrieve the total count observed for this column
-            auto count_it = m_column_count_map.find(column_id);
-            int64_t total_observed = (count_it != m_column_count_map.end()) ? count_it->second : 0;
-    
-            // Calculate the ratio to see if it would be filtered
-            double ratio = 0.0;
-            if (total_observed > 0) {
-                ratio = static_cast<double>(values_set.size()) / static_cast<double>(total_observed);
-            }
-    
-            spdlog::info("--- Column ID: {} ---", column_id);
-            spdlog::info("  Total Observed count: {}", total_observed);
-            spdlog::info("  Unique Values stored: {}", values_set.size());
-            // Print ratio with 6 decimal precision
-            spdlog::info("  Ratio: {:.6f} (Kept if <= {:.6f})", ratio, m_threashold);
-            
-            spdlog::info("  Stored Values:");
-            for (auto const& value : values_set) {
-                spdlog::info("    {}", value);
-            }
-        }
-        spdlog::info("==================================");
-    }
-    
-    SchemaIntColumnFilter SchemaIntColumnFilter::clone() const {
+    SchemaStringColumnFilter SchemaStringColumnFilter::clone() const {
         // Uses copy constructor
         return *this;
     }
     
-    } // namespace clp_s
-    
+} // namespace clp_s

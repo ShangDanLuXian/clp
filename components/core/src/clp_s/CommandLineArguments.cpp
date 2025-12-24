@@ -573,7 +573,13 @@ CommandLineArguments::parse_arguments(int argc, char const** argv) {
                 "no-archive-var-filter",
                 po::value<bool>(&m_use_archive_var_filter)->zero_tokens()->default_value(true)->implicit_value(false),
                 "Disable filter for dictionary lookups (useful for debugging or benchmarking)"
-            );
+            )(
+                "no-schema-filter",
+                po::value<bool>(&m_use_schema_filter)->zero_tokens()->default_value(true)->implicit_value(false),
+                "Disable schema filter for dictionary lookups (useful for debugging or benchmarking)"
+
+            )
+            ;
             // clang-format on
             search_options.add(match_options);
 

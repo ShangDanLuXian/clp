@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <string>
 #include <string_view>
 #include <spdlog/spdlog.h>
 
@@ -12,6 +13,7 @@
 #include "ReaderUtils.hpp"
 #include "clp_s/Utils.hpp"
 #include "clp_s/filter/SchemaIntColumnFilter.hpp"
+#include "clp_s/filter/SchemaStringColumnFilter.hpp"
 
 using std::string_view;
 
@@ -239,6 +241,37 @@ void ArchiveReader::preload_schema_int_filters(std::vector<int32_t> const& schem
     }
 }
 
+void ArchiveReader::preload_schema_str_filters(std::vector<int32_t> const& schema_ids) {
+    if (!m_use_schema_filter) {
+        return;
+    }
+
+    for (auto schema_id : schema_ids) {
+        std::string schema_filter_path = "/schema." + std::to_string(schema_id) + ".str.filter";
+
+        try {
+            constexpr size_t cDecompressorFileReadBufferCapacity = 64 * 1024;  // 64 KB
+            auto filter_reader
+                    = m_archive_reader_adaptor->checkout_reader_for_section(schema_filter_path);
+
+            ZstdDecompressor filter_decompressor;
+            filter_decompressor.open(*filter_reader, cDecompressorFileReadBufferCapacity);
+
+            SchemaStringColumnFilter filter;
+            bool success = filter.read_from_file(filter_decompressor);
+
+            filter_decompressor.close();
+            m_archive_reader_adaptor->checkin_reader_for_section(schema_filter_path);
+            if (success && !filter.is_empty()) {
+                m_schema_str_filters[schema_id] = std::move(filter);
+            } else {
+            }
+        } catch (std::exception const& e) {
+        } catch (...) {
+        }
+    }
+}
+
 bool ArchiveReader::schema_filter_check(
         int32_t schema_id,
         std::unordered_set<clp::variable_dictionary_id_t> const& var_ids
@@ -291,6 +324,30 @@ bool ArchiveReader::schema_int_filter_check(
     }
 
     SchemaIntColumnFilter filter = it->second;
+
+    if (filter.contains(column_id, value)) {
+        return true;
+    }
+    return false;
+}
+
+bool ArchiveReader::schema_str_filter_check(
+    int32_t schema_id,
+    int32_t column_id,
+    std::string value
+) {
+    if (!m_use_schema_filter) {
+        // Schema filters disabled, proceed with search
+        return true;
+    }
+
+    auto it = m_schema_str_filters.find(schema_id);
+    if (it == m_schema_str_filters.end()) {
+
+        return true;
+    }
+
+    SchemaStringColumnFilter filter = it->second;
 
     if (filter.contains(column_id, value)) {
         return true;

@@ -19,6 +19,8 @@ size_t SchemaWriter::append_message(ParsedMessage& message) {
         if (dynamic_cast<Int64ColumnWriter*>(m_columns[count])) {
 
             m_int_column_filter.add_value(m_columns[count]->get_m_id(), i.second);
+        } else if (dynamic_cast<VariableStringColumnWriter*>(m_columns[count])) {
+            m_str_column_filter.add_value(m_columns[count]->get_m_id(), i.second);
         }
         ++count;
     }
@@ -107,6 +109,27 @@ size_t SchemaWriter::write_int_filter(
     filter_compressor.open(filter_file_writer, compression_level);
 
     m_int_column_filter.write_to_file(filter_compressor);
+
+    filter_compressor.close();
+    size_t compressed_size = filter_file_writer.get_pos();
+    filter_file_writer.close();
+
+    return compressed_size;
+}
+
+size_t SchemaWriter::write_str_filter(
+    std::string const& filter_path,
+    int compression_level
+) {
+
+    // Write filter to disk
+    FileWriter filter_file_writer;
+    filter_file_writer.open(filter_path, FileWriter::OpenMode::CreateForWriting);
+
+    ZstdCompressor filter_compressor;
+    filter_compressor.open(filter_file_writer, compression_level);
+
+    m_str_column_filter.write_to_file(filter_compressor);
 
     filter_compressor.close();
     size_t compressed_size = filter_file_writer.get_pos();

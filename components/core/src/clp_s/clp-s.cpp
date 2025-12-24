@@ -276,7 +276,8 @@ bool search_archive(
             archive_reader,
             std::move(output_handler),
             command_line_arguments.get_ignore_case(),
-            command_line_arguments.get_use_archive_var_filter()
+            command_line_arguments.get_use_archive_var_filter(),
+            command_line_arguments.get_use_schema_filter()
     );
     return output.filter();
 }

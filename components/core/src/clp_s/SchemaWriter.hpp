@@ -6,6 +6,7 @@
 
 #include "../clp/Defs.h"
 #include "clp_s/filter/SchemaIntColumnFilter.hpp"
+#include "clp_s/filter/SchemaStringColumnFilter.hpp"
 #include "filter/ProbabilisticFilter.hpp"
 #include "ColumnWriter.hpp"
 #include "FileWriter.hpp"
@@ -16,7 +17,7 @@ namespace clp_s {
 class SchemaWriter {
 public:
     // Constructor
-    SchemaWriter() : m_num_messages(0), m_int_column_filter() {}
+    SchemaWriter() : m_num_messages(0), m_int_column_filter(), m_str_column_filter() {}
 
     // Destructor
     ~SchemaWriter();
@@ -70,6 +71,11 @@ public:
         int compression_level
 );
 
+[[nodiscard]] size_t write_str_filter(
+    std::string const& filter_path,
+    int compression_level
+);
+
 private:
     uint64_t m_num_messages;
     size_t m_total_uncompressed_size{};
@@ -77,6 +83,7 @@ private:
     std::vector<BaseColumnWriter*> m_columns;
     std::vector<BaseColumnWriter*> m_unordered_columns;
     SchemaIntColumnFilter m_int_column_filter;
+    SchemaStringColumnFilter m_str_column_filter;
 
     // Filter for this schema's variable dictionary IDs
     ProbabilisticFilter m_filter;

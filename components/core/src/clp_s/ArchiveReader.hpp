@@ -15,6 +15,7 @@
 #include "ReaderUtils.hpp"
 #include "SchemaReader.hpp"
 #include "clp_s/filter/SchemaIntColumnFilter.hpp"
+#include "clp_s/filter/SchemaStringColumnFilter.hpp"
 #include "search/Projection.hpp"
 #include "TimestampDictionaryReader.hpp"
 
@@ -115,6 +116,8 @@ public:
 
     void preload_schema_int_filters(std::vector<int32_t> const& schema_ids);
 
+    void preload_schema_str_filters(std::vector<int32_t> const& schema_ids);
+
     /**
      * Checks if any of the given variable IDs might be in the schema's filter.
      * Uses preloaded filters cached in memory.
@@ -133,6 +136,12 @@ public:
         int32_t schema_id,
         int32_t column_id,
         int64_t value
+    );
+
+    bool schema_str_filter_check(
+        int32_t schema_id,
+        int32_t column_id,
+        std::string value
     );
 
     /**
@@ -261,9 +270,10 @@ private:
     int32_t m_log_event_idx_column_id{-1};
 
     // Schema filter settings and cache
-    bool m_use_schema_filter{false};
+    bool m_use_schema_filter{true};
     std::map<int32_t, ProbabilisticFilter> m_schema_filters;
     std::map<int32_t, SchemaIntColumnFilter> m_schema_int_filters;
+    std::map<int32_t, SchemaStringColumnFilter> m_schema_str_filters;
 };
 }  // namespace clp_s
 

@@ -31,7 +31,8 @@ public:
            std::shared_ptr<ArchiveReader> const& archive_reader,
            std::unique_ptr<OutputHandler> output_handler,
            bool ignore_case,
-           bool use_filter)
+           bool use_filter,
+           bool use_schema_filter)
             : m_query_runner(match, expr, archive_reader, ignore_case),
               m_archive_reader(archive_reader),
               m_expr(expr),
@@ -39,7 +40,8 @@ public:
               m_output_handler(std::move(output_handler)),
               m_should_marshal_records(m_output_handler->should_marshal_records()),
               m_use_filter(use_filter),
-              m_ignore_case(ignore_case) {}
+              m_ignore_case(ignore_case),
+              m_use_schema_filter(use_schema_filter) {}
 
     /**
      * Filters messages within the archive and outputs the filtered messages to the configured
@@ -65,6 +67,7 @@ private:
     bool m_should_marshal_records{true};
     bool m_use_filter{false};
     bool m_ignore_case{false};
+    bool m_use_schema_filter{false};
 };
 }  // namespace clp_s::search
 

@@ -127,6 +127,8 @@ public:
 
     bool get_use_archive_var_filter() const { return m_use_archive_var_filter; }
 
+    bool get_use_schema_filter() const {return m_use_schema_filter; }
+
 private:
     // Methods
     /**
@@ -217,6 +219,7 @@ private:
     std::vector<std::string> m_projection_columns;
     FilterType m_archive_var_filter{0}; // Default not write any filter
     bool m_use_archive_var_filter{true};  // Default to true (enabled)
+    bool m_use_schema_filter{true};
 
     // Search aggregation variables
     std::string m_reducer_host;

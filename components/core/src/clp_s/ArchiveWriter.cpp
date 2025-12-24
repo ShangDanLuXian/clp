@@ -438,6 +438,10 @@ std::pair<size_t, size_t> ArchiveWriter::store_tables() {
         std::string schema_int_filter_path
         = m_archive_path + "/schema." + std::to_string(it->first) + ".int.filter";
         (void)it->second->write_int_filter(schema_int_filter_path, m_compression_level);
+
+        // std::string schema_str_filter_path
+        // = m_archive_path + "/schema." + std::to_string(it->first) + ".str.filter";
+        // (void)it->second->write_str_filter(schema_str_filter_path, m_compression_level);
         
         delete it->second;
 

@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include <spdlog/spdlog.h>
@@ -38,6 +39,7 @@ using clp_s::search::ast::OrExpr;
 namespace clp_s::search {
 bool Output::filter() {
     clp::Stopwatch schema_processing_stopwatch;
+    clp::Stopwatch schema_filter_checking_stopwatch;
     std::vector<int32_t> matched_schemas;
     bool has_array = false;
     bool has_array_search = false;
@@ -87,13 +89,18 @@ bool Output::filter() {
     }
 
     m_query_runner.global_init();
-    m_archive_reader->preload_schema_filters(matched_schemas);
+    // m_archive_reader->preload_schema_filters(matched_schemas);
+    m_archive_reader->set_use_schema_filter(m_use_schema_filter);
     m_archive_reader->preload_schema_int_filters(matched_schemas);
+    m_archive_reader->preload_schema_str_filters(matched_schemas);
     m_archive_reader->open_packed_streams();
 
     std::string message;
     auto const archive_id = m_archive_reader->get_archive_id();
+
     for (int32_t schema_id : matched_schemas) {
+        schema_processing_stopwatch.stop();
+        schema_processing_stopwatch.reset();
         schema_processing_stopwatch.start();
         if (EvaluatedValue::False == m_query_runner.schema_init(schema_id)) {
             continue;
@@ -101,19 +108,10 @@ bool Output::filter() {
 
         // Check filter before loading ERT
         auto searched_var_ids = m_query_runner.get_searched_variable_ids();
-        if (!m_archive_reader->schema_filter_check(schema_id, searched_var_ids)) {
-            continue;
-        }
-        auto& reader = m_archive_reader->read_schema_table(
-                schema_id,
-                m_output_handler->should_output_metadata(),
-                m_should_marshal_records
-        );
-        reader.initialize_filter(&m_query_runner);
-
+        // if (!m_archive_reader->schema_filter_check(schema_id, searched_var_ids)) {
+        //     continue;
+        // }
         auto schema_expr = m_match->get_query_for_schema(schema_id);
-
-
         if (auto filter = std::dynamic_pointer_cast<ast::FilterExpr>(schema_expr)) {
             auto column_id = filter->get_column()->get_column_id();
 
@@ -127,8 +125,23 @@ bool Output::filter() {
 
                     continue;
                 }
+            } else if (filter->get_column()->get_literal_type() == ast::VarStringT) {
+
+                std::string tmp_str;
+                filter->get_operand()->as_var_string(tmp_str, filter->get_operation());
+
+                if (!m_archive_reader->schema_str_filter_check(schema_id, column_id, tmp_str)) {
+                    continue;
+                }
+
             }
          }
+        auto& reader = m_archive_reader->read_schema_table(
+                schema_id,
+                m_output_handler->should_output_metadata(),
+                m_should_marshal_records
+        );
+        reader.initialize_filter(&m_query_runner);
 
 
         size_t messages_in_schema = 0;
@@ -160,7 +173,6 @@ bool Output::filter() {
             messages_in_schema,
             schema_processing_stopwatch.get_time_taken_in_seconds() * 1000.0
     );
-    schema_processing_stopwatch.reset();
         auto ecode = m_output_handler->flush();
         if (ErrorCode::ErrorCodeSuccess != ecode) {
             SPDLOG_ERROR(
