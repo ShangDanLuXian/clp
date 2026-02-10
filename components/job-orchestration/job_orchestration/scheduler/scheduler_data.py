@@ -31,6 +31,7 @@ class CompressionJob(BaseModel):
     num_tasks_completed: int
     remaining_tasks: list[dict[str, Any]]
     remaining_partition_info: list[dict[str, Any]]
+    dataset: str | None = None
 
 
 class InternalJobState(Enum):

@@ -105,6 +105,7 @@ class JobType(KebabCaseStrEnum):
     FILE_EXTRACTION = auto()
     IR_EXTRACTION = auto()
     SEARCH = auto()
+    FILTER_PACKING = auto()
 
 
 class DockerMount:
@@ -137,6 +138,7 @@ class ClpDockerMounts:
         )
         self.data_dir: DockerMount | None = None
         self.logs_dir: DockerMount | None = None
+        self.filter_staging_dir: DockerMount | None = None
         self.archives_output_dir: DockerMount | None = None
         self.stream_output_dir: DockerMount | None = None
         self.aws_config_dir: DockerMount | None = None
@@ -269,6 +271,18 @@ def generate_container_config(
     if not is_path_already_mounted(
         clp_home,
         CONTAINER_CLP_HOME,
+        clp_config.filter_staging_directory,
+        container_clp_config.filter_staging_directory,
+    ):
+        docker_mounts.filter_staging_dir = DockerMount(
+            DockerMountType.BIND,
+            clp_config.filter_staging_directory,
+            container_clp_config.filter_staging_directory,
+        )
+
+    if not is_path_already_mounted(
+        clp_home,
+        CONTAINER_CLP_HOME,
         clp_config.archive_output.get_directory(),
         container_clp_config.archive_output.get_directory(),
     ):
@@ -331,6 +345,7 @@ def generate_worker_config(clp_config: ClpConfig) -> WorkerConfig:
     worker_config.package = clp_config.package.model_copy(deep=True)
     worker_config.archive_output = clp_config.archive_output.model_copy(deep=True)
     worker_config.tmp_directory = clp_config.tmp_directory
+    worker_config.filter_staging_directory = clp_config.filter_staging_directory
 
     worker_config.stream_output = clp_config.stream_output
     worker_config.stream_collection_name = clp_config.results_cache.stream_collection_name
@@ -455,6 +470,7 @@ def load_config_file(config_file_path: pathlib.Path) -> ClpConfig:
     validate_path_for_container_mount(clp_config.data_directory)
     validate_path_for_container_mount(clp_config.logs_directory)
     validate_path_for_container_mount(clp_config.tmp_directory)
+    validate_path_for_container_mount(clp_config.filter_staging_directory)
 
     return clp_config
 

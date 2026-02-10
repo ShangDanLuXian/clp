@@ -68,6 +68,7 @@ CLP_DEFAULT_STREAMS_DIRECTORY_PATH = CLP_DEFAULT_DATA_DIRECTORY_PATH / "streams"
 CLP_DEFAULT_STREAMS_STAGING_DIRECTORY_PATH = CLP_DEFAULT_DATA_DIRECTORY_PATH / "staged-streams"
 CLP_DEFAULT_LOG_DIRECTORY_PATH = pathlib.Path("var") / "log"
 CLP_DEFAULT_TMP_DIRECTORY_PATH = pathlib.Path("var") / "tmp"
+CLP_DEFAULT_FILTER_STAGING_DIRECTORY_PATH = CLP_DEFAULT_TMP_DIRECTORY_PATH / "filters"
 CLP_DEFAULT_DATASET_NAME = "default"
 CLP_METADATA_TABLE_PREFIX = "clp_"
 CLP_PACKAGE_CONTAINER_IMAGE_ID_PATH = pathlib.Path("clp-package-image.id")
@@ -422,6 +423,7 @@ class CompressionScheduler(BaseModel):
 
     jobs_poll_delay: PositiveFloat = 0.1  # seconds
     max_concurrent_tasks_per_job: NonNegativeInt = UNLIMITED_CONCURRENT_TASKS_PER_JOB
+    filter_pack_max_size_bytes: PositiveInt = 64 * 1024 * 1024
     logging_level: LoggingLevel = "INFO"
     type: OrchestrationTypeStr = OrchestrationType.CELERY
 
@@ -834,6 +836,7 @@ class ClpConfig(BaseModel):
     data_directory: SerializablePath = CLP_DEFAULT_DATA_DIRECTORY_PATH
     logs_directory: SerializablePath = CLP_DEFAULT_LOG_DIRECTORY_PATH
     tmp_directory: SerializablePath = CLP_DEFAULT_TMP_DIRECTORY_PATH
+    filter_staging_directory: SerializablePath = CLP_DEFAULT_FILTER_STAGING_DIRECTORY_PATH
     aws_config_directory: SerializablePath | None = None
 
     _container_image_id_path: SerializablePath = PrivateAttr(
@@ -857,6 +860,9 @@ class ClpConfig(BaseModel):
         self.data_directory = make_config_path_absolute(clp_home, self.data_directory)
         self.logs_directory = make_config_path_absolute(clp_home, self.logs_directory)
         self.tmp_directory = make_config_path_absolute(clp_home, self.tmp_directory)
+        self.filter_staging_directory = make_config_path_absolute(
+            clp_home, self.filter_staging_directory
+        )
         self._container_image_id_path = make_config_path_absolute(
             clp_home, self._container_image_id_path
         )
@@ -944,6 +950,16 @@ class ClpConfig(BaseModel):
             validate_path_could_be_dir(resolved_tmp_dir)
         except ValueError as ex:
             raise ValueError(f"tmp_directory is invalid: {ex}")
+
+    def validate_filter_staging_dir(self, use_host_mount: bool = False):
+        filter_dir = self.filter_staging_directory
+        resolved_filter_dir = (
+            resolve_host_path_in_container(filter_dir) if use_host_mount else filter_dir
+        )
+        try:
+            validate_path_could_be_dir(resolved_filter_dir)
+        except ValueError as ex:
+            raise ValueError(f"filter_staging_directory is invalid: {ex}")
 
     def validate_aws_config_dir(self, use_host_mount: bool = False):
         profile_auth_used = False
@@ -1071,6 +1087,9 @@ class ClpConfig(BaseModel):
         self.data_directory = pathlib.Path("/") / CLP_DEFAULT_DATA_DIRECTORY_PATH
         self.logs_directory = pathlib.Path("/") / CLP_DEFAULT_LOG_DIRECTORY_PATH
         self.tmp_directory = pathlib.Path("/") / CLP_DEFAULT_TMP_DIRECTORY_PATH
+        self.filter_staging_directory = (
+            pathlib.Path("/") / CLP_DEFAULT_FILTER_STAGING_DIRECTORY_PATH
+        )
         if self.aws_config_directory is not None:
             self.aws_config_directory = CONTAINER_AWS_CONFIG_DIRECTORY
         self.logs_input.transform_for_container()
@@ -1095,6 +1114,7 @@ class WorkerConfig(BaseModel):
     package: Package = Package()
     archive_output: ArchiveOutput = ArchiveOutput()
     tmp_directory: SerializablePath = ClpConfig().tmp_directory
+    filter_staging_directory: SerializablePath = ClpConfig().filter_staging_directory
 
     # Only needed by query workers.
     stream_output: StreamOutput = StreamOutput()

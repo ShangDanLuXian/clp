@@ -239,6 +239,14 @@ set(
         DictionaryWriter.cpp
         DictionaryWriter.hpp
         ErrorCode.hpp
+        filter/BloomFilter.cpp
+        filter/BloomFilter.hpp
+        filter/FilterConfig.cpp
+        filter/FilterConfig.hpp
+        filter/FilterFile.cpp
+        filter/FilterFile.hpp
+        filter/ProbabilisticFilter.cpp
+        filter/ProbabilisticFilter.hpp
         FloatFormatEncoding.cpp
         FloatFormatEncoding.hpp
         JsonFileIterator.cpp

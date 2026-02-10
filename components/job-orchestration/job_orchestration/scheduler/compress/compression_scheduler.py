@@ -52,6 +52,7 @@ from job_orchestration.scheduler.scheduler_data import (
     CompressionJob,
 )
 from job_orchestration.scheduler.utils import kill_hanging_jobs
+from clp_package_utils.scripts.native.filter_pack import pack_filters_for_dataset
 
 
 @dataclass
@@ -68,6 +69,7 @@ logger = get_logger("compression_scheduler")
 scheduled_jobs = {}
 
 received_sigterm = False
+
 
 
 def sigterm_handler(signal_number, frame):
@@ -342,6 +344,7 @@ def search_and_schedule_new_tasks(
             db_context,
             job_id,
             paths_to_compress_buffer,
+            dataset,
         )
 
 
@@ -407,7 +410,30 @@ def poll_running_jobs(
             _dispatch_next_task_batch(task_manager, db_context, job, max_concurrent_tasks_per_job)
         else:
             # All tasks completed successfully
-            _complete_compression_job(db_context, job_id, job.num_tasks_total, duration)
+            status_msg = None
+            if (
+                StorageEngine.CLP_S == clp_config.package.storage_engine
+                and job.dataset is not None
+            ):
+                try:
+                    pack_filters_for_dataset(
+                        clp_config,
+                        job.dataset,
+                        clp_config.compression_scheduler.filter_pack_max_size_bytes,
+                        dry_run=False,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Filter packing failed for job %s (dataset=%s).", job_id, job.dataset
+                    )
+                    status_msg = (
+                        "Compression succeeded but filter packing failed. "
+                        "See scheduler logs for details."
+                    )
+
+            _complete_compression_job(
+                db_context, job_id, job.num_tasks_total, duration, status_msg
+            )
             jobs_to_delete.append(job_id)
 
     for job_id in jobs_to_delete:
@@ -540,6 +566,7 @@ def _batch_and_submit_tasks(
     db_context: DbContext,
     job_id: int,
     paths_to_compress_buffer: PathsToCompressBuffer,
+    dataset: str | None,
 ) -> None:
     """
     Batches tasks from paths_to_compress_buffer and submits them to the task manager.
@@ -579,6 +606,7 @@ def _batch_and_submit_tasks(
         num_tasks_completed=0,
         remaining_tasks=remaining_tasks,
         remaining_partition_info=remaining_partition_info,
+        dataset=dataset,
     )
     scheduled_jobs[job_id] = job
 
@@ -592,7 +620,11 @@ def _batch_and_submit_tasks(
 
 
 def _complete_compression_job(
-    db_context: DbContext, job_id: int, num_tasks_total: int, duration: float
+    db_context: DbContext,
+    job_id: int,
+    num_tasks_total: int,
+    duration: float,
+    status_msg: str | None = None,
 ) -> None:
     """
     Marks a compression job as successfully completed.
@@ -603,14 +635,13 @@ def _complete_compression_job(
     :param duration:
     """
     logger.info("Job %s succeeded (%s tasks completed).", job_id, num_tasks_total)
-    update_compression_job_metadata(
-        db_context,
-        job_id,
-        {
-            "status": CompressionJobStatus.SUCCEEDED,
-            "duration": duration,
-        },
-    )
+    kv = {
+        "status": CompressionJobStatus.SUCCEEDED,
+        "duration": duration,
+    }
+    if status_msg:
+        kv["status_msg"] = status_msg
+    update_compression_job_metadata(db_context, job_id, kv)
 
 
 def _dispatch_next_task_batch(

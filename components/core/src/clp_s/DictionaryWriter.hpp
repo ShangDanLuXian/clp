@@ -7,6 +7,7 @@
 
 #include "../clp/Defs.h"
 #include "DictionaryEntry.hpp"
+#include "filter/FilterConfig.hpp"
 
 namespace clp_s {
 template <typename DictionaryIdType, typename EntryType>
@@ -89,6 +90,14 @@ public:
      * @param id ID of the variable matching the given entry
      */
     bool add_entry(std::string_view value, clp::variable_dictionary_id_t& id);
+
+    /**
+     * Writes a filter file based on the dictionary contents.
+     * @param filter_path
+     * @param config
+     * @return true if a filter file was written, false otherwise
+     */
+    bool write_filter(std::string const& filter_path, FilterConfig const& config) const;
 };
 
 class LogTypeDictionaryWriter

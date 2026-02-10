@@ -75,6 +75,16 @@ def main(argv: list[str]) -> int:
         # Create tables
         try:
             mysql_cursor.execute(
+                f"""CREATE TABLE IF NOT EXISTS `{table_prefix}filter_packs` (
+                `id` BIGINT unsigned NOT NULL AUTO_INCREMENT,
+                `storage_path` VARCHAR(4096) NOT NULL,
+                `size` BIGINT NOT NULL,
+                `num_filters` INT NOT NULL,
+                PRIMARY KEY (`id`)
+            )"""
+            )
+
+            mysql_cursor.execute(
                 f"""CREATE TABLE IF NOT EXISTS `{table_prefix}archives` (
                 `pagination_id` BIGINT unsigned NOT NULL AUTO_INCREMENT,
                 `id` VARCHAR(64) NOT NULL,
@@ -84,7 +94,10 @@ def main(argv: list[str]) -> int:
                 `size` BIGINT NOT NULL,
                 `creator_id` VARCHAR(64) NOT NULL,
                 `creation_ix` INT NOT NULL,
+                `filter_pack_id` BIGINT unsigned NULL,
                 KEY `archives_creation_order` (`creator_id`,`creation_ix`) USING BTREE,
+                KEY `archives_filter_pack_id` (`filter_pack_id`) USING BTREE,
+                FOREIGN KEY (`filter_pack_id`) REFERENCES `{table_prefix}filter_packs` (`id`),
                 UNIQUE KEY `archive_id` (`id`) USING BTREE,
                 PRIMARY KEY (`pagination_id`)
             )"""
