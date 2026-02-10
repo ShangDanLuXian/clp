@@ -105,6 +105,15 @@ def _generate_compress_cmd(
         compress_cmd.append("--unstructured")
     if parsed_args.no_progress_reporting is True:
         compress_cmd.append("--no-progress-reporting")
+    if parsed_args.filter_type is not None:
+        compress_cmd.append("--filter-type")
+        compress_cmd.append(parsed_args.filter_type)
+    if parsed_args.filter_fpr is not None:
+        compress_cmd.append("--filter-fpr")
+        compress_cmd.append(str(parsed_args.filter_fpr))
+    if parsed_args.filter_output_dir is not None:
+        compress_cmd.append("--filter-output-dir")
+        compress_cmd.append(parsed_args.filter_output_dir)
 
     compress_cmd.append("--logs-list")
     compress_cmd.append(str(url_list_path))
@@ -187,6 +196,24 @@ def main(argv):
     )
     args_parser.add_argument(
         "--no-progress-reporting", action="store_true", help="Disables progress reporting."
+    )
+    args_parser.add_argument(
+        "--filter-type",
+        type=str,
+        default=None,
+        help="Filter type to build per-archive filters (e.g. bloom_v1).",
+    )
+    args_parser.add_argument(
+        "--filter-fpr",
+        type=float,
+        default=None,
+        help="False positive rate for the filter (only used if filter-type is set).",
+    )
+    args_parser.add_argument(
+        "--filter-output-dir",
+        type=str,
+        default=None,
+        help="Override filter staging directory (default is filter_staging_directory/<dataset>).",
     )
 
     subparsers = args_parser.add_subparsers(dest="subcommand", required=True)
