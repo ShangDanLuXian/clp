@@ -19,9 +19,11 @@ import argparse
 import asyncio
 import contextlib
 import datetime
+import json
 import logging
 import os
 import pathlib
+import subprocess
 import sys
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -38,6 +40,7 @@ from clp_py_utils.clp_config import (
 )
 from clp_py_utils.clp_logging import get_logger, get_logging_formatter, set_logging_level
 from clp_py_utils.clp_metadata_db_utils import (
+    fetch_column_types,
     fetch_existing_datasets,
     fetch_filter_pack_paths,
     get_archives_table_name,
@@ -95,62 +98,81 @@ active_archive_json_extractions: dict[str, list[str]] = {}
 reducer_connection_queue: asyncio.Queue | None = None
 
 
-_UNSAFE_QUERY_CHARS = set("*?()[]{}:<>!=|&")
+NODE_TYPE_CLP_STRING = 2
+NODE_TYPE_VAR_STRING = 3
 
 
-def extract_conservative_filter_terms(query_string: str) -> list[str] | None:
-    query = query_string.strip()
-    if not query:
-        return []
-
-    if any(ch in query for ch in _UNSAFE_QUERY_CHARS):
+def extract_filter_terms_with_clp_s(query_string: str) -> list[dict[str, Any]] | None:
+    clp_home = os.getenv("CLP_HOME")
+    if not clp_home:
+        logger.debug("CLP_HOME not set; skipping filter term extraction.")
         return None
 
-    tokens: list[str] = []
-    i = 0
-    while i < len(query):
-        if query[i].isspace():
-            i += 1
-            continue
-        if query[i] == '"':
-            i += 1
-            token_chars: list[str] = []
-            escaped = False
-            while i < len(query):
-                ch = query[i]
-                if escaped:
-                    token_chars.append(ch)
-                    escaped = False
-                elif ch == "\\":
-                    escaped = True
-                elif ch == '"':
-                    break
-                else:
-                    token_chars.append(ch)
-                i += 1
-            if i >= len(query) or query[i] != '"':
-                return None
-            token = "".join(token_chars)
-            if token:
-                tokens.append(token)
-            i += 1
-            continue
+    clp_binary = pathlib.Path(clp_home) / "bin" / "clp-s"
+    if not clp_binary.exists():
+        logger.debug("clp-s binary not found at %s; skipping filter term extraction.", clp_binary)
+        return None
 
-        start = i
-        while i < len(query) and not query[i].isspace():
-            i += 1
-        token = query[start:i]
-        token_lower = token.lower()
-        if token_lower == "and":
-            continue
-        if token_lower in {"or", "not"}:
-            return None
-        if any(ch in token for ch in _UNSAFE_QUERY_CHARS):
-            return None
-        if token:
-            tokens.append(token)
+    cmd = [str(clp_binary), "t", "--query", query_string]
+    try:
+        proc = subprocess.run(
+            cmd,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except Exception:
+        logger.exception("Failed to run clp-s filter term extraction.")
+        return None
 
-    return tokens
+    if proc.returncode != 0:
+        logger.debug("clp-s filter term extraction failed: %s", proc.stderr)
+        return None
+
+    try:
+        data = json.loads(proc.stdout.strip())
+    except Exception:
+        logger.debug("Failed to parse clp-s filter term output: %s", proc.stdout)
+        return None
+
+    if not data.get("supported", False):
+        logger.debug("Filter term extraction not supported: %s", data.get("reason"))
+        return None
+
+    terms = data.get("terms", [])
+    if not isinstance(terms, list):
+        return None
+    return terms
+
+
+def escape_key_name(key_name: str) -> str:
+    escaped = []
+    for ch in key_name:
+        if ch == '"':
+            escaped.append('\\"')
+        elif ch == "\\":
+            escaped.append("\\\\")
+        elif ch == "\n":
+            escaped.append("\\n")
+        elif ch == "\t":
+            escaped.append("\\t")
+        elif ch == "\r":
+            escaped.append("\\r")
+        elif ch == "\b":
+            escaped.append("\\b")
+        elif ch == "\f":
+            escaped.append("\\f")
+        elif ch == ".":
+            escaped.append("\\.")
+        elif 32 <= ord(ch) <= 126:
+            escaped.append(ch)
+        else:
+            escaped.append(f"\\u00{ord(ch):02x}")
+    return "".join(escaped)
+
+
+def build_column_path(tokens: list[str]) -> str:
+    return ".".join(escape_key_name(token) for token in tokens)
 
 
 class StreamExtractionHandle(ABC):
@@ -801,12 +823,33 @@ def handle_pending_query_jobs(
                     remaining_archives_for_search=archives_for_search,
                 )
 
-                filter_terms = extract_conservative_filter_terms(search_config.query_string)
-                if filter_terms is None:
-                    logger.debug("Skipping filter scan for job %s due to complex query.", job_id)
-                elif len(filter_terms) == 0:
-                    logger.debug("Skipping filter scan for job %s due to no terms.", job_id)
-                should_filter = filter_terms is not None and len(filter_terms) > 0
+                extracted_terms = extract_filter_terms_with_clp_s(search_config.query_string)
+                if extracted_terms is None:
+                    logger.debug("Skipping filter scan for job %s due to unsupported query.", job_id)
+                safe_terms: list[str] = []
+                if extracted_terms:
+                    column_types = fetch_column_types(db_cursor, table_prefix, dataset)
+                    for term in extracted_terms:
+                        namespace = term.get("namespace", "")
+                        tokens = term.get("column_tokens", [])
+                        value = term.get("value")
+                        if namespace or not isinstance(tokens, list) or not value:
+                            continue
+                        column_path = build_column_path(tokens)
+                        types = column_types.get(column_path)
+                        if not types:
+                            continue
+                        if NODE_TYPE_CLP_STRING in types:
+                            continue
+                        if NODE_TYPE_VAR_STRING not in types:
+                            continue
+                        safe_terms.append(value)
+
+                filter_terms = list(dict.fromkeys(safe_terms))
+                if extracted_terms is not None and len(filter_terms) == 0:
+                    logger.debug("Skipping filter scan for job %s due to no safe terms.", job_id)
+
+                should_filter = extracted_terms is not None and len(filter_terms) > 0
                 if should_filter:
                     pack_groups, unfiltered_ids = _group_archives_by_filter_pack(
                         archives_for_search

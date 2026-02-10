@@ -26,8 +26,11 @@
 #include "search/AddTimestampConditions.hpp"
 #include "search/ast/ConvertToExists.hpp"
 #include "search/ast/EmptyExpr.hpp"
+#include "search/ast/AndExpr.hpp"
 #include "search/ast/Expression.hpp"
+#include "search/ast/FilterExpr.hpp"
 #include "search/ast/NarrowTypes.hpp"
+#include "search/ast/OrExpr.hpp"
 #include "search/ast/OrOfAndForm.hpp"
 #include "search/ast/SearchUtils.hpp"
 #include "search/ast/SetTimestampLiteralPrecision.hpp"
@@ -77,6 +80,26 @@ bool search_archive(
         std::shared_ptr<ast::Expression> expr,
         int reducer_socket_fd
 );
+
+struct FilterTerm {
+    std::string column_namespace;
+    std::vector<std::string> column_tokens;
+    std::string value;
+};
+
+struct FilterTermExtractionResult {
+    bool supported{true};
+    std::string reason;
+    std::vector<FilterTerm> terms;
+};
+
+void collect_filter_terms(
+        std::shared_ptr<ast::Expression> const& expr,
+        bool inverted_context,
+        FilterTermExtractionResult& result
+);
+
+int extract_filter_terms(CommandLineArguments const& command_line_arguments);
 
 bool compress(CommandLineArguments const& command_line_arguments) {
     auto archives_dir = std::filesystem::path(command_line_arguments.get_archives_dir());
@@ -292,6 +315,115 @@ bool search_archive(
     );
     return output.filter();
 }
+
+void collect_filter_terms(
+        std::shared_ptr<ast::Expression> const& expr,
+        bool inverted_context,
+        FilterTermExtractionResult& result
+) {
+    if (!result.supported || nullptr == expr) {
+        return;
+    }
+
+    bool inverted = inverted_context ^ expr->is_inverted();
+    if (inverted) {
+        result.supported = false;
+        result.reason = "inverted-expression";
+        return;
+    }
+
+    if (std::dynamic_pointer_cast<ast::OrExpr>(expr)) {
+        result.supported = false;
+        result.reason = "or-expression";
+        return;
+    }
+
+    if (auto and_expr = std::dynamic_pointer_cast<ast::AndExpr>(expr)) {
+        for (auto const& op : and_expr->get_op_list()) {
+            auto child = std::dynamic_pointer_cast<ast::Expression>(op);
+            if (nullptr == child) {
+                result.supported = false;
+                result.reason = "non-expression-operand";
+                return;
+            }
+            collect_filter_terms(child, inverted, result);
+            if (!result.supported) {
+                return;
+            }
+        }
+        return;
+    }
+
+    auto filter = std::dynamic_pointer_cast<ast::FilterExpr>(expr);
+    if (nullptr == filter) {
+        result.supported = false;
+        result.reason = "unsupported-expression";
+        return;
+    }
+
+    if (filter->get_operation() != ast::FilterOperation::EQ) {
+        return;
+    }
+
+    auto column = filter->get_column();
+    if (column->is_unresolved_descriptor() || column->is_pure_wildcard()) {
+        return;
+    }
+
+    if (!column->get_namespace().empty()) {
+        return;
+    }
+
+    std::string value;
+    auto literal = filter->get_operand();
+    if (nullptr == literal || false == literal->as_var_string(value, filter->get_operation())) {
+        return;
+    }
+
+    if (ast::has_unescaped_wildcards(value)) {
+        return;
+    }
+
+    FilterTerm term;
+    term.column_namespace = column->get_namespace();
+    for (auto const& token : column->get_descriptor_list()) {
+        if (token.wildcard()) {
+            return;
+        }
+        term.column_tokens.push_back(token.get_token());
+    }
+    term.value = value;
+    result.terms.emplace_back(std::move(term));
+}
+
+int extract_filter_terms(CommandLineArguments const& command_line_arguments) {
+    auto const& query = command_line_arguments.get_query();
+    auto query_stream = std::istringstream(query);
+    auto expr = kql::parse_kql_expression(query_stream);
+    if (nullptr == expr) {
+        return 1;
+    }
+
+    FilterTermExtractionResult result;
+    collect_filter_terms(expr, false, result);
+
+    nlohmann::json output;
+    output["supported"] = result.supported;
+    if (!result.supported) {
+        output["reason"] = result.reason;
+    }
+    output["terms"] = nlohmann::json::array();
+    for (auto const& term : result.terms) {
+        nlohmann::json term_json;
+        term_json["namespace"] = term.column_namespace;
+        term_json["column_tokens"] = term.column_tokens;
+        term_json["value"] = term.value;
+        output["terms"].push_back(std::move(term_json));
+    }
+
+    std::cout << output.dump() << std::endl;
+    return 0;
+}
 }  // namespace
 
 int main(int argc, char const* argv[]) {
@@ -351,6 +483,10 @@ int main(int argc, char const* argv[]) {
             SPDLOG_ERROR("Encountered error during decompression - {}", e.what());
             return 1;
         }
+    } else if (CommandLineArguments::Command::ExtractFilterTerms
+               == command_line_arguments.get_command())
+    {
+        return extract_filter_terms(command_line_arguments);
     } else {
         auto const& query = command_line_arguments.get_query();
         auto query_stream = std::istringstream(query);

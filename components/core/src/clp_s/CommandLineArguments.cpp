@@ -164,11 +164,13 @@ CommandLineArguments::parse_arguments(int argc, char const** argv) {
                 std::cerr << "  c - compress" << std::endl;
                 std::cerr << "  x - decompress" << std::endl;
                 std::cerr << "  s - search" << std::endl;
+                std::cerr << "  t - extract-filter-terms" << std::endl;
                 std::cerr << std::endl;
                 std::cerr << "Try "
                           << " c --help OR"
                           << " x --help OR"
-                          << " s --help for command-specific details." << std::endl;
+                          << " s --help OR"
+                          << " t --help for command-specific details." << std::endl;
 
                 po::options_description visible_options;
                 visible_options.add(general_options);
@@ -183,6 +185,7 @@ CommandLineArguments::parse_arguments(int argc, char const** argv) {
             case (char)Command::Compress:
             case (char)Command::Extract:
             case (char)Command::Search:
+            case (char)Command::ExtractFilterTerms:
                 m_command = (Command)command_input;
                 break;
             default:
@@ -850,6 +853,45 @@ CommandLineArguments::parse_arguments(int argc, char const** argv) {
                 throw std::invalid_argument(
                         "The --count-by-time and --count options are mutually exclusive."
                 );
+            }
+        } else if ((char)Command::ExtractFilterTerms == command_input) {
+            po::options_description filter_term_options("Filter term extraction options");
+            // clang-format off
+            filter_term_options.add_options()(
+                    "query,q",
+                    po::value<std::string>(&m_query),
+                    "Query to extract filter terms from"
+            );
+            // clang-format on
+            po::positional_options_description positional_options;
+            positional_options.add("query", 1);
+
+            std::vector<std::string> unrecognized_options
+                    = po::collect_unrecognized(parsed.options, po::include_positional);
+            unrecognized_options.erase(unrecognized_options.begin());
+            po::parsed_options term_parsed = po::command_line_parser(unrecognized_options)
+                                                     .options(filter_term_options)
+                                                     .positional(positional_options)
+                                                     .allow_unregistered()
+                                                     .run();
+            po::store(term_parsed, parsed_command_line_options);
+            po::notify(parsed_command_line_options);
+
+            if (parsed_command_line_options.count("help")) {
+                std::cerr << "Extracts safe filter terms from a KQL query." << std::endl;
+                std::cerr << std::endl;
+                std::cerr << "Examples:" << std::endl;
+                std::cerr << "  " << m_program_name
+                          << R"( t --query "c:\"randomtestingerror\"")" << std::endl;
+                std::cerr << "  " << m_program_name
+                          << R"( t "c:\"randomtestingerror\"")" << std::endl;
+                std::cerr << std::endl;
+                std::cerr << filter_term_options << '\n';
+                return ParsingResult::InfoCommand;
+            }
+
+            if (m_query.empty()) {
+                throw std::invalid_argument("No query specified.");
             }
         }
     } catch (std::exception& e) {

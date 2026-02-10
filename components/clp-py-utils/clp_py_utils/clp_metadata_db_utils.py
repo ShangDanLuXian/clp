@@ -179,6 +179,22 @@ def fetch_existing_datasets(
     return {row["name"] for row in rows}
 
 
+def fetch_column_types(
+    db_cursor,
+    table_prefix: str,
+    dataset: str | None,
+) -> dict[str, set[int]]:
+    if dataset is None:
+        return {}
+    table_name = get_column_metadata_table_name(table_prefix, dataset)
+    db_cursor.execute(f"SELECT name, type FROM `{table_name}`")
+    rows = db_cursor.fetchall()
+    column_types: dict[str, set[int]] = {}
+    for row in rows:
+        column_types.setdefault(row["name"], set()).add(int(row["type"]))
+    return column_types
+
+
 def create_metadata_db_tables(db_cursor, table_prefix: str, dataset: str | None = None) -> None:
     """
     Creates the standard set of tables for CLP's metadata.
