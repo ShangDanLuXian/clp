@@ -20,7 +20,6 @@ import asyncio
 import contextlib
 import datetime
 import logging
-import os
 import sys
 from abc import ABC, abstractmethod
 from pathlib import Path
