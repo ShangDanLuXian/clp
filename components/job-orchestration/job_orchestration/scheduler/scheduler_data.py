@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from enum import auto, Enum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from job_orchestration.scheduler.compress.task_manager.task_manager import TaskManager
 from job_orchestration.scheduler.constants import (
@@ -35,6 +35,7 @@ class CompressionJob(BaseModel):
 
 
 class InternalJobState(Enum):
+    WAITING_FOR_FILTER_SCAN = auto()
     WAITING_FOR_REDUCER = auto()
     WAITING_FOR_DISPATCH = auto()
     RUNNING = auto()
@@ -81,6 +82,10 @@ class SearchJob(QueryJob):
     num_archives_to_search: int
     num_archives_searched: int
     remaining_archives_for_search: list[dict[str, Any]]
+    filter_scan_pending: bool = False
+    filter_scan_async_task_result: Any | None = None
+    filter_scan_unfiltered_ids: set[str] = Field(default_factory=set)
+    reducer_ready: bool = False
     reducer_acquisition_task: asyncio.Task | None = None
     reducer_handler_msg_queues: ReducerHandlerMessageQueues | None = None
 

@@ -324,6 +324,28 @@ def set_archives_filter_pack_id(
     )
 
 
+def fetch_filter_pack_paths(
+    db_cursor,
+    table_prefix: str,
+    dataset: str | None,
+    pack_ids: list[int],
+) -> dict[int, str]:
+    if len(pack_ids) == 0:
+        return {}
+    table_name = get_filter_packs_table_name(table_prefix, dataset)
+    placeholders = ", ".join(["%s"] * len(pack_ids))
+    db_cursor.execute(
+        f"""
+        SELECT id, storage_path
+        FROM `{table_name}`
+        WHERE id IN ({placeholders})
+        """,
+        pack_ids,
+    )
+    rows = db_cursor.fetchall()
+    return {int(row["id"]): row["storage_path"] for row in rows}
+
+
 def get_archives_table_name(table_prefix: str, dataset: str | None) -> str:
     return _get_table_name(table_prefix, ARCHIVES_TABLE_SUFFIX, dataset)
 
