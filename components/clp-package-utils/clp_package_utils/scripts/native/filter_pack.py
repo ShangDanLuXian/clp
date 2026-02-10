@@ -251,7 +251,6 @@ def main(argv):
     try:
         config_file_path = pathlib.Path(parsed_args.config)
         clp_config = load_config_file(config_file_path)
-        clp_config.validate_logs_input_config()
         clp_config.validate_logs_dir()
         clp_config.database.load_credentials_from_env()
     except Exception:
