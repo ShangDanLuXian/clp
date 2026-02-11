@@ -400,11 +400,6 @@ def insert_query_tasks_into_db(db_conn, job_id, archive_ids: list[str]) -> list[
     return task_ids
 
 
-def is_filter_scan_disabled() -> bool:
-    value = os.getenv("CLP_DISABLE_FILTER_SCAN", "").strip().lower()
-    return value in {"1", "true", "yes", "y"}
-
-
 @exception_default_value(default=[])
 def get_archives_for_search(
     db_conn,
@@ -454,15 +449,6 @@ def get_archives_for_search(
             logger.info(
                 "Filter scan skipped: dataset is None. timestamp_filter_ms=%.2f",
                 (t_db - t_start) * 1000.0,
-            )
-            return archives_for_search
-
-        if is_filter_scan_disabled():
-            logger.info(
-                "Filter scan disabled via CLP_DISABLE_FILTER_SCAN. "
-                "timestamp_filter_ms=%.2f archives=%s",
-                (t_db - t_start) * 1000.0,
-                len(archives_for_search),
             )
             return archives_for_search
 

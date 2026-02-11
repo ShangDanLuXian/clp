@@ -441,7 +441,6 @@ services:
         @queue:5672"
       CLP_DB_PASS: "${CLP_DB_PASS:?Please set a value.}"
       CLP_DB_USER: "${CLP_DB_USER:-clp-user}"
-      CLP_DISABLE_FILTER_SCAN: "${CLP_DISABLE_FILTER_SCAN:-}"
       CLP_LOGGING_LEVEL: "${CLP_QUERY_SCHEDULER_LOGGING_LEVEL:-INFO}"
       CLP_LOGS_DIR: "/var/log/query_scheduler"
       PYTHONPATH: "/opt/clp/lib/python3/site-packages"
