@@ -428,20 +428,25 @@ def get_archives_for_search(
         archives_for_search = list(cursor.fetchall())
 
         if not archives_for_search:
+            logger.info("Filter scan skipped: no archives matched timestamp filter.")
             return archives_for_search
 
         if not search_config.query_string:
+            logger.info("Filter scan skipped: empty query string.")
             return archives_for_search
 
         if dataset is None:
+            logger.info("Filter scan skipped: dataset is None.")
             return archives_for_search
 
         clp_home = os.getenv("CLP_HOME")
         if not clp_home:
+            logger.info("Filter scan skipped: CLP_HOME not set.")
             return archives_for_search
 
         clp_s_path = Path(clp_home) / "bin" / "clp-s"
         if not clp_s_path.exists():
+            logger.info("Filter scan skipped: clp-s not found at %s.", clp_s_path)
             return archives_for_search
 
         pack_ids = {
@@ -450,9 +455,17 @@ def get_archives_for_search(
             if row.get("filter_pack_id") is not None
         }
         if not pack_ids:
+            logger.info("Filter scan skipped: no filter_pack_id present for matched archives.")
             return archives_for_search
 
         pack_paths = fetch_filter_pack_paths(cursor, table_prefix, dataset, list(pack_ids))
+        logger.info(
+            "Filter scan: dataset=%s archives=%s packs=%s paths=%s",
+            dataset,
+            len(archives_for_search),
+            len(pack_ids),
+            len(pack_paths),
+        )
 
         passed_ids: set[str] = set()
         pack_groups: dict[int, list[str]] = {}
@@ -473,6 +486,11 @@ def get_archives_for_search(
                 continue
             pack_path = pack_paths.get(pack_id)
             if pack_path is None:
+                logger.info(
+                    "Filter scan skipped: missing pack path for pack_id=%s (archives=%s).",
+                    pack_id,
+                    len(archive_ids),
+                )
                 passed_ids.update(archive_ids)
                 continue
 
@@ -486,6 +504,12 @@ def get_archives_for_search(
                 "--query",
                 search_config.query_string,
             ]
+            logger.info(
+                "Filter scan pack_id=%s path=%s archives=%s",
+                pack_id,
+                pack_path,
+                len(archive_ids),
+            )
             try:
                 proc = subprocess.run(
                     cmd,
@@ -499,7 +523,7 @@ def get_archives_for_search(
                 continue
 
             if proc.returncode != 0:
-                logger.debug(
+                logger.info(
                     "clp-s filter scan failed for pack %s: %s",
                     pack_id,
                     proc.stderr,
@@ -510,7 +534,7 @@ def get_archives_for_search(
             try:
                 output = json.loads(proc.stdout.strip())
             except Exception:
-                logger.debug(
+                logger.info(
                     "Failed to parse clp-s filter scan output for pack %s: %s",
                     pack_id,
                     proc.stdout,
@@ -520,10 +544,23 @@ def get_archives_for_search(
 
             passed = output.get("passed")
             if not isinstance(passed, list):
+                logger.info(
+                    "Filter scan output missing passed list for pack %s: %s",
+                    pack_id,
+                    output,
+                )
                 passed_ids.update(archive_ids)
                 continue
 
             passed_ids.update(str(archive_id) for archive_id in passed)
+            logger.info(
+                "Filter scan result pack_id=%s supported=%s total=%s passed=%s skipped=%s",
+                pack_id,
+                output.get("supported"),
+                output.get("total"),
+                len(passed),
+                output.get("skipped"),
+            )
 
     return [
         archive for archive in archives_for_search if archive["archive_id"] in passed_ids
