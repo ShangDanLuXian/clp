@@ -14,7 +14,8 @@ from clp_py_utils.clp_config import (
 )
 from clp_py_utils.clp_metadata_db_utils import (
     get_archives_table_name,
-    get_filter_packs_table_name,
+    insert_filter_pack,
+    set_archives_filter_pack_id,
 )
 from clp_py_utils.filter_pack import build_filter_pack
 from clp_py_utils.s3_utils import s3_put
@@ -82,26 +83,21 @@ def _insert_pack_and_update_archives(
     pack_size: int,
     archive_ids: list[str],
 ):
-    filter_packs_table = get_filter_packs_table_name(table_prefix, dataset)
-    archives_table = get_archives_table_name(table_prefix, dataset)
-
-    db_cursor.execute(
-        f"""
-        INSERT INTO `{filter_packs_table}` (storage_path, size, num_filters)
-        VALUES (%s, %s, %s)
-        """,
-        (storage_path, pack_size, len(archive_ids)),
+    pack_id = insert_filter_pack(
+        db_cursor,
+        table_prefix,
+        dataset,
+        storage_path,
+        pack_size,
+        len(archive_ids),
     )
-    pack_id = db_cursor.lastrowid
-
-    placeholders = ", ".join(["%s"] * len(archive_ids))
-    db_cursor.execute(
-        f"""
-        UPDATE `{archives_table}`
-        SET filter_pack_id = %s
-        WHERE id IN ({placeholders}) AND filter_pack_id IS NULL
-        """,
-        [pack_id, *archive_ids],
+    set_archives_filter_pack_id(
+        db_cursor,
+        table_prefix,
+        dataset,
+        archive_ids,
+        pack_id,
+        only_if_null=True,
     )
     if db_cursor.rowcount != len(archive_ids):
         logger.warning(

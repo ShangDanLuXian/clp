@@ -1,7 +1,9 @@
 #include "CommandLineArguments.hpp"
 
+#include <cctype>
 #include <filesystem>
 #include <iostream>
+#include <sstream>
 #include <string_view>
 
 #include <boost/program_options.hpp>
@@ -164,11 +166,13 @@ CommandLineArguments::parse_arguments(int argc, char const** argv) {
                 std::cerr << "  c - compress" << std::endl;
                 std::cerr << "  x - decompress" << std::endl;
                 std::cerr << "  s - search" << std::endl;
+                std::cerr << "  f - filter-scan" << std::endl;
                 std::cerr << std::endl;
                 std::cerr << "Try "
                           << " c --help OR"
                           << " x --help OR"
-                          << " s --help for command-specific details." << std::endl;
+                          << " s --help OR"
+                          << " f --help for command-specific details." << std::endl;
 
                 po::options_description visible_options;
                 visible_options.add(general_options);
@@ -183,6 +187,7 @@ CommandLineArguments::parse_arguments(int argc, char const** argv) {
             case (char)Command::Compress:
             case (char)Command::Extract:
             case (char)Command::Search:
+            case (char)Command::FilterScan:
                 m_command = (Command)command_input;
                 break;
             default:
@@ -851,6 +856,96 @@ CommandLineArguments::parse_arguments(int argc, char const** argv) {
                         "The --count-by-time and --count options are mutually exclusive."
                 );
             }
+        } else if ((char)Command::FilterScan == command_input) {
+            std::string archives_csv;
+            po::options_description filter_scan_options("Filter scan options");
+            // clang-format off
+            filter_scan_options.add_options()(
+                    "pack-path",
+                    po::value<std::string>(&m_filter_pack_path)->value_name("PATH"),
+                    "Path to filter pack file"
+            )(
+                    "archives",
+                    po::value<std::string>(&archives_csv)->value_name("IDS"),
+                    "Comma-separated archive IDs"
+            )(
+                    "query,q",
+                    po::value<std::string>(&m_query),
+                    "Query to extract filter terms from"
+            );
+            // clang-format on
+
+            po::positional_options_description positional_options;
+            positional_options.add("pack-path", 1);
+            positional_options.add("archives", 1);
+            positional_options.add("query", 1);
+
+            std::vector<std::string> unrecognized_options
+                    = po::collect_unrecognized(parsed.options, po::include_positional);
+            unrecognized_options.erase(unrecognized_options.begin());
+            po::store(
+                    po::command_line_parser(unrecognized_options)
+                            .options(filter_scan_options)
+                            .positional(positional_options)
+                            .run(),
+                    parsed_command_line_options
+            );
+            po::notify(parsed_command_line_options);
+
+            if (parsed_command_line_options.count("help")) {
+                print_filter_scan_usage();
+                std::cerr << "Examples:" << std::endl;
+                std::cerr << "  # Filter scan a pack for query terms" << std::endl;
+                std::cerr << "  " << m_program_name
+                          << " f --pack-path pack.clpf --archives id1,id2 --query \"a: b\""
+                          << std::endl;
+                std::cerr << std::endl;
+
+                po::options_description visible_options;
+                visible_options.add(general_options);
+                visible_options.add(filter_scan_options);
+                std::cerr << visible_options << '\n';
+                return ParsingResult::InfoCommand;
+            }
+
+            if (m_filter_pack_path.empty()) {
+                throw std::invalid_argument("pack-path must be specified.");
+            }
+            if (archives_csv.empty()) {
+                throw std::invalid_argument("archives must be specified.");
+            }
+            if (m_query.empty()) {
+                throw std::invalid_argument("No query specified");
+            }
+
+            auto trim = [](std::string& value) {
+                size_t start = 0;
+                while (start < value.size()
+                       && std::isspace(static_cast<unsigned char>(value[start])))
+                {
+                    ++start;
+                }
+                size_t end = value.size();
+                while (end > start
+                       && std::isspace(static_cast<unsigned char>(value[end - 1])))
+                {
+                    --end;
+                }
+                value = value.substr(start, end - start);
+            };
+
+            std::stringstream csv_stream(archives_csv);
+            std::string token;
+            while (std::getline(csv_stream, token, ',')) {
+                trim(token);
+                if (!token.empty()) {
+                    m_filter_archive_ids.emplace_back(std::move(token));
+                }
+            }
+
+            if (m_filter_archive_ids.empty()) {
+                throw std::invalid_argument("archives must include at least one id.");
+            }
         }
     } catch (std::exception& e) {
         SPDLOG_ERROR("{}", e.what());
@@ -977,5 +1072,10 @@ void CommandLineArguments::print_search_usage() const {
               << " s [OPTIONS] ARCHIVES_DIR KQL_QUERY"
                  " [OUTPUT_HANDLER [OUTPUT_HANDLER_OPTIONS]]"
               << std::endl;
+}
+
+void CommandLineArguments::print_filter_scan_usage() const {
+    std::cerr << "Usage: " << m_program_name
+              << " f [OPTIONS] PACK_PATH ARCHIVE_IDS KQL_QUERY" << std::endl;
 }
 }  // namespace clp_s

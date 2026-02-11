@@ -115,7 +115,7 @@ def main(argv):
         logger.error(e)
         return -1
 
-    container_name = generate_container_name(str(JobType.COMPRESSION))
+    container_name = generate_container_name(str(JobType.FILTER_PACKING))
     container_clp_config, mounts = generate_container_config(clp_config, clp_home)
     generated_config_path_on_container, generated_config_path_on_host = dump_container_config(
         container_clp_config, clp_config, get_container_config_filename(container_name)

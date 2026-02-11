@@ -19,9 +19,11 @@ import argparse
 import asyncio
 import contextlib
 import datetime
+import json
 import logging
 import os
 import pathlib
+import subprocess
 import sys
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -39,6 +41,7 @@ from clp_py_utils.clp_config import (
 from clp_py_utils.clp_logging import get_logger, get_logging_formatter, set_logging_level
 from clp_py_utils.clp_metadata_db_utils import (
     fetch_existing_datasets,
+    fetch_filter_pack_paths,
     get_archives_table_name,
     get_files_table_name,
 )
@@ -404,7 +407,7 @@ def get_archives_for_search(
     archive_end_ts_lower_bound: int | None,
 ):
     dataset = search_config.dataset
-    query = f"""SELECT id as archive_id, end_timestamp
+    query = f"""SELECT id as archive_id, end_timestamp, filter_pack_id
             FROM {get_archives_table_name(table_prefix, dataset)}
             """
     filter_clauses = []
@@ -423,7 +426,108 @@ def get_archives_for_search(
     with contextlib.closing(db_conn.cursor(dictionary=True)) as cursor:
         cursor.execute(query)
         archives_for_search = list(cursor.fetchall())
-    return archives_for_search
+
+        if not archives_for_search:
+            return archives_for_search
+
+        if not search_config.query_string:
+            return archives_for_search
+
+        if dataset is None:
+            return archives_for_search
+
+        clp_home = os.getenv("CLP_HOME")
+        if not clp_home:
+            return archives_for_search
+
+        clp_s_path = Path(clp_home) / "bin" / "clp-s"
+        if not clp_s_path.exists():
+            return archives_for_search
+
+        pack_ids = {
+            int(row["filter_pack_id"])
+            for row in archives_for_search
+            if row.get("filter_pack_id") is not None
+        }
+        if not pack_ids:
+            return archives_for_search
+
+        pack_paths = fetch_filter_pack_paths(cursor, table_prefix, dataset, list(pack_ids))
+
+        passed_ids: set[str] = set()
+        pack_groups: dict[int, list[str]] = {}
+        for row in archives_for_search:
+            archive_id = row["archive_id"]
+            pack_id = row.get("filter_pack_id")
+            if pack_id is None:
+                passed_ids.add(archive_id)
+                continue
+            pack_id = int(pack_id)
+            if pack_id not in pack_paths:
+                passed_ids.add(archive_id)
+                continue
+            pack_groups.setdefault(pack_id, []).append(archive_id)
+
+        for pack_id, archive_ids in pack_groups.items():
+            if not archive_ids:
+                continue
+            pack_path = pack_paths.get(pack_id)
+            if pack_path is None:
+                passed_ids.update(archive_ids)
+                continue
+
+            cmd = [
+                str(clp_s_path),
+                "f",
+                "--pack-path",
+                pack_path,
+                "--archives",
+                ",".join(archive_ids),
+                "--query",
+                search_config.query_string,
+            ]
+            try:
+                proc = subprocess.run(
+                    cmd,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+            except Exception:
+                logger.exception("Failed to run clp-s filter scan for pack %s", pack_id)
+                passed_ids.update(archive_ids)
+                continue
+
+            if proc.returncode != 0:
+                logger.debug(
+                    "clp-s filter scan failed for pack %s: %s",
+                    pack_id,
+                    proc.stderr,
+                )
+                passed_ids.update(archive_ids)
+                continue
+
+            try:
+                output = json.loads(proc.stdout.strip())
+            except Exception:
+                logger.debug(
+                    "Failed to parse clp-s filter scan output for pack %s: %s",
+                    pack_id,
+                    proc.stdout,
+                )
+                passed_ids.update(archive_ids)
+                continue
+
+            passed = output.get("passed")
+            if not isinstance(passed, list):
+                passed_ids.update(archive_ids)
+                continue
+
+            passed_ids.update(str(archive_id) for archive_id in passed)
+
+    return [
+        archive for archive in archives_for_search if archive["archive_id"] in passed_ids
+    ]
 
 
 def get_archive_and_file_split_ids_for_ir_extraction(

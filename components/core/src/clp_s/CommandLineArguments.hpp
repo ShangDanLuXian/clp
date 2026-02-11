@@ -27,7 +27,8 @@ public:
     enum class Command : char {
         Compress = 'c',
         Extract = 'x',
-        Search = 's'
+        Search = 's',
+        FilterScan = 'f'
     };
 
     enum class OutputHandlerType : uint8_t {
@@ -85,6 +86,10 @@ public:
     std::string const& get_file_output_path() const { return m_file_output_path; }
 
     std::string const& get_query() const { return m_query; }
+    std::string const& get_filter_pack_path() const { return m_filter_pack_path; }
+    std::vector<std::string> const& get_filter_archive_ids() const {
+        return m_filter_archive_ids;
+    }
 
     std::optional<epochtime_t> get_search_begin_ts() const { return m_search_begin_ts; }
 
@@ -188,6 +193,7 @@ private:
     void print_decompression_usage() const;
 
     void print_search_usage() const;
+    void print_filter_scan_usage() const;
 
     // Variables
     std::string m_program_name;
@@ -217,6 +223,10 @@ private:
     // MongoDB configuration variables
     std::string m_mongodb_uri;
     std::string m_mongodb_collection;
+
+    // Filter scan variables
+    std::string m_filter_pack_path;
+    std::vector<std::string> m_filter_archive_ids;
     uint64_t m_batch_size{1000};
     uint64_t m_max_num_results{1000};
 

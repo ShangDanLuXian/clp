@@ -271,7 +271,7 @@ def _make_clp_s_command_and_env(
     ]
     # fmt: on
 
-    if clp_config.output.filter_type:
+    if clp_config.output.filter_type != "none":
         compression_cmd.append("--var-filter-type")
         compression_cmd.append(clp_config.output.filter_type)
         compression_cmd.append("--var-filter-fpr")
@@ -388,9 +388,11 @@ def run_clp(
         )
     elif StorageEngine.CLP_S == clp_storage_engine:
         archive_output_dir = archive_output_dir / dataset
-        filter_output_dir = clp_config.output.filter_output_dir
-        if filter_output_dir is None:
-            filter_output_dir = str(worker_config.filter_staging_directory / dataset)
+        filter_output_dir = None
+        if clp_config.output.filter_type != "none":
+            filter_output_dir = clp_config.output.filter_output_dir
+            if filter_output_dir is None:
+                filter_output_dir = str(worker_config.filter_staging_directory / dataset)
         compression_cmd, compression_env = _make_clp_s_command_and_env(
             clp_home=clp_home,
             archive_output_dir=archive_output_dir,
