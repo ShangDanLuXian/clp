@@ -27,8 +27,7 @@ public:
     enum class Command : char {
         Compress = 'c',
         Extract = 'x',
-        Search = 's',
-        ExtractFilterTerms = 't'
+        Search = 's'
     };
 
     enum class OutputHandlerType : uint8_t {
