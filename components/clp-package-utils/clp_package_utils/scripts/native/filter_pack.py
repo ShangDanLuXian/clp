@@ -7,6 +7,7 @@ from contextlib import closing
 
 from clp_py_utils.clp_config import (
     CLP_DEFAULT_CONFIG_FILE_RELATIVE_PATH,
+    CLP_DEFAULT_ARCHIVES_DIRECTORY_PATH,
     CLP_DEFAULT_DATASET_NAME,
     ClpConfig,
     StorageEngine,
@@ -116,6 +117,26 @@ def _build_pack_path_fs(
     return archive_output_dir / "_filter_packs" / dataset / f"{pack_id}.clpf"
 
 
+def _resolve_pack_storage_path_fs(
+    archive_output_dir: pathlib.Path, pack_path: pathlib.Path
+) -> str:
+    """
+    Store a container-visible path for filter packs so query-side containers can access them.
+    """
+    try:
+        rel_path = pack_path.relative_to(archive_output_dir)
+    except ValueError:
+        logger.warning(
+            "Filter pack path %s is not under archive output dir %s; storing host path.",
+            pack_path,
+            archive_output_dir,
+        )
+        return str(pack_path)
+
+    container_archive_dir = pathlib.Path("/") / CLP_DEFAULT_ARCHIVES_DIRECTORY_PATH
+    return str(container_archive_dir / rel_path)
+
+
 def _build_pack_paths_s3(
     key_prefix: str, dataset: str, pack_id: str
 ) -> tuple[str, str]:
@@ -175,12 +196,11 @@ def pack_filters_for_dataset(
                 continue
 
             if clp_config.archive_output.storage.type == StorageType.FS:
-                pack_path = _build_pack_path_fs(
-                    clp_config.archive_output.get_directory(), dataset, pack_id
-                )
+                archive_output_dir = clp_config.archive_output.get_directory()
+                pack_path = _build_pack_path_fs(archive_output_dir, dataset, pack_id)
                 pack_path.parent.mkdir(parents=True, exist_ok=True)
                 result = build_filter_pack(pack_path, group)
-                storage_path = str(pack_path)
+                storage_path = _resolve_pack_storage_path_fs(archive_output_dir, pack_path)
             else:
                 s3_config = clp_config.archive_output.storage.s3_config
                 local_tmp_dir = pathlib.Path(clp_config.tmp_directory) / "filter-packs" / dataset
