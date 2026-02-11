@@ -25,6 +25,7 @@ import os
 import pathlib
 import subprocess
 import sys
+import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
@@ -399,6 +400,11 @@ def insert_query_tasks_into_db(db_conn, job_id, archive_ids: list[str]) -> list[
     return task_ids
 
 
+def is_filter_scan_disabled() -> bool:
+    value = os.getenv("CLP_DISABLE_FILTER_SCAN", "").strip().lower()
+    return value in {"1", "true", "yes", "y"}
+
+
 @exception_default_value(default=[])
 def get_archives_for_search(
     db_conn,
@@ -407,6 +413,7 @@ def get_archives_for_search(
     archive_end_ts_lower_bound: int | None,
 ):
     dataset = search_config.dataset
+    t_start = time.perf_counter()
     query = f"""SELECT id as archive_id, end_timestamp, filter_pack_id
             FROM {get_archives_table_name(table_prefix, dataset)}
             """
@@ -426,17 +433,37 @@ def get_archives_for_search(
     with contextlib.closing(db_conn.cursor(dictionary=True)) as cursor:
         cursor.execute(query)
         archives_for_search = list(cursor.fetchall())
+        t_db = time.perf_counter()
 
         if not archives_for_search:
-            logger.info("Filter scan skipped: no archives matched timestamp filter.")
+            logger.info(
+                "Filter scan skipped: no archives matched timestamp filter. "
+                "timestamp_filter_ms=%.2f",
+                (t_db - t_start) * 1000.0,
+            )
             return archives_for_search
 
         if not search_config.query_string:
-            logger.info("Filter scan skipped: empty query string.")
+            logger.info(
+                "Filter scan skipped: empty query string. timestamp_filter_ms=%.2f",
+                (t_db - t_start) * 1000.0,
+            )
             return archives_for_search
 
         if dataset is None:
-            logger.info("Filter scan skipped: dataset is None.")
+            logger.info(
+                "Filter scan skipped: dataset is None. timestamp_filter_ms=%.2f",
+                (t_db - t_start) * 1000.0,
+            )
+            return archives_for_search
+
+        if is_filter_scan_disabled():
+            logger.info(
+                "Filter scan disabled via CLP_DISABLE_FILTER_SCAN. "
+                "timestamp_filter_ms=%.2f archives=%s",
+                (t_db - t_start) * 1000.0,
+                len(archives_for_search),
+            )
             return archives_for_search
 
         clp_home = os.getenv("CLP_HOME")
@@ -458,6 +485,7 @@ def get_archives_for_search(
             logger.info("Filter scan skipped: no filter_pack_id present for matched archives.")
             return archives_for_search
 
+        t_filter_start = time.perf_counter()
         pack_paths = fetch_filter_pack_paths(cursor, table_prefix, dataset, list(pack_ids))
         logger.info(
             "Filter scan: dataset=%s archives=%s packs=%s paths=%s",
@@ -561,6 +589,17 @@ def get_archives_for_search(
                 len(passed),
                 output.get("skipped"),
             )
+
+        t_filter_end = time.perf_counter()
+        logger.info(
+            "Filter scan summary: archives_in=%s archives_out=%s "
+            "timestamp_filter_ms=%.2f filter_scan_ms=%.2f total_ms=%.2f",
+            len(archives_for_search),
+            len(passed_ids),
+            (t_db - t_start) * 1000.0,
+            (t_filter_end - t_filter_start) * 1000.0,
+            (t_filter_end - t_start) * 1000.0,
+        )
 
     return [
         archive for archive in archives_for_search if archive["archive_id"] in passed_ids
