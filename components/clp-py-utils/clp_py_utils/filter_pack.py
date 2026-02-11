@@ -149,28 +149,12 @@ def read_filter_pack_footer(file_path: Path) -> FilterPackFooter:
     return _decode_footer(footer_bytes)
 
 
-def read_filter_pack_footer_from_bytes(pack_bytes: bytes) -> FilterPackFooter:
-    if len(pack_bytes) < PACK_FOOTER_SIZE:
-        raise ValueError("pack data is too short for footer")
-    return _decode_footer(pack_bytes[-PACK_FOOTER_SIZE:])
-
-
 def read_filter_pack_index(file_path: Path) -> list[FilterPackIndexEntry]:
     footer = read_filter_pack_footer(file_path)
     with open(file_path, "rb") as in_file:
         in_file.seek(footer.index_offset)
         index_bytes = in_file.read(footer.index_size)
     return _decode_index(index_bytes)
-
-
-def read_filter_pack_index_from_bytes(
-    pack_bytes: bytes, footer: FilterPackFooter
-) -> list[FilterPackIndexEntry]:
-    start = footer.index_offset
-    end = footer.index_offset + footer.index_size
-    if start < 0 or end > len(pack_bytes):
-        raise ValueError("index offsets are out of range")
-    return _decode_index(pack_bytes[start:end])
 
 
 def read_filter_pack_entry(

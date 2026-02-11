@@ -39,7 +39,6 @@ from clp_py_utils.clp_config import (
 from clp_py_utils.clp_logging import get_logger, get_logging_formatter, set_logging_level
 from clp_py_utils.clp_metadata_db_utils import (
     fetch_existing_datasets,
-    fetch_filter_pack_paths,
     get_archives_table_name,
     get_files_table_name,
 )
@@ -49,7 +48,6 @@ from clp_py_utils.sql_adapter import SqlAdapter
 from pydantic import ValidationError
 
 from job_orchestration.executor.query.extract_stream_task import extract_stream
-from job_orchestration.executor.query.filter_scan_task import filter_scan
 from job_orchestration.executor.query.fs_search_task import search
 from job_orchestration.garbage_collector.constants import MIN_TO_SECONDS, SECOND_TO_MILLISECOND
 from job_orchestration.scheduler.constants import (
@@ -93,64 +91,6 @@ active_file_split_ir_extractions: dict[str, list[str]] = {}
 active_archive_json_extractions: dict[str, list[str]] = {}
 
 reducer_connection_queue: asyncio.Queue | None = None
-
-
-_UNSAFE_QUERY_CHARS = set("*?()[]{}:<>!=|&")
-
-
-def extract_conservative_filter_terms(query_string: str) -> list[str] | None:
-    query = query_string.strip()
-    if not query:
-        return []
-
-    if any(ch in query for ch in _UNSAFE_QUERY_CHARS):
-        return None
-
-    tokens: list[str] = []
-    i = 0
-    while i < len(query):
-        if query[i].isspace():
-            i += 1
-            continue
-        if query[i] == '"':
-            i += 1
-            token_chars: list[str] = []
-            escaped = False
-            while i < len(query):
-                ch = query[i]
-                if escaped:
-                    token_chars.append(ch)
-                    escaped = False
-                elif ch == "\\":
-                    escaped = True
-                elif ch == '"':
-                    break
-                else:
-                    token_chars.append(ch)
-                i += 1
-            if i >= len(query) or query[i] != '"':
-                return None
-            token = "".join(token_chars)
-            if token:
-                tokens.append(token)
-            i += 1
-            continue
-
-        start = i
-        while i < len(query) and not query[i].isspace():
-            i += 1
-        token = query[start:i]
-        token_lower = token.lower()
-        if token_lower == "and":
-            continue
-        if token_lower in {"or", "not"}:
-            return None
-        if any(ch in token for ch in _UNSAFE_QUERY_CHARS):
-            return None
-        if token:
-            tokens.append(token)
-
-    return tokens
 
 
 class StreamExtractionHandle(ABC):
@@ -282,15 +222,6 @@ def cancel_job_except_reducer(job: SearchJob):
         job.current_sub_job_async_task_result.revoke(terminate=True)
         try:
             job.current_sub_job_async_task_result.get()
-        except Exception:
-            pass
-    elif (
-        InternalJobState.WAITING_FOR_FILTER_SCAN == job.state
-        and job.filter_scan_async_task_result is not None
-    ):
-        job.filter_scan_async_task_result.revoke(terminate=True)
-        try:
-            job.filter_scan_async_task_result.get()
         except Exception:
             pass
     elif InternalJobState.WAITING_FOR_REDUCER == job.state:
@@ -473,7 +404,7 @@ def get_archives_for_search(
     archive_end_ts_lower_bound: int | None,
 ):
     dataset = search_config.dataset
-    query = f"""SELECT id as archive_id, end_timestamp, filter_pack_id
+    query = f"""SELECT id as archive_id, end_timestamp
             FROM {get_archives_table_name(table_prefix, dataset)}
             """
     filter_clauses = []
@@ -603,21 +534,6 @@ def get_task_group_for_job(
     raise NotImplementedError(error_msg)
 
 
-def _group_archives_by_filter_pack(
-    archives_for_search: list[dict[str, Any]],
-) -> tuple[dict[int, list[str]], set[str]]:
-    pack_groups: dict[int, list[str]] = {}
-    unfiltered: set[str] = set()
-    for archive in archives_for_search:
-        archive_id = archive["archive_id"]
-        pack_id = archive.get("filter_pack_id")
-        if pack_id is None:
-            unfiltered.add(archive_id)
-            continue
-        pack_groups.setdefault(int(pack_id), []).append(archive_id)
-    return pack_groups, unfiltered
-
-
 def dispatch_query_job(
     db_conn,
     job: QueryJob,
@@ -680,11 +596,7 @@ async def acquire_reducer_for_job(job: SearchJob):
     job.reducer_handler_msg_queues = reducer_handler_msg_queues
     job.search_config.aggregation_config.reducer_host = reducer_host
     job.search_config.aggregation_config.reducer_port = reducer_port
-    job.reducer_ready = True
-    if job.filter_scan_pending:
-        job.state = InternalJobState.WAITING_FOR_FILTER_SCAN
-    else:
-        job.state = InternalJobState.WAITING_FOR_DISPATCH
+    job.state = InternalJobState.WAITING_FOR_DISPATCH
     job.reducer_acquisition_task = None
 
     logger.info(f"Got reducer for job {job.id} at {reducer_host}:{reducer_port}")
@@ -800,72 +712,6 @@ def handle_pending_query_jobs(
                     num_archives_searched=0,
                     remaining_archives_for_search=archives_for_search,
                 )
-
-                filter_terms = extract_conservative_filter_terms(search_config.query_string)
-                if filter_terms is None:
-                    logger.debug("Skipping filter scan for job %s due to complex query.", job_id)
-                elif len(filter_terms) == 0:
-                    logger.debug("Skipping filter scan for job %s due to no terms.", job_id)
-                should_filter = filter_terms is not None and len(filter_terms) > 0
-                if should_filter:
-                    pack_groups, unfiltered_ids = _group_archives_by_filter_pack(
-                        archives_for_search
-                    )
-                else:
-                    pack_groups, unfiltered_ids = {}, set()
-
-                filter_scan_tasks = []
-                if should_filter and pack_groups:
-                    pack_paths = fetch_filter_pack_paths(
-                        db_cursor,
-                        table_prefix,
-                        dataset,
-                        list(pack_groups.keys()),
-                    )
-                    for pack_id, pack_archive_ids in pack_groups.items():
-                        pack_path = pack_paths.get(pack_id)
-                        if pack_path is None:
-                            unfiltered_ids.update(pack_archive_ids)
-                            continue
-                        filter_scan_tasks.append(
-                            filter_scan.s(
-                                job_id=job_id,
-                                pack_id=pack_id,
-                                pack_storage_path=pack_path,
-                                archive_ids=pack_archive_ids,
-                                filter_terms=filter_terms,
-                                ignore_case=search_config.ignore_case,
-                            )
-                        )
-
-                if filter_scan_tasks:
-                    new_search_job.filter_scan_pending = True
-                    new_search_job.filter_scan_unfiltered_ids = unfiltered_ids
-                    new_search_job.filter_scan_async_task_result = celery.group(
-                        filter_scan_tasks
-                    ).apply_async()
-                    new_search_job.state = InternalJobState.WAITING_FOR_FILTER_SCAN
-                    if search_config.aggregation_config is not None:
-                        new_search_job.search_config.aggregation_config.job_id = int(job_id)
-                        new_search_job.state = InternalJobState.WAITING_FOR_FILTER_SCAN
-                        new_search_job.reducer_acquisition_task = asyncio.create_task(
-                            acquire_reducer_for_job(new_search_job)
-                        )
-                        reducer_acquisition_tasks.append(new_search_job.reducer_acquisition_task)
-
-                    start_time = datetime.datetime.now()
-                    new_search_job.start_time = start_time
-                    set_job_or_task_status(
-                        db_conn,
-                        QUERY_JOBS_TABLE_NAME,
-                        job_id,
-                        QueryJobStatus.RUNNING,
-                        QueryJobStatus.PENDING,
-                        start_time=start_time,
-                        num_tasks=0,
-                    )
-                    active_jobs[job_id] = new_search_job
-                    continue
 
                 if search_config.aggregation_config is not None:
                     new_search_job.search_config.aggregation_config.job_id = int(job_id)
@@ -1127,69 +973,6 @@ async def handle_finished_search_job(
     del active_jobs[job_id]
 
 
-async def handle_finished_filter_scan_job(
-    db_conn,
-    job: SearchJob,
-    task_results: Any | None,
-    fallback_to_all: bool,
-) -> None:
-    global active_jobs
-
-    allowed_ids = set(job.filter_scan_unfiltered_ids)
-    if fallback_to_all:
-        allowed_ids.update(archive["archive_id"] for archive in job.remaining_archives_for_search)
-    else:
-        for result in task_results or []:
-            if isinstance(result, list):
-                allowed_ids.update(result)
-
-    job.filter_scan_pending = False
-    job.filter_scan_async_task_result = None
-    job.filter_scan_unfiltered_ids = set()
-
-    job.remaining_archives_for_search = [
-        archive
-        for archive in job.remaining_archives_for_search
-        if archive["archive_id"] in allowed_ids
-    ]
-    job.num_archives_to_search = len(job.remaining_archives_for_search)
-
-    if job.num_archives_to_search == 0:
-        if set_job_or_task_status(
-            db_conn,
-            QUERY_JOBS_TABLE_NAME,
-            job.id,
-            QueryJobStatus.SUCCEEDED,
-            QueryJobStatus.RUNNING,
-            num_tasks_completed=0,
-            duration=(datetime.datetime.now() - job.start_time).total_seconds(),
-        ):
-            logger.info(f"No archives after filter scan, completed job {job.id}.")
-        del active_jobs[job.id]
-        return
-
-    set_job_or_task_status(
-        db_conn,
-        QUERY_JOBS_TABLE_NAME,
-        job.id,
-        QueryJobStatus.RUNNING,
-        QueryJobStatus.RUNNING,
-        num_tasks=job.num_archives_to_search,
-    )
-
-    if job.search_config.aggregation_config is not None:
-        if job.reducer_ready:
-            job.state = InternalJobState.WAITING_FOR_DISPATCH
-        else:
-            job.state = InternalJobState.WAITING_FOR_REDUCER
-            if job.reducer_acquisition_task is None:
-                job.reducer_acquisition_task = asyncio.create_task(
-                    acquire_reducer_for_job(job)
-                )
-    else:
-        job.state = InternalJobState.WAITING_FOR_DISPATCH
-
-
 async def handle_finished_stream_extraction_job(
     db_conn, job: QueryJob, task_results: list[Any]
 ) -> None:
@@ -1264,36 +1047,9 @@ async def check_job_status_and_update_db(db_conn_pool, results_cache_uri):
 
     with contextlib.closing(db_conn_pool.connect()) as db_conn:
         for job_id in [
-            id
-            for id, job in active_jobs.items()
-            if job.state in (InternalJobState.RUNNING, InternalJobState.WAITING_FOR_FILTER_SCAN)
+            id for id, job in active_jobs.items() if InternalJobState.RUNNING == job.state
         ]:
             job = active_jobs[job_id]
-            if InternalJobState.WAITING_FOR_FILTER_SCAN == job.state:
-                search_job: SearchJob = job
-                if search_job.filter_scan_async_task_result is None:
-                    continue
-                fallback_to_all = False
-                try:
-                    returned_results = try_getting_task_result(
-                        search_job.filter_scan_async_task_result
-                    )
-                except Exception:
-                    logger.exception("Filter scan failed for job %s, skipping filters.", job_id)
-                    fallback_to_all = True
-                    returned_results = []
-
-                if returned_results is None:
-                    continue
-
-                await handle_finished_filter_scan_job(
-                    db_conn,
-                    search_job,
-                    returned_results,
-                    fallback_to_all=fallback_to_all,
-                )
-                continue
-
             try:
                 returned_results = try_getting_task_result(job.current_sub_job_async_task_result)
             except Exception as e:
