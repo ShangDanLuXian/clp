@@ -584,6 +584,7 @@ void collect_filter_terms(
         return;
     }
 
+    value = clp::string_utils::unescape_string(value);
     result.terms.emplace_back(std::move(value));
 }
 
@@ -612,12 +613,17 @@ auto run_filter_scan(CommandLineArguments const& command_line_arguments) -> int 
     collect_filter_terms(expr, false, term_result);
 
     std::vector<std::string> unique_terms;
+    std::vector<std::string> unique_terms_lower;
     if (term_result.supported) {
         std::unordered_set<std::string> seen;
         for (auto const& term : term_result.terms) {
             if (seen.insert(term).second) {
                 unique_terms.emplace_back(term);
             }
+        }
+        unique_terms_lower = unique_terms;
+        for (auto& term : unique_terms_lower) {
+            clp::string_utils::to_lower(term);
         }
     }
 
@@ -691,13 +697,7 @@ auto run_filter_scan(CommandLineArguments const& command_line_arguments) -> int 
         }
 
         bool matches = true;
-        std::vector<std::string> terms_to_check = unique_terms;
-        if (config.normalize) {
-            for (auto& term : terms_to_check) {
-                clp::string_utils::to_lower(term);
-            }
-        }
-
+        auto const& terms_to_check = config.normalize ? unique_terms_lower : unique_terms;
         for (auto const& term : terms_to_check) {
             if (!filter.possibly_contains(term)) {
                 matches = false;
