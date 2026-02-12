@@ -5,11 +5,13 @@ from job_orchestration.scheduler.constants import SchedulerType
 imports = (
     "job_orchestration.executor.query.fs_search_task",
     "job_orchestration.executor.query.extract_stream_task",
+    "job_orchestration.executor.query.filter_scan_task",
 )
 
 task_routes = {
     "job_orchestration.executor.query.fs_search_task.search": SchedulerType.QUERY,
     "job_orchestration.executor.query.extract_stream_task.extract_stream": SchedulerType.QUERY,
+    "job_orchestration.executor.query.filter_scan_task.filter_scan": SchedulerType.QUERY,
 }
 task_create_missing_queues = True
 

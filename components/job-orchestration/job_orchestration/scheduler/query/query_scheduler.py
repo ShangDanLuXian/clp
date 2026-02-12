@@ -19,11 +19,9 @@ import argparse
 import asyncio
 import contextlib
 import datetime
-import json
 import logging
 import os
 import pathlib
-import subprocess
 import sys
 import time
 from abc import ABC, abstractmethod
@@ -52,6 +50,7 @@ from clp_py_utils.sql_adapter import SqlAdapter
 from pydantic import ValidationError
 
 from job_orchestration.executor.query.extract_stream_task import extract_stream
+from job_orchestration.executor.query.filter_scan_task import filter_scan
 from job_orchestration.executor.query.fs_search_task import search
 from job_orchestration.garbage_collector.constants import MIN_TO_SECONDS, SECOND_TO_MILLISECOND
 from job_orchestration.scheduler.constants import (
@@ -84,6 +83,8 @@ from job_orchestration.scheduler.utils import kill_hanging_jobs
 
 # Setup logging
 logger = get_logger("search-job-handler")
+
+FILTER_SCAN_TIMEOUT_SECONDS = 300
 
 # Dictionary of active jobs indexed by job id
 active_jobs: dict[str, QueryJob] = {}
@@ -452,16 +453,6 @@ def get_archives_for_search(
             )
             return archives_for_search
 
-        clp_home = os.getenv("CLP_HOME")
-        if not clp_home:
-            logger.info("Filter scan skipped: CLP_HOME not set.")
-            return archives_for_search
-
-        clp_s_path = Path(clp_home) / "bin" / "clp-s"
-        if not clp_s_path.exists():
-            logger.info("Filter scan skipped: clp-s not found at %s.", clp_s_path)
-            return archives_for_search
-
         pack_ids = {
             int(row["filter_pack_id"])
             for row in archives_for_search
@@ -508,16 +499,6 @@ def get_archives_for_search(
                 passed_ids.update(archive_ids)
                 continue
 
-            cmd = [
-                str(clp_s_path),
-                "f",
-                "--pack-path",
-                pack_path,
-                "--archives",
-                ",".join(archive_ids),
-                "--query",
-                search_config.query_string,
-            ]
             logger.info(
                 "Filter scan pack_id=%s path=%s archives=%s",
                 pack_id,
@@ -525,43 +506,30 @@ def get_archives_for_search(
                 len(archive_ids),
             )
             try:
-                proc = subprocess.run(
-                    cmd,
-                    check=False,
-                    capture_output=True,
-                    text=True,
+                async_result = filter_scan.apply_async(
+                    kwargs={
+                        "pack_path": pack_path,
+                        "archive_ids": archive_ids,
+                        "query": search_config.query_string,
+                    }
                 )
+                result = async_result.get(timeout=FILTER_SCAN_TIMEOUT_SECONDS)
             except Exception:
-                logger.exception("Failed to run clp-s filter scan for pack %s", pack_id)
+                logger.exception("Filter scan task failed for pack %s", pack_id)
                 passed_ids.update(archive_ids)
                 continue
 
-            if proc.returncode != 0:
-                logger.info(
-                    "clp-s filter scan failed for pack %s: %s",
-                    pack_id,
-                    proc.stderr,
-                )
+            if not isinstance(result, dict) or not result.get("ok"):
+                logger.info("Filter scan task failed for pack %s: %s", pack_id, result)
                 passed_ids.update(archive_ids)
                 continue
 
-            try:
-                output = json.loads(proc.stdout.strip())
-            except Exception:
-                logger.info(
-                    "Failed to parse clp-s filter scan output for pack %s: %s",
-                    pack_id,
-                    proc.stdout,
-                )
-                passed_ids.update(archive_ids)
-                continue
-
-            passed = output.get("passed")
+            passed = result.get("passed")
             if not isinstance(passed, list):
                 logger.info(
                     "Filter scan output missing passed list for pack %s: %s",
                     pack_id,
-                    output,
+                    result,
                 )
                 passed_ids.update(archive_ids)
                 continue
@@ -570,10 +538,10 @@ def get_archives_for_search(
             logger.info(
                 "Filter scan result pack_id=%s supported=%s total=%s passed=%s skipped=%s",
                 pack_id,
-                output.get("supported"),
-                output.get("total"),
+                result.get("supported"),
+                result.get("total"),
                 len(passed),
-                output.get("skipped"),
+                result.get("skipped"),
             )
 
         t_filter_end = time.perf_counter()
