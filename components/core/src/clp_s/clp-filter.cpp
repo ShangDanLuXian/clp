@@ -727,29 +727,53 @@ auto run_filter_pack(
     return 0;
 }
 
+void trim_in_place(std::string& value) {
+    size_t start = 0;
+    while (start < value.size() && std::isspace(static_cast<unsigned char>(value[start]))) {
+        ++start;
+    }
+    size_t end = value.size();
+    while (end > start && std::isspace(static_cast<unsigned char>(value[end - 1]))) {
+        --end;
+    }
+    value = value.substr(start, end - start);
+}
+
 auto split_archives(std::string const& csv) -> std::vector<std::string> {
-    auto trim = [](std::string& value) {
-        size_t start = 0;
-        while (start < value.size() && std::isspace(static_cast<unsigned char>(value[start]))) {
-            ++start;
-        }
-        size_t end = value.size();
-        while (end > start && std::isspace(static_cast<unsigned char>(value[end - 1]))) {
-            --end;
-        }
-        value = value.substr(start, end - start);
-    };
 
     std::vector<std::string> results;
     std::stringstream csv_stream(csv);
     std::string token;
     while (std::getline(csv_stream, token, ',')) {
-        trim(token);
+        trim_in_place(token);
         if (!token.empty()) {
             results.emplace_back(std::move(token));
         }
     }
     return results;
+}
+
+auto read_archives_file(std::string const& path, std::vector<std::string>& out_ids, std::string& error)
+        -> bool {
+    std::ifstream input(path);
+    if (!input.is_open()) {
+        error = "failed to open archives file";
+        return false;
+    }
+
+    std::string line;
+    while (std::getline(input, line)) {
+        trim_in_place(line);
+        if (!line.empty()) {
+            out_ids.emplace_back(std::move(line));
+        }
+    }
+
+    if (!input.eof()) {
+        error = "failed while reading archives file";
+        return false;
+    }
+    return true;
 }
 }  // namespace
 
@@ -787,6 +811,7 @@ int main(int argc, char const* argv[]) {
         if (command == "scan") {
             std::string pack_path;
             std::string archives_csv;
+            std::string archives_file;
             std::string query;
             std::string output_json_path;
 
@@ -798,6 +823,8 @@ int main(int argc, char const* argv[]) {
                      "Path to filter pack file")
                     ("archives", po::value<std::string>(&archives_csv)->value_name("IDS"),
                      "Comma-separated archive IDs")
+                    ("archives-file", po::value<std::string>(&archives_file)->value_name("PATH"),
+                     "File containing archive IDs (one per line)")
                     ("query,q", po::value<std::string>(&query),
                      "Query to extract filter terms from")
                     ("output-json", po::value<std::string>(&output_json_path)->value_name("PATH"),
@@ -822,7 +849,8 @@ int main(int argc, char const* argv[]) {
             po::notify(vm);
 
             if (vm.count("help")) {
-                std::cerr << "Usage: clp-filter scan --pack-path <PATH> --archives <ID1,ID2> "
+                std::cerr << "Usage: clp-filter scan --pack-path <PATH> "
+                             "--archives <ID1,ID2> | --archives-file <PATH> "
                              "--query <Q> --output-json <PATH>"
                           << std::endl
                           << std::endl;
@@ -833,9 +861,6 @@ int main(int argc, char const* argv[]) {
             if (pack_path.empty()) {
                 throw std::invalid_argument("pack-path must be specified.");
             }
-            if (archives_csv.empty()) {
-                throw std::invalid_argument("archives must be specified.");
-            }
             if (query.empty()) {
                 throw std::invalid_argument("No query specified.");
             }
@@ -843,7 +868,23 @@ int main(int argc, char const* argv[]) {
                 throw std::invalid_argument("output-json must be specified.");
             }
 
-            auto archive_ids = split_archives(archives_csv);
+            bool has_csv = !archives_csv.empty();
+            bool has_file = !archives_file.empty();
+            if (has_csv == has_file) {
+                throw std::invalid_argument(
+                        "Exactly one of archives or archives-file must be specified."
+                );
+            }
+
+            std::vector<std::string> archive_ids;
+            if (has_file) {
+                std::string error;
+                if (!read_archives_file(archives_file, archive_ids, error)) {
+                    throw std::invalid_argument("Failed to read archives-file: " + error);
+                }
+            } else {
+                archive_ids = split_archives(archives_csv);
+            }
             if (archive_ids.empty()) {
                 throw std::invalid_argument("archives must include at least one id.");
             }

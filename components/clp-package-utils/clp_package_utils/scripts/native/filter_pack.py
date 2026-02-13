@@ -7,6 +7,7 @@ import sys
 import tempfile
 import uuid
 from contextlib import closing
+from typing import Iterable
 
 from clp_py_utils.clp_config import (
     CLP_DEFAULT_CONFIG_FILE_RELATIVE_PATH,
@@ -30,51 +31,99 @@ from clp_package_utils.scripts.native.utils import validate_dataset_exists
 logger = logging.getLogger(__name__)
 
 FILTER_SUFFIX = ".var.dict.filter"
+FILTER_DB_BATCH_SIZE = 1000
 
 
-def _iter_archives_to_pack(db_cursor, table_prefix: str, dataset: str):
+def _iter_filter_files(
+    staging_dir: pathlib.Path,
+):
+    if not staging_dir.exists():
+        return
+
+    for path in staging_dir.rglob(f"*{FILTER_SUFFIX}"):
+        if not path.is_file():
+            continue
+        archive_id = path.name[: -len(FILTER_SUFFIX)]
+        if not archive_id:
+            continue
+        yield archive_id, path
+
+
+def _fetch_archive_pack_state(
+    db_cursor, table_prefix: str, dataset: str, archive_ids: list[str]
+) -> dict[str, int | None]:
+    if not archive_ids:
+        return {}
+
     archives_table = get_archives_table_name(table_prefix, dataset)
+    placeholders = ",".join(["%s"] * len(archive_ids))
     query = f"""
-        SELECT id
+        SELECT id, filter_pack_id
         FROM `{archives_table}`
-        WHERE filter_pack_id IS NULL
-        ORDER BY begin_timestamp ASC, end_timestamp ASC, pagination_id ASC
+        WHERE id IN ({placeholders})
     """
-    db_cursor.execute(query)
-    for row in db_cursor.fetchall():
-        yield row["id"]
+    db_cursor.execute(query, archive_ids)
+    return {row["id"]: row["filter_pack_id"] for row in db_cursor.fetchall()}
 
 
-def _collect_filters(
-    staging_dir: pathlib.Path, archive_ids: list[str]
-) -> list[tuple[str, pathlib.Path]]:
-    filters: list[tuple[str, pathlib.Path]] = []
-    for archive_id in archive_ids:
-        filter_path = staging_dir / f"{archive_id}{FILTER_SUFFIX}"
-        if filter_path.exists():
-            filters.append((archive_id, filter_path))
-        else:
-            logger.debug("Missing filter for archive %s", archive_id)
-    return filters
+def _iter_unpacked_filters(
+    db_cursor,
+    table_prefix: str,
+    dataset: str,
+    staging_dir: pathlib.Path,
+    stats: dict[str, int],
+) -> Iterable[tuple[str, pathlib.Path]]:
+    batch: list[str] = []
+    batch_paths: dict[str, pathlib.Path] = {}
+
+    def flush_batch() -> list[tuple[str, pathlib.Path]]:
+        if not batch:
+            return []
+        pack_state = _fetch_archive_pack_state(db_cursor, table_prefix, dataset, batch)
+        results: list[tuple[str, pathlib.Path]] = []
+        for archive_id in batch:
+            filter_pack_id = pack_state.get(archive_id, "missing")
+            if filter_pack_id == "missing":
+                stats["filters_missing_db"] += 1
+                continue
+            if filter_pack_id is None:
+                stats["filters_unpacked"] += 1
+                results.append((archive_id, batch_paths[archive_id]))
+            else:
+                stats["filters_already_packed"] += 1
+        return results
+
+    for archive_id, path in _iter_filter_files(staging_dir):
+        stats["filters_total"] += 1
+        batch.append(archive_id)
+        batch_paths[archive_id] = path
+        if len(batch) >= FILTER_DB_BATCH_SIZE:
+            unpacked = flush_batch()
+            for entry in unpacked:
+                yield entry
+            batch = []
+            batch_paths = {}
+
+    unpacked = flush_batch()
+    for entry in unpacked:
+        yield entry
 
 
-def _split_by_size(
-    filters: list[tuple[str, pathlib.Path]], max_pack_size: int
-) -> list[list[tuple[str, pathlib.Path]]]:
-    groups: list[list[tuple[str, pathlib.Path]]] = []
+def _iter_groups_by_size(
+    filters_iter: Iterable[tuple[str, pathlib.Path]], max_pack_size: int
+) -> Iterable[list[tuple[str, pathlib.Path]]]:
     current: list[tuple[str, pathlib.Path]] = []
     current_size = 0
-    for archive_id, path in filters:
+    for archive_id, path in filters_iter:
         size = path.stat().st_size
         if current and current_size + size > max_pack_size:
-            groups.append(current)
+            yield current
             current = []
             current_size = 0
         current.append((archive_id, path))
         current_size += size
     if current:
-        groups.append(current)
-    return groups
+        yield current
 
 
 def _build_filter_pack_with_clp_filter(
@@ -208,7 +257,7 @@ def pack_filters_for_dataset(
         dry_run,
     )
     logger.info(
-        "Filter staging dir: %s; archive output dir: %s; storage type: %s.",
+        "Filter staging dir: %s (recursive scan); archive output dir: %s; storage type: %s.",
         clp_config.filter_staging_directory,
         clp_config.archive_output.get_directory()
         if clp_config.archive_output.storage.type == StorageType.FS
@@ -233,30 +282,23 @@ def pack_filters_for_dataset(
         closing(sql_adapter.create_connection(True)) as db_conn,
         closing(db_conn.cursor(dictionary=True)) as db_cursor,
     ):
-        archive_ids = list(_iter_archives_to_pack(db_cursor, table_prefix, dataset))
-        if not archive_ids:
-            logger.info("No archives eligible for packing for dataset %s.", dataset)
-            return True
-
-        filters = _collect_filters(staging_dir, archive_ids)
-        if not filters:
-            logger.info(
-                "No filter files found to pack for dataset %s (archives=%s, staging_dir=%s).",
-                dataset,
-                len(archive_ids),
-                staging_dir,
-            )
-            return True
-
-        groups = _split_by_size(filters, max_pack_size_bytes)
-        logger.info(
-            "Packing %s filters into %s packs for dataset %s.",
-            len(filters),
-            len(groups),
-            dataset,
+        stats = {
+            "filters_total": 0,
+            "filters_unpacked": 0,
+            "filters_already_packed": 0,
+            "filters_missing_db": 0,
+        }
+        filters_iter = _iter_unpacked_filters(
+            db_cursor, table_prefix, dataset, staging_dir, stats
         )
+        groups = _iter_groups_by_size(filters_iter, max_pack_size_bytes)
+
+        pack_count = 0
+        packed_filters = 0
 
         for group in groups:
+            pack_count += 1
+            packed_filters += len(group)
             pack_id = uuid.uuid4().hex
             archive_ids_in_pack = [archive_id for archive_id, _ in group]
             total_bytes = sum(path.stat().st_size for _, path in group)
@@ -303,6 +345,21 @@ def pack_filters_for_dataset(
                 int(result["size"]),
                 archive_ids_in_pack,
             )
+
+        logger.info(
+            "Filter staging scan summary: total=%s unpacked=%s packed=%s "
+            "already_packed=%s missing_db=%s packs=%s",
+            stats["filters_total"],
+            stats["filters_unpacked"],
+            packed_filters,
+            stats["filters_already_packed"],
+            stats["filters_missing_db"],
+            pack_count,
+        )
+
+        if packed_filters == 0:
+            logger.info("No unpacked filter files to pack for dataset %s.", dataset)
+            return True
 
     return True
 

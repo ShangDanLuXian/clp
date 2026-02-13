@@ -392,7 +392,9 @@ def run_clp(
         if clp_config.output.filter_type != "none":
             filter_output_dir = clp_config.output.filter_output_dir
             if filter_output_dir is None:
-                filter_output_dir = str(worker_config.filter_staging_directory / dataset)
+                filter_output_dir = str(
+                    worker_config.filter_staging_directory / dataset / f"job-{job_id}"
+                )
         compression_cmd, compression_env = _make_clp_s_command_and_env(
             clp_home=clp_home,
             archive_output_dir=archive_output_dir,
