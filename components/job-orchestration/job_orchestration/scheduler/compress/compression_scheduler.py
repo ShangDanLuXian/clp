@@ -416,11 +416,27 @@ def poll_running_jobs(
                 and job.dataset is not None
             ):
                 try:
+                    logger.info(
+                        "Starting filter packing for job %s (dataset=%s, max_pack_size_bytes=%s).",
+                        job_id,
+                        job.dataset,
+                        clp_config.compression_scheduler.filter_pack_max_size_bytes,
+                    )
+                    pack_start = datetime.datetime.now(datetime.timezone.utc)
                     pack_filters_for_dataset(
                         clp_config,
                         job.dataset,
                         clp_config.compression_scheduler.filter_pack_max_size_bytes,
                         dry_run=False,
+                    )
+                    pack_duration = (
+                        datetime.datetime.now(datetime.timezone.utc) - pack_start
+                    ).total_seconds()
+                    logger.info(
+                        "Completed filter packing for job %s (dataset=%s) in %.2f second(s).",
+                        job_id,
+                        job.dataset,
+                        pack_duration,
                     )
                 except Exception:
                     logger.exception(

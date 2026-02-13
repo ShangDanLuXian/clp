@@ -19,6 +19,7 @@ WORKDIR /clp
 COPY --link ./clg ./
 COPY --link ./clp ./
 COPY --link ./clp-s ./
+COPY --link ./clp-filter ./
 COPY --link ./glt ./
 COPY --link ./make-dictionaries-readable ./
 

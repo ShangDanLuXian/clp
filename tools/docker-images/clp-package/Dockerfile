@@ -32,6 +32,7 @@ COPY --link --chown=${UID} ./build/core/clg bin/
 COPY --link --chown=${UID} ./build/core/clo bin/
 COPY --link --chown=${UID} ./build/core/clp bin/
 COPY --link --chown=${UID} ./build/core/clp-s bin/
+COPY --link --chown=${UID} ./build/core/clp-filter bin/
 COPY --link --chown=${UID} ./build/core/indexer bin/
 COPY --link --chown=${UID} ./build/core/log-converter bin/
 COPY --link --chown=${UID} ./build/core/reducer-server bin/

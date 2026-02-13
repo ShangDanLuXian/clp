@@ -1,6 +1,7 @@
 import json
 import os
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -28,19 +29,24 @@ def filter_scan(
     if not clp_home:
         return {"ok": False, "error": "CLP_HOME not set"}
 
-    clp_s_path = Path(clp_home) / "bin" / "clp-s"
-    if not clp_s_path.exists():
-        return {"ok": False, "error": f"clp-s not found at {clp_s_path}"}
+    clp_filter_path = Path(clp_home) / "bin" / "clp-filter"
+    if not clp_filter_path.exists():
+        return {"ok": False, "error": f"clp-filter not found at {clp_filter_path}"}
+
+    fd, output_json_path = tempfile.mkstemp(prefix="clp-filter-", suffix=".json")
+    os.close(fd)
 
     cmd = [
-        str(clp_s_path),
-        "f",
+        str(clp_filter_path),
+        "scan",
         "--pack-path",
         pack_path,
         "--archives",
         ",".join(archive_ids),
         "--query",
         query,
+        "--output-json",
+        output_json_path,
     ]
     logger.info("Filter scan task job_id=%s pack_path=%s archives=%s", job_id, pack_path, len(archive_ids))
 
@@ -52,8 +58,12 @@ def filter_scan(
             text=True,
         )
     except Exception as exc:
-        logger.exception("Filter scan task failed to start clp-s (job_id=%s)", job_id)
-        return {"ok": False, "error": f"failed to run clp-s: {exc}"}
+        logger.exception("Filter scan task failed to start clp-filter (job_id=%s)", job_id)
+        try:
+            os.unlink(output_json_path)
+        except OSError:
+            logger.warning("Failed to remove filter scan output file %s", output_json_path)
+        return {"ok": False, "error": f"failed to run clp-filter: {exc}"}
 
     if proc.returncode != 0:
         logger.error(
@@ -62,17 +72,27 @@ def filter_scan(
             proc.returncode,
             proc.stderr,
         )
-        return {"ok": False, "error": "clp-s filter scan failed", "stderr": proc.stderr}
+        try:
+            os.unlink(output_json_path)
+        except OSError:
+            logger.warning("Failed to remove filter scan output file %s", output_json_path)
+        return {"ok": False, "error": "clp-filter scan failed", "stderr": proc.stderr}
 
     try:
-        output = json.loads(proc.stdout.strip())
+        with open(output_json_path, "r", encoding="utf-8") as output_file:
+            output = json.load(output_file)
     except Exception as exc:
         logger.error(
             "Filter scan task failed to parse output (job_id=%s): %s",
             job_id,
-            proc.stdout,
+            exc,
         )
-        return {"ok": False, "error": f"invalid clp-s output: {exc}", "stdout": proc.stdout}
+        return {"ok": False, "error": f"invalid clp-filter output: {exc}"}
+    finally:
+        try:
+            os.unlink(output_json_path)
+        except OSError:
+            logger.warning("Failed to remove filter scan output file %s", output_json_path)
 
     output["ok"] = True
     return output
