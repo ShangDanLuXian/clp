@@ -980,6 +980,7 @@ class DockerComposeController(BaseController):
             "CLP_DATA_DIR_HOST": str(self._clp_config.data_directory),
             "CLP_LOGS_DIR_HOST": str(self._clp_config.logs_directory),
             "CLP_TMP_DIR_HOST": str(self._clp_config.tmp_directory),
+            "CLP_FILTER_STAGING_DIR_HOST": str(self._clp_config.filter_staging_directory),
         }
 
         # Input config

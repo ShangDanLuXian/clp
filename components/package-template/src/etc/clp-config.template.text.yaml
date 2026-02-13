@@ -34,6 +34,7 @@ log_ingestor: null
 #
 #compression_scheduler:
 #  jobs_poll_delay: 0.1  # seconds
+#  filter_pack_max_size_bytes: 67108864  # 64 MiB
 #  logging_level: "INFO"
 #  type: "celery"  # "celery" or "spider"
 #
@@ -156,6 +157,11 @@ log_ingestor: null
 ## NOTE: This directory must not overlap with any path used in CLP's execution container. An error
 ## will be raised if so.
 #tmp_directory: "var/tmp"
+#
+## Location where per-archive filters are staged before being packed.
+## NOTE: This directory must not overlap with any path used in CLP's execution container. An error
+## will be raised if so.
+#filter_staging_directory: "var/data/filters"
 #
 ## Location of the AWS tools' config files (e.g., `~/.aws`)
 #aws_config_directory: null
