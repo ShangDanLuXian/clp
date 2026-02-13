@@ -161,7 +161,7 @@ log_ingestor: null
 ## Location where per-archive filters are staged before being packed.
 ## NOTE: This directory must not overlap with any path used in CLP's execution container. An error
 ## will be raised if so.
-#filter_staging_directory: "var/tmp/filters"
+#filter_staging_directory: "var/data/filters"
 #
 ## Location of the AWS tools' config files (e.g., `~/.aws`)
 #aws_config_directory: null

@@ -269,7 +269,8 @@ services:
     volumes:
       - *volume_clp_config_readonly
       - *volume_clp_logs
-      - "${CLP_ARCHIVE_OUTPUT_DIR_HOST:-empty}:/var/data/archives:ro"
+      - "${CLP_ARCHIVE_OUTPUT_DIR_HOST:-empty}:/var/data/archives"
+      - "${CLP_FILTER_STAGING_DIR_HOST:-./var/data/filters}:/var/data/filters:ro"
       - "${CLP_AWS_CONFIG_DIR_HOST:-empty}:/opt/clp/.aws:ro"
       - "${CLP_LOGS_INPUT_DIR_HOST:-empty}:${CLP_LOGS_INPUT_DIR_CONTAINER:-/mnt/logs}:ro"
     depends_on:
@@ -305,6 +306,7 @@ services:
       - *volume_clp_logs
       - *volume_clp_tmp
       - "${CLP_ARCHIVE_OUTPUT_DIR_HOST:-empty}:/var/data/archives"
+      - "${CLP_FILTER_STAGING_DIR_HOST:-./var/data/filters}:/var/data/filters"
       - "${CLP_AWS_CONFIG_DIR_HOST:-empty}:/opt/clp/.aws:ro"
       - "${CLP_LOGS_INPUT_DIR_HOST:-empty}:${CLP_LOGS_INPUT_DIR_CONTAINER:-/mnt/logs}:ro"
       - "${CLP_STAGED_ARCHIVE_OUTPUT_DIR_HOST:-empty}:/var/data/staged-archives"
@@ -337,6 +339,7 @@ services:
       - *volume_clp_logs
       - *volume_clp_tmp
       - "${CLP_ARCHIVE_OUTPUT_DIR_HOST:-empty}:/var/data/archives"
+      - "${CLP_FILTER_STAGING_DIR_HOST:-./var/data/filters}:/var/data/filters"
       - "${CLP_AWS_CONFIG_DIR_HOST:-empty}:/opt/clp/.aws:ro"
       - "${CLP_LOGS_INPUT_DIR_HOST:-empty}:${CLP_LOGS_INPUT_DIR_CONTAINER:-/mnt/logs}"
       - "${CLP_STAGED_ARCHIVE_OUTPUT_DIR_HOST:-empty}:/var/data/staged-archives"
