@@ -238,6 +238,7 @@ def pack_filters_for_dataset(
     clp_config: ClpConfig,
     dataset: str,
     max_pack_size_bytes: int,
+    job_id: int | None = None,
     dry_run: bool = False,
 ) -> bool:
     if clp_config.package.storage_engine != StorageEngine.CLP_S:
@@ -251,21 +252,25 @@ def pack_filters_for_dataset(
     validate_dataset_exists(clp_config.database, dataset)
     clp_home = get_clp_home()
     logger.info(
-        "Starting filter packing for dataset %s (max_pack_size_bytes=%s, dry_run=%s).",
+        "Starting filter packing for dataset %s (job_id=%s, max_pack_size_bytes=%s, dry_run=%s).",
         dataset,
+        job_id if job_id is not None else "all",
         max_pack_size_bytes,
         dry_run,
     )
+
+    staging_dir = pathlib.Path(clp_config.filter_staging_directory) / dataset
+    if job_id is not None:
+        staging_dir = staging_dir / f"job-{job_id}"
+
     logger.info(
         "Filter staging dir: %s (recursive scan); archive output dir: %s; storage type: %s.",
-        clp_config.filter_staging_directory,
+        staging_dir,
         clp_config.archive_output.get_directory()
         if clp_config.archive_output.storage.type == StorageType.FS
         else "s3",
         clp_config.archive_output.storage.type,
     )
-
-    staging_dir = pathlib.Path(clp_config.filter_staging_directory) / dataset
     if not staging_dir.exists():
         logger.info(
             "Filter staging directory does not exist for dataset %s: %s",
@@ -388,6 +393,12 @@ def main(argv):
         help="Maximum pack size in bytes.",
     )
     args_parser.add_argument(
+        "--job-id",
+        type=int,
+        default=None,
+        help="Only pack filters produced by the given compression job id.",
+    )
+    args_parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
@@ -416,7 +427,8 @@ def main(argv):
             clp_config,
             parsed_args.dataset,
             parsed_args.max_pack_size_bytes,
-            parsed_args.dry_run,
+            job_id=parsed_args.job_id,
+            dry_run=parsed_args.dry_run,
         )
     except Exception:
         logger.exception("Filter packing failed.")

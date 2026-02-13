@@ -51,6 +51,9 @@ def _generate_filter_pack_cmd(
         cmd.append("--verbose")
     if parsed_args.dry_run:
         cmd.append("--dry-run")
+    if parsed_args.job_id is not None:
+        cmd.append("--job-id")
+        cmd.append(str(parsed_args.job_id))
     return cmd
 
 
@@ -82,6 +85,12 @@ def main(argv):
         type=int,
         default=64 * 1024 * 1024,
         help="Maximum pack size in bytes.",
+    )
+    args_parser.add_argument(
+        "--job-id",
+        type=int,
+        default=None,
+        help="Only pack filters produced by the given compression job id.",
     )
     args_parser.add_argument(
         "--dry-run",

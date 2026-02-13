@@ -427,6 +427,7 @@ def poll_running_jobs(
                         clp_config,
                         job.dataset,
                         clp_config.compression_scheduler.filter_pack_max_size_bytes,
+                        job_id=job_id,
                         dry_run=False,
                     )
                     pack_duration = (
