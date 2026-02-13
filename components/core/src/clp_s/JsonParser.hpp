@@ -25,6 +25,7 @@
 #include <clp_s/Schema.hpp>
 #include <clp_s/SchemaTree.hpp>
 #include <clp_s/TraceableException.hpp>
+#include <clp_s/filter/FilterConfig.hpp>
 
 namespace clp_s {
 struct JsonParserOption {
@@ -41,6 +42,8 @@ struct JsonParserOption {
     bool retain_float_format{false};
     bool single_file_archive{false};
     NetworkAuthOption network_auth{};
+    FilterConfig filter_config{};
+    std::string filter_output_dir{};
 };
 
 class JsonParser {

@@ -239,6 +239,14 @@ set(
         DictionaryWriter.cpp
         DictionaryWriter.hpp
         ErrorCode.hpp
+        filter/BloomFilter.cpp
+        filter/BloomFilter.hpp
+        filter/FilterConfig.cpp
+        filter/FilterConfig.hpp
+        filter/FilterFile.cpp
+        filter/FilterFile.hpp
+        filter/ProbabilisticFilter.cpp
+        filter/ProbabilisticFilter.hpp
         FloatFormatEncoding.cpp
         FloatFormatEncoding.hpp
         JsonFileIterator.cpp
@@ -452,6 +460,30 @@ if(CLP_BUILD_EXECUTABLES)
         )
         set_target_properties(
                 clp-s
+                PROPERTIES
+                RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}"
+        )
+
+        add_executable(
+                clp-filter
+                clp-filter.cpp
+        )
+        target_compile_features(clp-filter PRIVATE cxx_std_20)
+        target_include_directories(clp-filter PRIVATE ../)
+        target_link_libraries(
+                clp-filter
+                PRIVATE
+                Boost::program_options
+                clp_s::archive_writer
+                clp_s::clp_dependencies
+                clp_s::search::ast
+                clp_s::search::kql
+                nlohmann_json::nlohmann_json
+                spdlog::spdlog
+                ystdlib::error_handling
+        )
+        set_target_properties(
+                clp-filter
                 PROPERTIES
                 RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}"
         )

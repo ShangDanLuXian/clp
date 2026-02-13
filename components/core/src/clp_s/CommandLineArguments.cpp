@@ -1,7 +1,9 @@
 #include "CommandLineArguments.hpp"
 
+#include <cctype>
 #include <filesystem>
 #include <iostream>
+#include <sstream>
 #include <string_view>
 
 #include <boost/program_options.hpp>
@@ -207,6 +209,9 @@ CommandLineArguments::parse_arguments(int argc, char const** argv) {
             po::options_description compression_options("Compression options");
             std::string input_path_list_file_path;
             std::string auth{cNoAuth};
+            std::string var_filter_type{"none"};
+            double var_filter_fpr{0.01};
+            std::string var_filter_output_dir;
             // clang-format off
             compression_options.add_options()(
                     "compression-level",
@@ -269,6 +274,24 @@ CommandLineArguments::parse_arguments(int argc, char const** argv) {
                     "Type of authentication required for network requests (s3 | none). Authentication"
                     " with s3 requires the AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY environment"
                     " variables, and optionally the AWS_SESSION_TOKEN environment variable."
+            )(
+                    "var-filter-type",
+                    po::value<std::string>(&var_filter_type)
+                        ->value_name("TYPE")
+                        ->default_value(var_filter_type),
+                    "Variable dictionary filter type (none | bloom_v1)."
+            )(
+                    "var-filter-fpr",
+                    po::value<double>(&var_filter_fpr)
+                        ->value_name("FPR")
+                        ->default_value(var_filter_fpr),
+                    "False positive rate for bloom_v1 (0 < FPR < 1)."
+            )(
+                    "var-filter-output-dir",
+                    po::value<std::string>(&var_filter_output_dir)
+                        ->value_name("DIR")
+                        ->default_value(var_filter_output_dir),
+                    "Directory to write variable dictionary filters to (defaults to archive dir)."
             );
             // clang-format on
 
@@ -329,6 +352,23 @@ CommandLineArguments::parse_arguments(int argc, char const** argv) {
             }
 
             validate_network_auth(auth, m_network_auth);
+
+            auto parsed_type = parse_filter_type(var_filter_type);
+            if (false == parsed_type.has_value()) {
+                throw std::invalid_argument(
+                        fmt::format("Unknown var-filter-type '{}'", var_filter_type)
+                );
+            }
+            if (FilterType::BloomV1 == parsed_type.value()) {
+                if (!(var_filter_fpr > 0.0 && var_filter_fpr < 1.0)) {
+                    throw std::invalid_argument(
+                            "var-filter-fpr must be in the range (0, 1)"
+                    );
+                }
+            }
+            m_filter_config.type = parsed_type.value();
+            m_filter_config.false_positive_rate = var_filter_fpr;
+            m_var_filter_output_dir = var_filter_output_dir;
         } else if ((char)Command::Extract == command_input) {
             po::options_description extraction_options;
             std::string archive_path;
@@ -940,4 +980,5 @@ void CommandLineArguments::print_search_usage() const {
                  " [OUTPUT_HANDLER [OUTPUT_HANDLER_OPTIONS]]"
               << std::endl;
 }
+
 }  // namespace clp_s

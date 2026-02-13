@@ -4,7 +4,7 @@ from enum import auto
 from typing import Literal
 
 from clp_py_utils.clp_config import S3Config
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 from strenum import LowercaseStrEnum
 
 
@@ -50,6 +50,26 @@ class OutputConfig(BaseModel):
     target_segment_size: int
     target_encoded_file_size: int
     compression_level: int
+    filter_type: str = "none"
+    filter_fpr: float = 0.01
+    filter_output_dir: str | None = None
+
+    @field_validator("filter_type")
+    @classmethod
+    def validate_filter_type(cls, value: str) -> str:
+        normalized = value.lower()
+        if normalized == "bloom":
+            normalized = "bloom_v1"
+        if normalized not in {"none", "bloom_v1"}:
+            raise ValueError("filter_type must be one of: none, bloom_v1")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_filter_fpr(self) -> "OutputConfig":
+        if self.filter_type != "none":
+            if not (0.0 < self.filter_fpr < 1.0):
+                raise ValueError("filter_fpr must be in the range (0, 1)")
+        return self
 
 
 class ClpIoConfig(BaseModel):

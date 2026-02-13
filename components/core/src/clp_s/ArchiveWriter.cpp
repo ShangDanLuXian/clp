@@ -19,6 +19,8 @@ void ArchiveWriter::open(ArchiveWriterOption const& option) {
     m_print_archive_stats = option.print_archive_stats;
     m_single_file_archive = option.single_file_archive;
     m_min_table_size = option.min_table_size;
+    m_filter_config = option.filter_config;
+    m_filter_output_dir = option.filter_output_dir;
     m_archives_dir = option.archives_dir;
     m_authoritative_timestamp = option.authoritative_timestamp;
     m_authoritative_timestamp_namespace = option.authoritative_timestamp_namespace;
@@ -64,6 +66,46 @@ auto ArchiveWriter::close(bool is_split) -> ArchiveStats {
             throw OperationFailed(rc, __FILENAME__, __LINE__);
         }
     }
+    bool wrote_filter{false};
+    bool filter_in_archive_dir{m_filter_output_dir.empty()};
+    size_t filter_file_size{0ULL};
+    if (FilterType::None != m_filter_config.type) {
+        std::filesystem::path filter_path;
+        if (filter_in_archive_dir) {
+            filter_path = m_archive_path + constants::cArchiveVarDictFilterFile;
+        } else {
+            std::error_code ec;
+            std::filesystem::create_directories(m_filter_output_dir, ec);
+            if (ec) {
+                SPDLOG_WARN(
+                        "Failed to create filter output dir '{}': {}",
+                        m_filter_output_dir,
+                        ec.message()
+                );
+            }
+            std::string filter_file_name = m_id;
+            filter_file_name.append(".");
+            filter_file_name.append(constants::cArchiveVarDictFilterFileName);
+            filter_path = std::filesystem::path(m_filter_output_dir) / filter_file_name;
+        }
+        try {
+            wrote_filter = m_var_dict->write_filter(filter_path.string(), m_filter_config);
+            if (wrote_filter && filter_in_archive_dir) {
+                std::error_code ec;
+                filter_file_size = std::filesystem::file_size(filter_path, ec);
+                if (ec) {
+                    SPDLOG_WARN(
+                            "Failed to stat variable dictionary filter - {}",
+                            ec.message()
+                    );
+                    wrote_filter = false;
+                }
+            }
+        } catch (std::exception const& e) {
+            SPDLOG_WARN("Failed to write variable dictionary filter - {}", e.what());
+            wrote_filter = false;
+        }
+    }
     auto var_dict_compressed_size = m_var_dict->close();
     auto log_dict_compressed_size = m_log_dict->close();
     auto array_dict_compressed_size = m_array_dict->close();
@@ -71,15 +113,18 @@ auto ArchiveWriter::close(bool is_split) -> ArchiveStats {
     auto schema_map_compressed_size = m_schema_map.store(m_archive_path, m_compression_level);
     auto [table_metadata_compressed_size, table_compressed_size] = store_tables();
 
-    std::vector<ArchiveFileInfo> files{
-            {constants::cArchiveSchemaTreeFile, schema_tree_compressed_size},
-            {constants::cArchiveSchemaMapFile, schema_map_compressed_size},
-            {constants::cArchiveTableMetadataFile, table_metadata_compressed_size},
-            {constants::cArchiveVarDictFile, var_dict_compressed_size},
-            {constants::cArchiveLogDictFile, log_dict_compressed_size},
-            {constants::cArchiveArrayDictFile, array_dict_compressed_size},
-            {constants::cArchiveTablesFile, table_compressed_size}
-    };
+    std::vector<ArchiveFileInfo> files;
+    files.reserve(8);
+    files.push_back({constants::cArchiveSchemaTreeFile, schema_tree_compressed_size});
+    files.push_back({constants::cArchiveSchemaMapFile, schema_map_compressed_size});
+    files.push_back({constants::cArchiveTableMetadataFile, table_metadata_compressed_size});
+    files.push_back({constants::cArchiveVarDictFile, var_dict_compressed_size});
+    if (wrote_filter && filter_in_archive_dir) {
+        files.push_back({constants::cArchiveVarDictFilterFile, filter_file_size});
+    }
+    files.push_back({constants::cArchiveLogDictFile, log_dict_compressed_size});
+    files.push_back({constants::cArchiveArrayDictFile, array_dict_compressed_size});
+    files.push_back({constants::cArchiveTablesFile, table_compressed_size});
     uint64_t offset = 0;
     for (auto& file : files) {
         uint64_t original_size = file.o;
@@ -102,7 +147,8 @@ auto ArchiveWriter::close(bool is_split) -> ArchiveStats {
         m_compressed_size
                 = var_dict_compressed_size + log_dict_compressed_size + array_dict_compressed_size
                   + metadata_size + schema_tree_compressed_size + schema_map_compressed_size
-                  + table_metadata_compressed_size + table_compressed_size + sizeof(ArchiveHeader);
+                  + table_metadata_compressed_size + table_compressed_size + sizeof(ArchiveHeader)
+                  + ((wrote_filter && filter_in_archive_dir) ? filter_file_size : 0ULL);
 
         write_archive_header(header_and_metadata_writer, metadata_size);
         header_and_metadata_writer.close();

@@ -23,6 +23,7 @@ import logging
 import os
 import pathlib
 import sys
+import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
@@ -39,6 +40,7 @@ from clp_py_utils.clp_config import (
 from clp_py_utils.clp_logging import get_logger, get_logging_formatter, set_logging_level
 from clp_py_utils.clp_metadata_db_utils import (
     fetch_existing_datasets,
+    fetch_filter_pack_paths,
     get_archives_table_name,
     get_files_table_name,
 )
@@ -48,6 +50,7 @@ from clp_py_utils.sql_adapter import SqlAdapter
 from pydantic import ValidationError
 
 from job_orchestration.executor.query.extract_stream_task import extract_stream
+from job_orchestration.executor.query.filter_scan_task import filter_scan
 from job_orchestration.executor.query.fs_search_task import search
 from job_orchestration.garbage_collector.constants import MIN_TO_SECONDS, SECOND_TO_MILLISECOND
 from job_orchestration.scheduler.constants import (
@@ -80,6 +83,8 @@ from job_orchestration.scheduler.utils import kill_hanging_jobs
 
 # Setup logging
 logger = get_logger("search-job-handler")
+
+FILTER_SCAN_TIMEOUT_SECONDS = 300
 
 # Dictionary of active jobs indexed by job id
 active_jobs: dict[str, QueryJob] = {}
@@ -404,7 +409,8 @@ def get_archives_for_search(
     archive_end_ts_lower_bound: int | None,
 ):
     dataset = search_config.dataset
-    query = f"""SELECT id as archive_id, end_timestamp
+    t_start = time.perf_counter()
+    query = f"""SELECT id as archive_id, end_timestamp, filter_pack_id
             FROM {get_archives_table_name(table_prefix, dataset)}
             """
     filter_clauses = []
@@ -423,7 +429,135 @@ def get_archives_for_search(
     with contextlib.closing(db_conn.cursor(dictionary=True)) as cursor:
         cursor.execute(query)
         archives_for_search = list(cursor.fetchall())
-    return archives_for_search
+        t_db = time.perf_counter()
+
+        if not archives_for_search:
+            logger.info(
+                "Filter scan skipped: no archives matched timestamp filter. "
+                "timestamp_filter_ms=%.2f",
+                (t_db - t_start) * 1000.0,
+            )
+            return archives_for_search
+
+        if not search_config.query_string:
+            logger.info(
+                "Filter scan skipped: empty query string. timestamp_filter_ms=%.2f",
+                (t_db - t_start) * 1000.0,
+            )
+            return archives_for_search
+
+        if dataset is None:
+            logger.info(
+                "Filter scan skipped: dataset is None. timestamp_filter_ms=%.2f",
+                (t_db - t_start) * 1000.0,
+            )
+            return archives_for_search
+
+        pack_ids = {
+            int(row["filter_pack_id"])
+            for row in archives_for_search
+            if row.get("filter_pack_id") is not None
+        }
+        if not pack_ids:
+            logger.info("Filter scan skipped: no filter_pack_id present for matched archives.")
+            return archives_for_search
+
+        t_filter_start = time.perf_counter()
+        pack_paths = fetch_filter_pack_paths(cursor, table_prefix, dataset, list(pack_ids))
+        logger.info(
+            "Filter scan: dataset=%s archives=%s packs=%s paths=%s",
+            dataset,
+            len(archives_for_search),
+            len(pack_ids),
+            len(pack_paths),
+        )
+
+        passed_ids: set[str] = set()
+        pack_groups: dict[int, list[str]] = {}
+        for row in archives_for_search:
+            archive_id = row["archive_id"]
+            pack_id = row.get("filter_pack_id")
+            if pack_id is None:
+                passed_ids.add(archive_id)
+                continue
+            pack_id = int(pack_id)
+            if pack_id not in pack_paths:
+                passed_ids.add(archive_id)
+                continue
+            pack_groups.setdefault(pack_id, []).append(archive_id)
+
+        for pack_id, archive_ids in pack_groups.items():
+            if not archive_ids:
+                continue
+            pack_path = pack_paths.get(pack_id)
+            if pack_path is None:
+                logger.info(
+                    "Filter scan skipped: missing pack path for pack_id=%s (archives=%s).",
+                    pack_id,
+                    len(archive_ids),
+                )
+                passed_ids.update(archive_ids)
+                continue
+
+            logger.info(
+                "Filter scan pack_id=%s path=%s archives=%s",
+                pack_id,
+                pack_path,
+                len(archive_ids),
+            )
+            try:
+                async_result = filter_scan.apply_async(
+                    kwargs={
+                        "pack_path": pack_path,
+                        "archive_ids": archive_ids,
+                        "query": search_config.query_string,
+                    }
+                )
+                result = async_result.get(timeout=FILTER_SCAN_TIMEOUT_SECONDS)
+            except Exception:
+                logger.exception("Filter scan task failed for pack %s", pack_id)
+                passed_ids.update(archive_ids)
+                continue
+
+            if not isinstance(result, dict) or not result.get("ok"):
+                logger.info("Filter scan task failed for pack %s: %s", pack_id, result)
+                passed_ids.update(archive_ids)
+                continue
+
+            passed = result.get("passed")
+            if not isinstance(passed, list):
+                logger.info(
+                    "Filter scan output missing passed list for pack %s: %s",
+                    pack_id,
+                    result,
+                )
+                passed_ids.update(archive_ids)
+                continue
+
+            passed_ids.update(str(archive_id) for archive_id in passed)
+            logger.info(
+                "Filter scan result pack_id=%s supported=%s total=%s passed=%s skipped=%s",
+                pack_id,
+                result.get("supported"),
+                result.get("total"),
+                len(passed),
+                result.get("skipped"),
+            )
+
+        t_filter_end = time.perf_counter()
+        logger.info(
+            "Filter scan summary: archives_in=%s archives_out=%s "
+            "timestamp_filter_ms=%.2f filter_scan_ms=%.2f total_ms=%.2f",
+            len(archives_for_search),
+            len(passed_ids),
+            (t_db - t_start) * 1000.0,
+            (t_filter_end - t_filter_start) * 1000.0,
+            (t_filter_end - t_start) * 1000.0,
+        )
+
+    return [
+        archive for archive in archives_for_search if archive["archive_id"] in passed_ids
+    ]
 
 
 def get_archive_and_file_split_ids_for_ir_extraction(

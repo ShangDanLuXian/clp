@@ -10,17 +10,21 @@ MYSQL_TABLE_NAME_MAX_LEN = 64
 ARCHIVES_TABLE_SUFFIX = "archives"
 COLUMN_METADATA_TABLE_SUFFIX = "column_metadata"
 DATASETS_TABLE_SUFFIX = "datasets"
+FILTER_PACKS_TABLE_SUFFIX = "filter_packs"
 FILES_TABLE_SUFFIX = "files"
 
 TABLE_SUFFIX_MAX_LEN = max(
     len(ARCHIVES_TABLE_SUFFIX),
     len(COLUMN_METADATA_TABLE_SUFFIX),
     len(DATASETS_TABLE_SUFFIX),
+    len(FILTER_PACKS_TABLE_SUFFIX),
     len(FILES_TABLE_SUFFIX),
 )
 
 
-def _create_archives_table(db_cursor, archives_table_name: str) -> None:
+def _create_archives_table(
+    db_cursor, archives_table_name: str, filter_packs_table_name: str
+) -> None:
     db_cursor.execute(
         f"""
         CREATE TABLE IF NOT EXISTS `{archives_table_name}` (
@@ -32,7 +36,10 @@ def _create_archives_table(db_cursor, archives_table_name: str) -> None:
             `size` BIGINT NOT NULL,
             `creator_id` VARCHAR(64) NOT NULL,
             `creation_ix` INT NOT NULL,
+            `filter_pack_id` BIGINT unsigned NULL,
             KEY `archives_creation_order` (`creator_id`,`creation_ix`) USING BTREE,
+            KEY `archives_filter_pack_id` (`filter_pack_id`) USING BTREE,
+            FOREIGN KEY (`filter_pack_id`) REFERENCES `{filter_packs_table_name}` (`id`),
             UNIQUE KEY `archive_id` (`id`) USING BTREE,
             PRIMARY KEY (`pagination_id`)
         )
@@ -68,6 +75,20 @@ def _create_column_metadata_table(db_cursor, table_prefix: str, dataset: str) ->
             `name` VARCHAR(512) NOT NULL,
             `type` TINYINT NOT NULL,
             PRIMARY KEY (`name`, `type`)
+        )
+        """
+    )
+
+
+def _create_filter_packs_table(db_cursor, table_prefix: str, dataset: str | None) -> None:
+    db_cursor.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS `{get_filter_packs_table_name(table_prefix, dataset)}` (
+            `id` BIGINT unsigned NOT NULL AUTO_INCREMENT,
+            `storage_path` VARCHAR(4096) NOT NULL,
+            `size` BIGINT NOT NULL,
+            `num_filters` INT NOT NULL,
+            PRIMARY KEY (`id`)
         )
         """
     )
@@ -169,9 +190,11 @@ def create_metadata_db_tables(db_cursor, table_prefix: str, dataset: str | None 
     if dataset is not None:
         _create_column_metadata_table(db_cursor, table_prefix, dataset)
 
-    archives_table_name = get_archives_table_name(table_prefix, dataset)
+    _create_filter_packs_table(db_cursor, table_prefix, dataset)
 
-    _create_archives_table(db_cursor, archives_table_name)
+    archives_table_name = get_archives_table_name(table_prefix, dataset)
+    filter_packs_table_name = get_filter_packs_table_name(table_prefix, dataset)
+    _create_archives_table(db_cursor, archives_table_name, filter_packs_table_name)
     _create_files_table(db_cursor, table_prefix, dataset)
 
 
@@ -222,6 +245,7 @@ def delete_dataset_from_metadata_db(db_cursor, table_prefix: str, dataset: str) 
         get_column_metadata_table_name(table_prefix, dataset),
         get_files_table_name(table_prefix, dataset),
         get_archives_table_name(table_prefix, dataset),
+        get_filter_packs_table_name(table_prefix, dataset),
     ]
 
     for table in tables_in_removal_order:
@@ -235,6 +259,100 @@ def delete_dataset_from_metadata_db(db_cursor, table_prefix: str, dataset: str) 
         """,
         (dataset,),
     )
+
+
+def insert_filter_pack(
+    db_cursor,
+    table_prefix: str,
+    dataset: str | None,
+    storage_path: str,
+    size: int,
+    num_filters: int,
+) -> int:
+    """
+    Inserts a filter pack and returns the auto-generated pack id.
+
+    :param db_cursor:
+    :param table_prefix:
+    :param dataset:
+    :param storage_path:
+    :param size:
+    :param num_filters:
+    :return: pack id
+    """
+    table_name = get_filter_packs_table_name(table_prefix, dataset)
+    db_cursor.execute(
+        f"""
+        INSERT INTO `{table_name}` (storage_path, size, num_filters)
+        VALUES (%s, %s, %s)
+        """,
+        (storage_path, size, num_filters),
+    )
+    return db_cursor.lastrowid
+
+
+def set_archives_filter_pack_id(
+    db_cursor,
+    table_prefix: str,
+    dataset: str | None,
+    archive_ids: list[str],
+    pack_id: int,
+    only_if_null: bool = True,
+) -> None:
+    """
+    Updates the archives table to point to the given filter pack id.
+
+    :param db_cursor:
+    :param table_prefix:
+    :param dataset:
+    :param archive_ids:
+    :param pack_id:
+    :param only_if_null:
+    """
+    if len(archive_ids) == 0:
+        return
+    ids_list_string = ", ".join(["%s"] * len(archive_ids))
+    archives_table = get_archives_table_name(table_prefix, dataset)
+    null_clause = " AND filter_pack_id IS NULL" if only_if_null else ""
+    db_cursor.execute(
+        f"""
+        UPDATE `{archives_table}`
+        SET filter_pack_id = %s
+        WHERE id IN ({ids_list_string}){null_clause}
+        """,
+        [pack_id, *archive_ids],
+    )
+
+
+def fetch_filter_pack_paths(
+    db_cursor,
+    table_prefix: str,
+    dataset: str | None,
+    pack_ids: list[int],
+) -> dict[int, str]:
+    """
+    Fetches the storage paths for the given filter pack ids.
+
+    :param db_cursor:
+    :param table_prefix:
+    :param dataset:
+    :param pack_ids:
+    :return: Mapping of pack id to storage path.
+    """
+    if len(pack_ids) == 0:
+        return {}
+    table_name = get_filter_packs_table_name(table_prefix, dataset)
+    placeholders = ", ".join(["%s"] * len(pack_ids))
+    db_cursor.execute(
+        f"""
+        SELECT id, storage_path
+        FROM `{table_name}`
+        WHERE id IN ({placeholders})
+        """,
+        pack_ids,
+    )
+    rows = db_cursor.fetchall()
+    return {int(row["id"]): row["storage_path"] for row in rows}
 
 
 def get_archives_table_name(table_prefix: str, dataset: str | None) -> str:
@@ -251,3 +369,7 @@ def get_datasets_table_name(table_prefix: str) -> str:
 
 def get_files_table_name(table_prefix: str, dataset: str | None) -> str:
     return _get_table_name(table_prefix, FILES_TABLE_SUFFIX, dataset)
+
+
+def get_filter_packs_table_name(table_prefix: str, dataset: str | None) -> str:
+    return _get_table_name(table_prefix, FILTER_PACKS_TABLE_SUFFIX, dataset)

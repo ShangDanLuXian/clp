@@ -8,6 +8,9 @@
 #include <spdlog/spdlog.h>
 
 #include "../clp/Defs.h"
+#include "../clp/string_utils/string_utils.hpp"
+#include "filter/FilterFile.hpp"
+#include "filter/ProbabilisticFilter.hpp"
 
 namespace clp_s {
 bool
@@ -70,5 +73,32 @@ bool LogTypeDictionaryWriter::add_entry(
         logtype_entry.write_to_file(m_dictionary_compressor);
     }
     return is_new_entry;
+}
+
+bool VariableDictionaryWriter::write_filter(
+        std::string const& filter_path,
+        FilterConfig const& config
+) const {
+    if (FilterType::None == config.type) {
+        return false;
+    }
+
+    size_t const num_elements = m_value_to_id.size();
+    filter::ProbabilisticFilter filter
+            = filter::ProbabilisticFilter::create(config, num_elements);
+
+    for (auto const& it : m_value_to_id) {
+        std::string value = it.first;
+        if (config.normalize) {
+            clp::string_utils::to_lower(value);
+        }
+        filter.add(value);
+    }
+
+    FileWriter writer;
+    writer.open(filter_path, FileWriter::OpenMode::CreateForWriting);
+    filter::write_filter_file(writer, config, filter, num_elements);
+    writer.close();
+    return true;
 }
 }  // namespace clp_s

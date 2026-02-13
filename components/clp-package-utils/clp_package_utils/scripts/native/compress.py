@@ -350,6 +350,24 @@ def main(argv):
         action="store_true",
         help="Treat all inputs as unstructured text logs.",
     )
+    args_parser.add_argument(
+        "--filter-type",
+        type=str,
+        default=None,
+        help="Filter type to build per-archive filters (e.g. bloom_v1).",
+    )
+    args_parser.add_argument(
+        "--filter-fpr",
+        type=float,
+        default=None,
+        help="False positive rate for the filter (only used if filter-type is set).",
+    )
+    args_parser.add_argument(
+        "--filter-output-dir",
+        type=str,
+        default=None,
+        help="Override filter staging directory (default is filter_staging_directory/<dataset>).",
+    )
     parsed_args = args_parser.parse_args(argv[1:])
     if parsed_args.verbose:
         logger.setLevel(logging.DEBUG)
@@ -363,7 +381,7 @@ def main(argv):
         clp_config.validate_logs_input_config()
         clp_config.validate_logs_dir()
         clp_config.database.load_credentials_from_env()
-    except:
+    except Exception:
         logger.exception("Failed to load config.")
         return -1
 
@@ -377,7 +395,14 @@ def main(argv):
         logger.exception("Failed to process input.")
         return -1
 
-    clp_output_config = OutputConfig.model_validate(clp_config.archive_output.model_dump())
+    output_config_data = clp_config.archive_output.model_dump()
+    if parsed_args.filter_type is not None:
+        output_config_data["filter_type"] = parsed_args.filter_type
+    if parsed_args.filter_fpr is not None:
+        output_config_data["filter_fpr"] = parsed_args.filter_fpr
+    if parsed_args.filter_output_dir is not None:
+        output_config_data["filter_output_dir"] = parsed_args.filter_output_dir
+    clp_output_config = OutputConfig.model_validate(output_config_data)
     clp_io_config = ClpIoConfig(input=clp_input_config, output=clp_output_config)
 
     mysql_adapter = SqlAdapter(clp_config.database)
