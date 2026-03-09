@@ -25,7 +25,6 @@ auto ErrorCategory::message(ErrorCodeEnum error_enum) const -> std::string {
             return "Bloom filter payload is malformed or inconsistent.";
         case ErrorCodeEnum::ReadFailure:
             return "Failed to read Bloom filter payload from reader.";
-        default:
-            return "Unknown error code enum";
     }
+    return "Unknown error code enum";
 }

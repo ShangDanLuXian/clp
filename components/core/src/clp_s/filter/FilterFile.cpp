@@ -23,7 +23,7 @@ std::optional<ParsedFilterFile> read_filter_file(clp::ReaderInterface& reader) {
         return std::nullopt;
     }
 
-    uint8_t type_value = 0;
+    uint8_t type_value{};
     if (clp::ErrorCode_Success != reader.try_read_numeric_value(type_value)) {
         return std::nullopt;
     }

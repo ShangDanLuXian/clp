@@ -44,7 +44,7 @@ auto BloomFilter::create(size_t expected_num_elements, double false_positive_rat
     }
     auto const [bit_array_size, num_hash_functions] = optimal_parameters.value();
 
-    size_t const num_bytes = min_bytes_containing_bits(bit_array_size);
+    size_t const num_bytes{min_bytes_containing_bits(bit_array_size)};
     return BloomFilter(
             bit_array_size,
             num_hash_functions,
@@ -62,8 +62,8 @@ BloomFilter::compute_optimal_parameters(size_t expected_num_elements, double fal
         return std::make_pair(cDefaultBitArraySize, cDefaultNumHashFunctions);
     }
 
-    double const ln2 = std::log(2.0);
-    double const ln2_squared = ln2 * ln2;
+    double const ln2{std::log(2.0)};
+    double const ln2_squared{ln2 * ln2};
     auto const ideal_bit_array_size
             = (-static_cast<double>(expected_num_elements) * std::log(false_positive_rate)
                / ln2_squared);
@@ -86,8 +86,8 @@ BloomFilter::compute_optimal_parameters(size_t expected_num_elements, double fal
 }
 
 void BloomFilter::add(std::string_view value) {
-    uint64_t const h1 = xxhash::hash64(value, cPrimaryHashSeed);
-    uint64_t h2 = xxhash::hash64(value, cSecondaryHashSeed);
+    uint64_t const h1{xxhash::hash64(value, cPrimaryHashSeed)};
+    uint64_t h2{xxhash::hash64(value, cSecondaryHashSeed)};
     if (0 == h2) {
         h2 = 1;
     }
@@ -97,8 +97,8 @@ void BloomFilter::add(std::string_view value) {
 }
 
 bool BloomFilter::possibly_contains(std::string_view value) const {
-    uint64_t const h1 = xxhash::hash64(value, cPrimaryHashSeed);
-    uint64_t h2 = xxhash::hash64(value, cSecondaryHashSeed);
+    uint64_t const h1{xxhash::hash64(value, cPrimaryHashSeed)};
+    uint64_t h2{xxhash::hash64(value, cSecondaryHashSeed)};
     if (0 == h2) {
         h2 = 1;
     }
@@ -112,14 +112,14 @@ bool BloomFilter::possibly_contains(std::string_view value) const {
 }
 
 void BloomFilter::set_bit(size_t bit_index) {
-    size_t const byte_index = bit_index / cNumBitsInByte;
-    size_t const bit_offset = bit_index % cNumBitsInByte;
+    size_t const byte_index{bit_index / cNumBitsInByte};
+    size_t const bit_offset{bit_index % cNumBitsInByte};
     m_bit_array.data()[byte_index] |= static_cast<uint8_t>(1u << bit_offset);
 }
 
 bool BloomFilter::test_bit(size_t bit_index) const {
-    size_t const byte_index = bit_index / cNumBitsInByte;
-    size_t const bit_offset = bit_index % cNumBitsInByte;
+    size_t const byte_index{bit_index / cNumBitsInByte};
+    size_t const bit_offset{bit_index % cNumBitsInByte};
     return (m_bit_array.data()[byte_index] & static_cast<uint8_t>(1u << bit_offset)) != 0;
 }
 
@@ -134,7 +134,7 @@ void BloomFilter::write_to_file(clp::WriterInterface& writer) const {
 
 auto BloomFilter::try_read_from_file(clp::ReaderInterface& reader)
         -> ystdlib::error_handling::Result<BloomFilter> {
-    uint32_t num_hash_functions = 0;
+    uint32_t num_hash_functions{};
     if (clp::ErrorCode_Success != reader.try_read_numeric_value(num_hash_functions)) {
         return ErrorCode{ErrorCodeEnum::ReadFailure};
     }
@@ -142,23 +142,23 @@ auto BloomFilter::try_read_from_file(clp::ReaderInterface& reader)
         return ErrorCode{ErrorCodeEnum::CorruptFilterPayload};
     }
 
-    uint64_t bit_array_size_u64 = 0;
+    uint64_t bit_array_size_u64{};
     if (clp::ErrorCode_Success != reader.try_read_numeric_value(bit_array_size_u64)) {
         return ErrorCode{ErrorCodeEnum::ReadFailure};
     }
     if (bit_array_size_u64 == 0 || bit_array_size_u64 > std::numeric_limits<size_t>::max()) {
         return ErrorCode{ErrorCodeEnum::CorruptFilterPayload};
     }
-    size_t const bit_array_size = static_cast<size_t>(bit_array_size_u64);
+    size_t const bit_array_size{static_cast<size_t>(bit_array_size_u64)};
 
-    uint64_t bit_array_bytes = 0;
+    uint64_t bit_array_bytes{};
     if (clp::ErrorCode_Success != reader.try_read_numeric_value(bit_array_bytes)) {
         return ErrorCode{ErrorCodeEnum::ReadFailure};
     }
     if (bit_array_bytes > std::numeric_limits<size_t>::max()) {
         return ErrorCode{ErrorCodeEnum::CorruptFilterPayload};
     }
-    size_t const expected_bit_array_bytes = min_bytes_containing_bits(bit_array_size);
+    size_t const expected_bit_array_bytes{min_bytes_containing_bits(bit_array_size)};
     if (bit_array_bytes != expected_bit_array_bytes) {
         return ErrorCode{ErrorCodeEnum::CorruptFilterPayload};
     }
