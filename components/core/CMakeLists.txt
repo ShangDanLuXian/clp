@@ -371,6 +371,8 @@ set(SOURCE_FILES_clp_s_unitTest
     src/clp_s/FileReader.hpp
     src/clp_s/FileWriter.cpp
     src/clp_s/FileWriter.hpp
+    src/clp_s/filter/tests/test-clp_s-bloom_filter.cpp
+    src/clp_s/filter/tests/test-clp_s-xxhash.cpp
     src/clp_s/FloatFormatEncoding.cpp
     src/clp_s/FloatFormatEncoding.hpp
     src/clp_s/InputConfig.cpp
@@ -723,7 +725,6 @@ set(SOURCE_FILES_unitTest
         tests/TestOutputCleaner.hpp
         tests/test-BoundedReader.cpp
         tests/test-BufferedReader.cpp
-        tests/test-clp_s-bloom_filter.cpp
         tests/test-clp_s-delta-encode-log-order.cpp
         tests/test-clp_s-end_to_end.cpp
         tests/test-clp_s-range_index.cpp

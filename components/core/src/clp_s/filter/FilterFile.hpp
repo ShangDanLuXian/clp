@@ -4,25 +4,47 @@
 #include <cstdint>
 #include <optional>
 
-#include <clp_s/FileWriter.hpp>
+#include <clp/ReaderInterface.hpp>
+#include <clp/WriterInterface.hpp>
+
 #include "BloomFilter.hpp"
 #include "FilterConfig.hpp"
 
-namespace clp {
-class ReaderInterface;
-}  // namespace clp
-
 namespace clp_s::filter {
+/**
+ * Filter file magic bytes: "CLPF".
+ */
 constexpr char kFilterFileMagic[4] = {'C', 'L', 'P', 'F'};
 
-void write_filter_file(FileWriter& writer, FilterType type, BloomFilter const& filter);
+/**
+ * Writes the filter file payload.
+ * @param writer
+ * @param type Filter type encoded in the payload.
+ * @param filter Bloom filter payload when `type` is Bloom.
+ */
+void write_filter_file(clp::WriterInterface& writer, FilterType type, BloomFilter const& filter);
+
+/**
+ * Parsed filter file payload.
+ */
+struct ParsedFilterFile {
+    /**
+     * Parsed filter type.
+     */
+    FilterType type{FilterType::None};
+
+    /**
+     * Parsed Bloom filter payload when `type` is Bloom.
+     */
+    std::optional<BloomFilter> bloom_filter{std::nullopt};
+};
 
 /**
  * Reads a filter file payload.
- * @return Parsed filter type when the file is valid; std::nullopt for corrupt/unsupported payload.
+ * @param reader
+ * @return Parsed filter payload when valid; std::nullopt for corrupt/unsupported payload.
  */
-[[nodiscard]] std::optional<FilterType>
-read_filter_file(clp::ReaderInterface& reader, BloomFilter& out_filter);
+[[nodiscard]] std::optional<ParsedFilterFile> read_filter_file(clp::ReaderInterface& reader);
 }  // namespace clp_s::filter
 
 #endif  // CLP_S_FILTER_FILE_HPP

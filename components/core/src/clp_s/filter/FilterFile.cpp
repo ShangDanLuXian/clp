@@ -1,12 +1,12 @@
 #include "FilterFile.hpp"
 
 #include <cstring>
+#include <utility>
 
 #include <clp/ErrorCode.hpp>
-#include <clp/ReaderInterface.hpp>
 
 namespace clp_s::filter {
-void write_filter_file(FileWriter& writer, FilterType type, BloomFilter const& filter) {
+void write_filter_file(clp::WriterInterface& writer, FilterType type, BloomFilter const& filter) {
     writer.write(kFilterFileMagic, sizeof(kFilterFileMagic));
     writer.write_numeric_value<uint8_t>(static_cast<uint8_t>(type));
     if (FilterType::None != type) {
@@ -14,7 +14,7 @@ void write_filter_file(FileWriter& writer, FilterType type, BloomFilter const& f
     }
 }
 
-std::optional<FilterType> read_filter_file(clp::ReaderInterface& reader, BloomFilter& out_filter) {
+std::optional<ParsedFilterFile> read_filter_file(clp::ReaderInterface& reader) {
     char magic[sizeof(kFilterFileMagic)]{};
     if (clp::ErrorCode_Success != reader.try_read_exact_length(magic, sizeof(kFilterFileMagic))) {
         return std::nullopt;
@@ -29,19 +29,18 @@ std::optional<FilterType> read_filter_file(clp::ReaderInterface& reader, BloomFi
     }
     auto const type = static_cast<FilterType>(type_value);
     if (FilterType::None == type) {
-        out_filter = BloomFilter{};
-        return type;
+        return ParsedFilterFile{type, std::nullopt};
     }
 
     if (FilterType::Bloom != type) {
         return std::nullopt;
     }
 
-    out_filter = BloomFilter{};
-    if (false == out_filter.read_from_file(reader)) {
+    auto bloom_filter_result = BloomFilter::try_read_from_file(reader);
+    if (bloom_filter_result.has_error()) {
         return std::nullopt;
     }
 
-    return type;
+    return ParsedFilterFile{type, std::move(bloom_filter_result.value())};
 }
 }  // namespace clp_s::filter
