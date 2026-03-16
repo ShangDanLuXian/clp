@@ -323,7 +323,7 @@ if(CLP_NEED_LIBLZMA)
 endif()
 
 if(CLP_NEED_ROARING)
-    find_package(roaring 4.1.1 CONFIG REQUIRED)
+    find_package(roaring CONFIG REQUIRED)
     if(roaring_FOUND)
         message(STATUS "Found roaring ${roaring_VERSION}")
     endif()
