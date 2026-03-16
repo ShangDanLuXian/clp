@@ -196,6 +196,7 @@ function(set_clp_tests_dependencies)
         CLP_NEED_MARIADB
         CLP_NEED_MONGOCXX
         CLP_NEED_NLOHMANN_JSON
+        CLP_NEED_ROARING
         CLP_NEED_SIMDJSON
         CLP_NEED_SPDLOG
         CLP_NEED_SQLITE
@@ -526,6 +527,7 @@ function (convert_clp_dependency_properties_to_variables)
         CLP_NEED_MSGPACKCXX
         CLP_NEED_NLOHMANN_JSON
         CLP_NEED_OPENSSL
+        CLP_NEED_ROARING
         CLP_NEED_SIMDJSON
         CLP_NEED_SPDLOG
         CLP_NEED_SQLITE

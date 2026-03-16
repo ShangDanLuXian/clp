@@ -80,6 +80,7 @@ tasks:
       - task: "mongocxx"
       - task: "msgpack-cxx"
       - task: "nlohmann_json"
+      - task: "roaring"
       - task: "simdjson"
       - task: "spdlog"
       - task: "sqlite3"
@@ -575,6 +576,22 @@ tasks:
           TARBALL_SHA256: "aae608dfe8213dfd05d909a57718ef82f30722c392344583d3f39050c7f29a80"
           TARBALL_URL: "https://github.com/Cyan4973/xxHash/archive/refs/tags/v0.8.3.tar.gz"
           CMAKE_SOURCE_DIR: "cmake_unofficial"
+
+  roaring:
+    internal: true
+    vars:
+      LIB_NAME: "roaring"
+    run: "once"
+    cmds:
+      - task: "utils:install-remote-cmake-lib"
+        vars:
+          CMAKE_GEN_ARGS:
+            - "-DENABLE_ROARING_TESTS=OFF"
+            - "-DBUILD_SHARED_LIBS=OFF"
+            - "-DCMAKE_INSTALL_PREFIX={{.G_DEPS_CPP_DIR}}/{{.LIB_NAME}}-install"
+          LIB_NAME: "{{.LIB_NAME}}"
+          TARBALL_SHA256: "ceea92135f55e2ec83c1efc3754db485e4d5054f8f84d210b6e42066da422b03"
+          TARBALL_URL: "https://github.com/RoaringBitmap/CRoaring/archive/refs/tags/v4.1.1.tar.gz"
 
   yaml-cpp:
     internal: true

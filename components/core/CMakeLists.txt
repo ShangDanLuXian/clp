@@ -322,6 +322,13 @@ if(CLP_NEED_LIBLZMA)
     message(STATUS "Found LibLZMA ${LibLZMA_VERSION}")
 endif()
 
+if(CLP_NEED_ROARING)
+    find_package(roaring 4.1.1 CONFIG REQUIRED)
+    if(roaring_FOUND)
+        message(STATUS "Found roaring ${roaring_VERSION}")
+    endif()
+endif()
+
 # sqlite dependencies
 if(CLP_NEED_SQLITE)
     set(sqlite_DYNAMIC_LIBS "dl;m;pthread")
@@ -429,6 +436,10 @@ set(SOURCE_FILES_clp_s_unitTest
     src/clp_s/ZstdCompressor.hpp
     src/clp_s/ZstdDecompressor.cpp
     src/clp_s/ZstdDecompressor.hpp
+    )
+
+set(SOURCE_FILES_clp_s_filter_benchmark
+    src/clp_s/filter/tests/benchmark_clp_s_bloom_filter_roaringbitmap.cpp
     )
 
 set(SOURCE_FILES_reducer_unitTest
@@ -813,5 +824,20 @@ if(CLP_ENABLE_TESTS)
             )
     target_compile_definitions(unitTest
             PRIVATE CLP_ENABLE_TESTS
+            )
+
+    add_executable(
+            clp_s_filter_roaringbitmap_benchmark
+            ${SOURCE_FILES_clp_s_filter_benchmark}
+            )
+    target_link_libraries(
+            clp_s_filter_roaringbitmap_benchmark
+            PRIVATE
+            clp_s::filter
+            roaring::roaring
+            )
+    target_compile_features(
+            clp_s_filter_roaringbitmap_benchmark
+            PRIVATE cxx_std_20
             )
 endif()
