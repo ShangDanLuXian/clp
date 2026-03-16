@@ -590,7 +590,7 @@ tasks:
             - "-DBUILD_SHARED_LIBS=OFF"
             - "-DCMAKE_INSTALL_PREFIX={{.G_DEPS_CPP_DIR}}/{{.LIB_NAME}}-install"
           LIB_NAME: "{{.LIB_NAME}}"
-          TARBALL_SHA256: "ceea92135f55e2ec83c1efc3754db485e4d5054f8f84d210b6e42066da422b03"
+          TARBALL_SHA256: "42804cc2bb5c9279ec4fcaa56d2d6b389da934634abcce8dbc4e4c1d60e1468d"
           TARBALL_URL: "https://github.com/RoaringBitmap/CRoaring/archive/refs/tags/v4.1.1.tar.gz"
 
   yaml-cpp:
