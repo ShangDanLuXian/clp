@@ -232,6 +232,30 @@ auto print_duration(
     std::cout << std::left << std::setw(34) << label << duration_ms << " ms"
               << "  (" << per_operation_ns << " ns/op)" << '\n';
 }
+
+auto print_size_comparison(
+        std::string_view label,
+        size_t baseline_size_bytes,
+        size_t compared_size_bytes
+) -> void {
+    ptrdiff_t const delta_size_bytes{
+            static_cast<ptrdiff_t>(compared_size_bytes)
+            - static_cast<ptrdiff_t>(baseline_size_bytes)
+    };
+    double const size_ratio{
+            0 == baseline_size_bytes
+                    ? 0.0
+                    : static_cast<double>(compared_size_bytes)
+                              / static_cast<double>(baseline_size_bytes)
+    };
+    double const relative_change_pct{
+            0 == baseline_size_bytes ? 0.0 : (size_ratio - 1.0) * 100.0
+    };
+
+    std::cout << std::left << std::setw(34) << label << compared_size_bytes << " bytes"
+              << "  (delta=" << delta_size_bytes << " bytes"
+              << ", change=" << relative_change_pct << "%)" << '\n';
+}
 }  // namespace
 
 auto main(int argc, char const* const* argv) -> int {
@@ -358,6 +382,16 @@ auto main(int argc, char const* const* argv) -> int {
               << '\n';
     std::cout << '\n';
 
+    print_size_comparison(
+            "Roaring bitmap size vs Bloom",
+            bloom_bitmap_size_bytes,
+            roaring_bitmap_size_bytes
+    );
+    print_size_comparison(
+            "Roaring payload size vs Bloom",
+            bloom_payload_size_bytes,
+            roaring_payload_size_bytes
+    );
     print_duration("Bloom build", bloom_build_time, config.num_insertions);
     print_duration("Roaring build", roaring_build_time, config.num_insertions);
     print_duration("Bloom positive queries", bloom_positive_query_time, config.num_insertions);
