@@ -48,8 +48,16 @@ bool Output::filter() {
     }
 
     for (auto schema_id : m_archive_reader->get_schema_ids()) {
+        if (nullptr != m_telemetry) {
+            m_telemetry->total_archive_records
+                    += m_archive_reader->get_schema_num_messages(schema_id);
+        }
         if (m_match->schema_matched(schema_id)) {
             matched_schemas.push_back(schema_id);
+            if (nullptr != m_telemetry) {
+                m_telemetry->candidate_records_after_schema_matching
+                        += m_archive_reader->get_schema_num_messages(schema_id);
+            }
             if (m_match->has_array(schema_id)) {
                 has_array = true;
             }
@@ -62,6 +70,10 @@ bool Output::filter() {
     // Skip decompressing archive if it contains no
     // relevant schemas
     if (matched_schemas.empty()) {
+        if (nullptr != m_telemetry) {
+            m_telemetry->terminated_after_schema_matching = true;
+            m_telemetry->termination_stage = "schema_matching";
+        }
         return true;
     }
 
@@ -70,6 +82,10 @@ bool Output::filter() {
     // timestamp column after column resolution.
     EvaluateTimestampIndex timestamp_index(m_archive_reader->get_timestamp_dictionary());
     if (EvaluatedValue::False == timestamp_index.run(m_expr)) {
+        if (nullptr != m_telemetry) {
+            m_telemetry->terminated_after_time_range_matching = true;
+            m_telemetry->termination_stage = "time_range_matching_after_column_resolution";
+        }
         m_archive_reader->close();
         return true;
     }
@@ -90,10 +106,12 @@ bool Output::filter() {
 
     std::string message;
     auto const archive_id = m_archive_reader->get_archive_id();
+    bool searched_schema{false};
     for (int32_t schema_id : matched_schemas) {
         if (EvaluatedValue::False == m_query_runner.schema_init(schema_id)) {
             continue;
         }
+        searched_schema = true;
 
         auto& reader = m_archive_reader->read_schema_table(
                 schema_id,
@@ -112,10 +130,16 @@ bool Output::filter() {
                     m_query_runner
             ))
             {
+                if (nullptr != m_telemetry) {
+                    ++m_telemetry->records_matching_query;
+                }
                 m_output_handler->write(message, timestamp, archive_id, log_event_idx);
             }
         } else {
             while (reader.get_next_message(message, m_query_runner)) {
+                if (nullptr != m_telemetry) {
+                    ++m_telemetry->records_matching_query;
+                }
                 m_output_handler->write(message);
             }
         }
@@ -126,6 +150,15 @@ bool Output::filter() {
                     clp::enum_to_underlying_type(ecode)
             );
             return false;
+        }
+    }
+    if (nullptr != m_telemetry) {
+        if (searched_schema) {
+            m_telemetry->terminated_after_ert_scan = true;
+            m_telemetry->termination_stage = "ert_scan";
+        } else {
+            m_telemetry->terminated_after_dictionary_search = true;
+            m_telemetry->termination_stage = "dictionary_search";
         }
     }
     auto ecode = m_output_handler->finish();
