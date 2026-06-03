@@ -35,12 +35,62 @@ namespace {
 constexpr char cTracerName[]{"clp_s.search"};
 constexpr char cSearchArchiveSpanName[]{"clp_s.search.archive"};
 
-[[nodiscard]] auto to_int64_attribute(uint64_t value) -> int64_t {
+/**
+ * @param value
+ * @return `value` clamped to the maximum `int64_t`, since OpenTelemetry span attributes are signed.
+ */
+[[nodiscard]] auto to_int64_attribute(uint64_t value) -> int64_t;
+
+/**
+ * @param column
+ * @return Whether any descriptor in the column is a wildcard.
+ */
+[[nodiscard]] auto descriptor_has_wildcard(ColumnDescriptor const& column) -> bool;
+
+/**
+ * Increments the column-shape counter in `telemetry` corresponding to `column`'s wildcard usage.
+ * @param telemetry
+ * @param column
+ */
+auto add_column_shape(SearchTelemetry& telemetry, ColumnDescriptor const& column) -> void;
+
+/**
+ * Increments the predicate-type counters in `telemetry` for `filter`'s operation and operand type.
+ * @param telemetry
+ * @param filter
+ */
+auto add_predicate_type(SearchTelemetry& telemetry, FilterExpr const& filter) -> void;
+
+/**
+ * Recursively walks `expr`, accumulating query-shape metrics (column shapes, predicate types,
+ * predicate count, and whether an OR clause is present) into `telemetry`.
+ * @param telemetry
+ * @param expr
+ */
+auto collect_query_shape_metrics(
+        SearchTelemetry& telemetry,
+        std::shared_ptr<Expression> const& expr
+) -> void;
+
+/**
+ * Sets a `uint64_t`-valued attribute on `span`, clamping the value to the signed range expected by
+ * OpenTelemetry span attributes.
+ * @param span
+ * @param key
+ * @param value
+ */
+auto set_uint64_attribute(
+        opentelemetry::nostd::shared_ptr<opentelemetry::trace::Span> const& span,
+        opentelemetry::nostd::string_view key,
+        uint64_t value
+) -> void;
+
+auto to_int64_attribute(uint64_t value) -> int64_t {
     constexpr auto cMaxInt64{static_cast<uint64_t>(std::numeric_limits<int64_t>::max())};
     return value > cMaxInt64 ? std::numeric_limits<int64_t>::max() : static_cast<int64_t>(value);
 }
 
-[[nodiscard]] auto descriptor_has_wildcard(ColumnDescriptor const& column) -> bool {
+auto descriptor_has_wildcard(ColumnDescriptor const& column) -> bool {
     return std::ranges::any_of(
             column.descriptor_begin(),
             column.descriptor_end(),
@@ -317,11 +367,6 @@ private:
 SearchTelemetrySpan::SearchTelemetrySpan() : m_impl{std::make_unique<Impl>()} {}
 
 SearchTelemetrySpan::~SearchTelemetrySpan() = default;
-
-SearchTelemetrySpan::SearchTelemetrySpan(SearchTelemetrySpan&&) noexcept = default;
-
-auto SearchTelemetrySpan::operator=(SearchTelemetrySpan&&) noexcept -> SearchTelemetrySpan&
-        = default;
 
 auto SearchTelemetrySpan::set_error(std::string_view message) -> void {
     m_impl->set_error(message);

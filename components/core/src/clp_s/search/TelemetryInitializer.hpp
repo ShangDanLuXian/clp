@@ -24,13 +24,17 @@ namespace clp_s::search {
  */
 class TelemetryContext {
 public:
+    // Constructors
     TelemetryContext();
-    ~TelemetryContext();
 
+    // Disable copy/move constructors and assignment operators
     TelemetryContext(TelemetryContext const&) = delete;
-    auto operator=(TelemetryContext const&) -> TelemetryContext& = delete;
     TelemetryContext(TelemetryContext&&) = delete;
+    auto operator=(TelemetryContext const&) -> TelemetryContext& = delete;
     auto operator=(TelemetryContext&&) -> TelemetryContext& = delete;
+
+    // Destructor
+    ~TelemetryContext();
 
 private:
     class Impl;

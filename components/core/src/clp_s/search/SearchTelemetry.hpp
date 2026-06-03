@@ -58,15 +58,19 @@ struct SearchTelemetry {
 
 class SearchTelemetrySpan {
 public:
+    // Constructors
     SearchTelemetrySpan();
+
+    // Disable copy/move constructors and assignment operators
+    SearchTelemetrySpan(SearchTelemetrySpan const&) = delete;
+    SearchTelemetrySpan(SearchTelemetrySpan&&) = delete;
+    auto operator=(SearchTelemetrySpan const&) -> SearchTelemetrySpan& = delete;
+    auto operator=(SearchTelemetrySpan&&) -> SearchTelemetrySpan& = delete;
+
+    // Destructor
     ~SearchTelemetrySpan();
 
-    SearchTelemetrySpan(SearchTelemetrySpan const&) = delete;
-    auto operator=(SearchTelemetrySpan const&) -> SearchTelemetrySpan& = delete;
-
-    SearchTelemetrySpan(SearchTelemetrySpan&&) noexcept;
-    auto operator=(SearchTelemetrySpan&&) noexcept -> SearchTelemetrySpan&;
-
+    // Methods
     auto set_error(std::string_view message) -> void;
     auto set_telemetry(SearchTelemetry const& telemetry) -> void;
 
