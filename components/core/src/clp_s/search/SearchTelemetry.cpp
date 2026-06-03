@@ -105,8 +105,10 @@ auto add_predicate_type(SearchTelemetry& telemetry, FilterExpr const& filter) ->
     static_cast<void>(operand->as_bool(bool_value, op));
 }
 
-auto collect_query_shape_metrics(SearchTelemetry& telemetry, std::shared_ptr<Expression> const& expr)
-        -> void {
+auto collect_query_shape_metrics(
+        SearchTelemetry& telemetry,
+        std::shared_ptr<Expression> const& expr
+) -> void {
     if (nullptr == expr) {
         return;
     }
@@ -292,6 +294,19 @@ public:
                         telemetry.termination_stage.size()
                 }
         );
+
+        // Emit per-schema counters as span events so they can be aggregated downstream while
+        // remaining inspectable for individual matched schemas.
+        for (auto const& schema : telemetry.per_schema_metrics) {
+            m_span->AddEvent(
+                    "clp.search.schema_result",
+                    {{"clp.search.schema_id", static_cast<int64_t>(schema.schema_id)},
+                     {"clp.search.schema.candidate_records",
+                      to_int64_attribute(schema.candidate_records)},
+                     {"clp.search.schema.matched_records",
+                      to_int64_attribute(schema.matched_records)}}
+            );
+        }
     }
 
 private:

@@ -120,6 +120,7 @@ bool Output::filter() {
         );
         reader.initialize_filter(m_query_runner);
 
+        uint64_t schema_matched_records{};
         if (m_output_handler->should_output_metadata()) {
             epochtime_t timestamp{};
             int64_t log_event_idx{};
@@ -130,18 +131,22 @@ bool Output::filter() {
                     m_query_runner
             ))
             {
-                if (nullptr != m_telemetry) {
-                    ++m_telemetry->records_matching_query;
-                }
+                ++schema_matched_records;
                 m_output_handler->write(message, timestamp, archive_id, log_event_idx);
             }
         } else {
             while (reader.get_next_message(message, m_query_runner)) {
-                if (nullptr != m_telemetry) {
-                    ++m_telemetry->records_matching_query;
-                }
+                ++schema_matched_records;
                 m_output_handler->write(message);
             }
+        }
+        if (nullptr != m_telemetry) {
+            m_telemetry->records_matching_query += schema_matched_records;
+            m_telemetry->per_schema_metrics.push_back(
+                    {schema_id,
+                     m_archive_reader->get_schema_num_messages(schema_id),
+                     schema_matched_records}
+            );
         }
         auto ecode = m_output_handler->flush();
         if (ErrorCode::ErrorCodeSuccess != ecode) {

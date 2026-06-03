@@ -211,7 +211,10 @@ if(CLP_NEED_NLOHMANN_JSON)
 endif()
 
 if(CLP_NEED_OPENTELEMETRY_CPP)
-    find_package(opentelemetry-cpp 1.27.0 CONFIG REQUIRED COMPONENTS api)
+    # NOTE: We don't restrict the discovery to specific `COMPONENTS` because the OTLP HTTP exporter
+    # and trace SDK targets are required in addition to the API, and the package config exports all
+    # built targets regardless.
+    find_package(opentelemetry-cpp 1.27.0 CONFIG REQUIRED)
     if(opentelemetry-cpp_FOUND)
         message(STATUS "Found opentelemetry-cpp ${opentelemetry-cpp_VERSION}")
     endif()

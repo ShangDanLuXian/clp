@@ -41,6 +41,7 @@
 #include "search/Projection.hpp"
 #include "search/SchemaMatch.hpp"
 #include "search/SearchTelemetry.hpp"
+#include "search/TelemetryInitializer.hpp"
 #include "SingleFileArchiveDefs.hpp"
 
 using namespace clp_s::search;
@@ -426,6 +427,11 @@ int main(int argc, char const* argv[]) {
             return 1;
         }
     } else {
+        // Install the OpenTelemetry tracer provider for the duration of the search command. Spans
+        // emitted while searching each archive are flushed and the provider is shut down when this
+        // guard goes out of scope.
+        TelemetryContext const telemetry_context;
+
         auto const& query = command_line_arguments.get_query();
         auto query_stream = std::istringstream(query);
         auto expr = kql::parse_kql_expression(query_stream);

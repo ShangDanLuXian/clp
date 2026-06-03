@@ -5,12 +5,21 @@
 #include <memory>
 #include <optional>
 #include <string_view>
+#include <vector>
 
 #include <clp_s/Defs.hpp>
 #include <clp_s/search/ast/Expression.hpp>
 
 namespace clp_s::search {
 struct SearchTelemetry {
+    // Per-schema counters recorded for each schema that survives schema matching. These are emitted
+    // as span events so they can be aggregated downstream while still being inspectable per schema.
+    struct SchemaTelemetry {
+        int32_t schema_id{};
+        uint64_t candidate_records{};
+        uint64_t matched_records{};
+    };
+
     struct ColumnShapeMetrics {
         uint64_t pure_wildcard{};
         uint64_t some_wildcard{};
@@ -37,6 +46,7 @@ struct SearchTelemetry {
     uint64_t total_archive_records{};
     uint64_t candidate_records_after_schema_matching{};
     uint64_t records_matching_query{};
+    std::vector<SchemaTelemetry> per_schema_metrics;
 
     bool terminated_after_time_range_matching{};
     bool terminated_after_schema_matching{};
