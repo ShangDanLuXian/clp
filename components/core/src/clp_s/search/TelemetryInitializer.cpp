@@ -40,7 +40,7 @@ namespace {
 constexpr std::array<std::string_view, 4> cTruthyEnvValues{"1", "true", "yes", "y"};
 
 constexpr char cServiceNameKey[]{"service.name"};
-constexpr char cDefaultServiceName[]{"clp-s"};
+constexpr char cDefaultServiceName[]{"clp-search"};
 constexpr char cTracesPath[]{"/v1/traces"};
 
 // Bounds on how long the destructor blocks while draining buffered spans on exit. Typed as
@@ -91,8 +91,8 @@ constexpr std::chrono::seconds cShutdownTimeout{5};
 [[nodiscard]] auto resolve_clp_endpoint() -> std::optional<std::string>;
 
 /**
- * @return A resource describing this process: a default `service.name` of `clp-s` (used only when
- * `OTEL_SERVICE_NAME` is unset) merged with the attributes detected from the environment.
+ * @return A resource describing this process: a default `service.name` of `clp-search` (used only
+ * when `OTEL_SERVICE_NAME` is unset) merged with the attributes detected from the environment.
  */
 [[nodiscard]] auto make_resource() -> resource::Resource;
 

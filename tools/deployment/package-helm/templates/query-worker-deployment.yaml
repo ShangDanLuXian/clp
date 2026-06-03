@@ -29,6 +29,9 @@ spec:
           image: "{{ include "clp.image.ref" . }}"
           imagePullPolicy: "{{ .Values.image.clpPackage.pullPolicy }}"
           env:
+            {{- include "clp.telemetryEnv" . | nindent 12 }}
+            - name: "OTEL_SERVICE_NAME"
+              value: "clp-search"
             - {{- include "clp.celeryBrokerUrlEnvVar" . | nindent 14 }}
             - {{- include "clp.celeryResultBackendEnvVar" (dict
                 "root" .
