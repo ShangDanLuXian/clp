@@ -40,6 +40,10 @@ spec:
           volumeMounts:
             - name: "otel-collector-config"
               mountPath: "/etc/otelcol-contrib"
+            # Destination for the `file` traces exporter (clp-s dogfooding). Retrieve with
+            # `kubectl cp <pod>:/var/log/otel-collector/traces.jsonl ...`.
+            - name: "otel-collector-traces"
+              mountPath: "/var/log/otel-collector"
           env:
             - name: "OTEL_RESOURCE_ATTRIBUTES"
               value: {{ include "clp.resourceAttributes" . | quote }}
@@ -60,4 +64,6 @@ spec:
             items:
               - key: "otel-collector-config.yaml"
                 path: "config.yaml"
+        - name: "otel-collector-traces"
+          emptyDir: {}
 {{- end }}

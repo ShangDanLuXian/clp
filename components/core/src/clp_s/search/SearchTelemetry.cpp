@@ -1,7 +1,10 @@
 #include "SearchTelemetry.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cctype>
 #include <cstdint>
+#include <cstdlib>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -34,6 +37,42 @@ namespace clp_s::search {
 namespace {
 constexpr char cTracerName[]{"clp_s.search"};
 constexpr char cSearchArchiveSpanName[]{"clp_s.search.archive"};
+
+// Values (case-insensitive) treated as "true" for CLP's boolean environment variables.
+constexpr std::array<std::string_view, 4> cTruthyEnvValues{"1", "true", "yes", "y"};
+
+/**
+ * @param name
+ * @return Whether the given environment variable is set to a truthy value (one of
+ * `cTruthyEnvValues`).
+ */
+[[nodiscard]] auto is_env_truthy(char const* name) -> bool;
+
+/**
+ * Computes the 64-bit FNV-1a hash of `data`. Used as a stable, non-reversible fingerprint to group
+ * identical queries without exposing their content.
+ * @param data
+ * @return The hash.
+ */
+[[nodiscard]] auto fnv1a_64(std::string_view data) -> uint64_t;
+
+/**
+ * @param value
+ * @return `value` as a zero-padded 16-character lowercase hex string.
+ */
+[[nodiscard]] auto to_hex64(uint64_t value) -> std::string;
+
+/**
+ * Sets a string-valued attribute on `span`.
+ * @param span
+ * @param key
+ * @param value
+ */
+auto set_string_attribute(
+        opentelemetry::nostd::shared_ptr<opentelemetry::trace::Span> const& span,
+        opentelemetry::nostd::string_view key,
+        std::string_view value
+) -> void;
 
 /**
  * @param value
@@ -84,6 +123,48 @@ auto set_uint64_attribute(
         opentelemetry::nostd::string_view key,
         uint64_t value
 ) -> void;
+
+auto is_env_truthy(char const* name) -> bool {
+    char const* const raw{std::getenv(name)};
+    if (nullptr == raw) {
+        return false;
+    }
+    std::string value{raw};
+    std::ranges::transform(value, value.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return std::ranges::find(cTruthyEnvValues, value) != cTruthyEnvValues.end();
+}
+
+auto fnv1a_64(std::string_view data) -> uint64_t {
+    constexpr uint64_t cOffsetBasis{14695981039346656037ULL};
+    constexpr uint64_t cPrime{1099511628211ULL};
+    uint64_t hash{cOffsetBasis};
+    for (auto const c : data) {
+        hash ^= static_cast<uint64_t>(static_cast<unsigned char>(c));
+        hash *= cPrime;
+    }
+    return hash;
+}
+
+auto to_hex64(uint64_t value) -> std::string {
+    constexpr char cHexDigits[]{"0123456789abcdef"};
+    constexpr int cNumHexDigits{16};
+    std::string result(cNumHexDigits, '0');
+    for (int i{cNumHexDigits - 1}; i >= 0; --i) {
+        result[static_cast<size_t>(i)] = cHexDigits[value & 0xFU];
+        value >>= 4U;
+    }
+    return result;
+}
+
+auto set_string_attribute(
+        opentelemetry::nostd::shared_ptr<opentelemetry::trace::Span> const& span,
+        opentelemetry::nostd::string_view key,
+        std::string_view value
+) -> void {
+    span->SetAttribute(key, opentelemetry::nostd::string_view{value.data(), value.size()});
+}
 
 auto to_int64_attribute(uint64_t value) -> int64_t {
     constexpr auto cMaxInt64{static_cast<uint64_t>(std::numeric_limits<int64_t>::max())};
@@ -218,6 +299,22 @@ public:
     }
 
     auto set_telemetry(SearchTelemetry const& telemetry) -> void {
+        if (false == telemetry.archive_id.empty()) {
+            set_string_attribute(m_span, "clp.search.archive_id", telemetry.archive_id);
+        }
+        if (false == telemetry.query_id.empty()) {
+            set_string_attribute(m_span, "clp.search.query_id", telemetry.query_id);
+        }
+        if (false == telemetry.task_id.empty()) {
+            set_string_attribute(m_span, "clp.search.task_id", telemetry.task_id);
+        }
+        if (false == telemetry.query_hash.empty()) {
+            set_string_attribute(m_span, "clp.search.query_hash", telemetry.query_hash);
+        }
+        if (telemetry.query.has_value()) {
+            set_string_attribute(m_span, "clp.search.query", *telemetry.query);
+        }
+
         set_uint64_attribute(
                 m_span,
                 "clp.query_shape.column_types.pure_wildcard",
@@ -390,5 +487,23 @@ auto collect_query_shape_metrics(
         }
     }
     return telemetry;
+}
+
+auto populate_query_context(
+        SearchTelemetry& telemetry,
+        std::string_view query,
+        std::string_view archive_id
+) -> void {
+    telemetry.archive_id = std::string{archive_id};
+    telemetry.query_hash = to_hex64(fnv1a_64(query));
+    if (char const* const query_id{std::getenv("CLP_QUERY_ID")}; nullptr != query_id) {
+        telemetry.query_id = query_id;
+    }
+    if (char const* const task_id{std::getenv("CLP_TASK_ID")}; nullptr != task_id) {
+        telemetry.task_id = task_id;
+    }
+    if (is_env_truthy("CLP_TELEMETRY_INCLUDE_QUERY")) {
+        telemetry.query = std::string{query};
+    }
 }
 }  // namespace clp_s::search

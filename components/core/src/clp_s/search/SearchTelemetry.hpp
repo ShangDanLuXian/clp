@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -36,6 +37,16 @@ struct SearchTelemetry {
         uint64_t range{};
         uint64_t exists{};
     };
+
+    // Query identity/context, populated by `populate_query_context`. `query_id`/`task_id` come from
+    // the scheduler (the same query fans out to one `clp-s` process per archive, so they tie those
+    // per-archive spans back to one logical search). `query_hash` always identifies the query
+    // content without exposing it; `query` holds the raw text only when explicitly opted in.
+    std::string archive_id;
+    std::string query_id;
+    std::string task_id;
+    std::string query_hash;
+    std::optional<std::string> query;
 
     ColumnShapeMetrics column_shape_metrics;
     PredicateTypeMetrics predicate_type_metrics;
@@ -84,6 +95,20 @@ private:
         std::optional<epochtime_t> search_begin_ts,
         std::optional<epochtime_t> search_end_ts
 ) -> SearchTelemetry;
+
+/**
+ * Populates the query identity/context fields of `telemetry`: the archive id, a non-reversible hash
+ * of the query, and (from the environment) the scheduler's `query_id`/`task_id`. The raw query text
+ * is included only when `CLP_TELEMETRY_INCLUDE_QUERY` is set to a truthy value.
+ * @param telemetry
+ * @param query The raw query string.
+ * @param archive_id The id of the archive being searched.
+ */
+auto populate_query_context(
+        SearchTelemetry& telemetry,
+        std::string_view query,
+        std::string_view archive_id
+) -> void;
 }  // namespace clp_s::search
 
 #endif  // CLP_S_SEARCH_SEARCHTELEMETRY_HPP

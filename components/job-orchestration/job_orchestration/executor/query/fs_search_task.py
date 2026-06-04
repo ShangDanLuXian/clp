@@ -262,6 +262,13 @@ def search(
             start_time=start_time,
         )
 
+    # Propagate the job/task ids so the core binary's telemetry can tie each per-archive span back
+    # to the originating search. A `None` env means "inherit this process's environment", so
+    # materialize it before adding our entries to preserve that behaviour.
+    core_clp_env_vars = dict(os.environ) if core_clp_env_vars is None else core_clp_env_vars
+    core_clp_env_vars["CLP_QUERY_ID"] = str(job_id)
+    core_clp_env_vars["CLP_TASK_ID"] = str(task_id)
+
     task_results, _ = run_query_task(
         sql_adapter=sql_adapter,
         logger=logger,

@@ -476,11 +476,15 @@ data:
         override: false
 
     exporters:
-      # NOTE: Traces (emitted by clp-s search) are sent to the `debug` exporter so they're visible
-      # in the collector's logs. Switch the traces pipeline below to `otlp_http` to forward them to
-      # the telemetry endpoint instead.
+      # NOTE: Traces (emitted by clp-s search) are sent to:
+      # - `debug`: prints spans to the collector's logs.
+      # - `file`: writes spans as OTLP-JSON, which can be compressed and searched with clp-s itself
+      #   (dogfooding). See docs/src/user-docs/reference-telemetry.md.
+      # Switch the traces pipeline below to `otlp_http` to forward traces to the telemetry endpoint.
       debug:
         verbosity: "detailed"
+      file:
+        path: "/var/log/otel-collector/traces.jsonl"
       otlp_http:
         endpoint: {{ .Values.clpConfig.telemetry.endpoint | quote }}
 
@@ -494,7 +498,7 @@ data:
         traces:
           receivers: ["otlp"]
           processors: ["resourcedetection", "batch"]
-          exporters: ["debug"]
+          exporters: ["debug", "file"]
         logs:
           receivers: ["otlp"]
           processors: ["resourcedetection", "batch"]

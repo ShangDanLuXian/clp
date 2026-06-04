@@ -143,6 +143,7 @@ bool search_archive(
             command_line_arguments.get_search_begin_ts(),
             command_line_arguments.get_search_end_ts()
     )};
+    populate_query_context(telemetry, query, archive_reader->get_archive_id());
     SearchTelemetrySpan telemetry_span;
 
     auto timestamp_dict = archive_reader->get_timestamp_dictionary();

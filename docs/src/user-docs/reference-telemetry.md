@@ -89,3 +89,43 @@ to disable telemetry for your entire organization.
 | not set | `false`     | —                | **yes**         | **No** — requests fail silently at the network level                   |
 | `true`  | `true`      | —                | no              | **No** — both agree                                                    |
 | not set | not set     | Y                | **yes**         | **No** — network blocking is independent of software settings          |
+
+## Search query traces
+
+`clp-s` search emits an OpenTelemetry **trace span** (`clp_s.search.archive`, instrumentation scope
+`clp_s.search`, `service.name=clp-search`) for each archive searched. Because a single search fans
+out to one `clp-s` process per archive, each span carries the scheduler's `clp.search.query_id` and
+`clp.search.task_id` so the per-archive spans can be grouped and aggregated downstream. Each span
+also includes:
+
+- **Query shape** (no content): column-type and predicate-type counts, number of predicates, whether
+  an OR clause is present, and the search time range.
+- **Selectivity & counts**: total archive records, candidate records after schema matching, records
+  matching the query, and the derived selectivities.
+- **Termination stage**: which stage the search stopped at, plus per-stage booleans.
+- **Per-schema events** (`clp.search.schema_result`): candidate/matched record counts per schema.
+- **`clp.search.archive_id`** and **`clp.search.query_hash`** — a non-reversible fingerprint that
+  lets identical queries be grouped without exposing their content.
+
+Consistent with the policy above, the **raw query string is not collected**. For local debugging you
+can opt in by setting `CLP_TELEMETRY_INCLUDE_QUERY` to a truthy value (`1`, `true`, `yes`, `y`) on
+the query worker, which adds a `clp.search.query` attribute.
+
+## Inspecting traces locally (and dogfooding with clp-s)
+
+The bundled collector's traces pipeline ships with two exporters:
+
+- `debug` — prints spans to the collector's logs (`docker logs <otel-collector>` or
+  `kubectl logs -l app.kubernetes.io/component=otel-collector`).
+- `file` — writes spans as OTLP-JSON, which you can compress and search with clp-s itself:
+  - Docker Compose: `<logs-dir>/otel-collector-traces.jsonl` on the host.
+  - Kubernetes: `/var/log/otel-collector/traces.jsonl` in the collector pod
+    (`kubectl cp <pod>:/var/log/otel-collector/traces.jsonl ./traces.jsonl`).
+
+  ```bash
+  clp-s c ./telemetry-archives ./otel-collector-traces.jsonl
+  clp-s s ./telemetry-archives '*: "clp_s.search.archive"'
+  ```
+
+To forward traces to your telemetry endpoint instead of inspecting them locally, switch the traces
+pipeline's exporter to `otlp_http` in the collector config.
