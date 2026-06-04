@@ -2,6 +2,7 @@
 #include <exception>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -42,6 +43,7 @@
 #include "search/Projection.hpp"
 #include "search/SchemaMatch.hpp"
 #include "search/SearchTelemetry.hpp"
+#include "search/TelemetryContext.hpp"
 #include "SingleFileArchiveDefs.hpp"
 
 using namespace clp_s::search;
@@ -420,6 +422,11 @@ int main(int argc, char const* argv[]) {
             return 1;
         }
     } else {
+        std::optional<TelemetryContext> telemetry_context;
+        if (command_line_arguments.get_enable_telemetry()) {
+            telemetry_context.emplace();
+        }
+
         auto const& query = command_line_arguments.get_query();
         auto query_stream = std::istringstream(query);
         auto expr = kql::parse_kql_expression(query_stream);
