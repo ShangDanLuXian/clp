@@ -35,6 +35,11 @@ processors:
     override: false
 
 exporters:
+  # NOTE: Traces (emitted by clp-s search) are sent to the `debug` exporter so they're visible in
+  # the collector's logs. Switch the traces pipeline below to `otlp_http` to forward them to
+  # `CLP_TELEMETRY_ENDPOINT` instead.
+  debug:
+    verbosity: "detailed"
   otlp_http:
     endpoint: "${env:CLP_TELEMETRY_ENDPOINT}"
 
@@ -48,7 +53,7 @@ service:
     traces:
       receivers: ["otlp"]
       processors: ["resourcedetection", "batch"]
-      exporters: ["otlp_http"]
+      exporters: ["debug"]
     logs:
       receivers: ["otlp"]
       processors: ["resourcedetection", "batch"]
