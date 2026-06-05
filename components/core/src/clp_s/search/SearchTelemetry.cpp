@@ -303,6 +303,15 @@ public:
                   << " pure_wildcard=" << telemetry.column_shape_metrics.pure_wildcard
                   << " some_wildcard=" << telemetry.column_shape_metrics.some_wildcard
                   << " no_wildcard=" << telemetry.column_shape_metrics.no_wildcard
+                  << " pred_string=" << telemetry.predicate_type_metrics.string
+                  << " pred_string_with_wildcard="
+                  << telemetry.predicate_type_metrics.string_with_wildcard
+                  << " pred_int=" << telemetry.predicate_type_metrics.integer
+                  << " pred_float=" << telemetry.predicate_type_metrics.floating_point
+                  << " pred_null=" << telemetry.predicate_type_metrics.null
+                  << " pred_exact_match=" << telemetry.predicate_type_metrics.exact_match
+                  << " pred_range=" << telemetry.predicate_type_metrics.range
+                  << " pred_exists=" << telemetry.predicate_type_metrics.exists
                   << " total=" << telemetry.total_archive_records
                   << " candidates=" << telemetry.candidate_records_after_schema_matching
                   << " matched=" << telemetry.records_matching_query
