@@ -291,49 +291,6 @@ public:
     }
 
     auto set_telemetry(SearchTelemetry const& telemetry) -> void {
-        // DEBUG (testing branch only, not for merge): dump the collected telemetry to stderr so it's
-        // visible on the API-only build, which doesn't export anything.
-        std::cerr << "[clp-s telemetry]"
-                  << " archive_id=" << telemetry.archive_id
-                  << " query_hash=" << telemetry.query_hash
-                  << " query_id=" << telemetry.query_id
-                  << " task_id=" << telemetry.task_id
-                  << " num_predicates=" << telemetry.num_predicates
-                  << " contains_or=" << telemetry.contains_or_clause
-                  << " pure_wildcard=" << telemetry.column_shape_metrics.pure_wildcard
-                  << " some_wildcard=" << telemetry.column_shape_metrics.some_wildcard
-                  << " no_wildcard=" << telemetry.column_shape_metrics.no_wildcard
-                  << " pred_string=" << telemetry.predicate_type_metrics.string
-                  << " pred_string_with_wildcard="
-                  << telemetry.predicate_type_metrics.string_with_wildcard
-                  << " pred_int=" << telemetry.predicate_type_metrics.integer
-                  << " pred_float=" << telemetry.predicate_type_metrics.floating_point
-                  << " pred_null=" << telemetry.predicate_type_metrics.null
-                  << " pred_exact_match=" << telemetry.predicate_type_metrics.exact_match
-                  << " pred_range=" << telemetry.predicate_type_metrics.range
-                  << " pred_exists=" << telemetry.predicate_type_metrics.exists
-                  << " total=" << telemetry.total_archive_records
-                  << " candidates=" << telemetry.candidate_records_after_schema_matching
-                  << " matched=" << telemetry.records_matching_query
-                  << " matched_schemas=" << telemetry.num_matched_schemas
-                  << " schemas_with_matches=" << telemetry.num_schemas_with_matches
-                  << " termination=" << telemetry.termination_stage
-                  << " query=" << telemetry.query.value_or("") << '\n';
-
-        if (false == telemetry.archive_id.empty()) {
-            set_string_attribute(m_span, "clp.search.archive_id", telemetry.archive_id);
-        }
-        if (false == telemetry.query_id.empty()) {
-            set_string_attribute(m_span, "clp.search.query_id", telemetry.query_id);
-        }
-        if (false == telemetry.task_id.empty()) {
-            set_string_attribute(m_span, "clp.search.task_id", telemetry.task_id);
-        }
-        m_span->SetAttribute("clp.search.query_hash", static_cast<int64_t>(telemetry.query_hash));
-        if (telemetry.query.has_value()) {
-            set_string_attribute(m_span, "clp.search.query", *telemetry.query);
-        }
-
         std::array<std::pair<opentelemetry::nostd::string_view, uint64_t>, 17> const
                 uint64_attributes{
                         {{"clp.query_shape.column_types.pure_wildcard",
@@ -367,6 +324,40 @@ public:
                          {"clp.search.num_schemas_with_matches",
                           telemetry.num_schemas_with_matches}}
                 };
+
+        // DEBUG (testing branch only, not for merge): dump exactly the attributes the exporter sets
+        // on the span, using their canonical keys, so the API-only build (which exports nothing)
+        // stays inspectable. This mirrors the span-attribute calls below; keep the two in lockstep.
+        std::cerr << "[clp-s telemetry] clp.search.success=true"
+                  << " clp.search.archive_id=" << telemetry.archive_id
+                  << " clp.search.query_id=" << telemetry.query_id
+                  << " clp.search.task_id=" << telemetry.task_id
+                  << " clp.search.query_hash=" << static_cast<int64_t>(telemetry.query_hash)
+                  << " clp.search.query=" << telemetry.query.value_or("");
+        for (auto const& [key, value] : uint64_attributes) {
+            std::cerr << ' ' << std::string_view{key.data(), key.size()} << '='
+                      << to_int64_attribute(value);
+        }
+        std::cerr << " clp.query_shape.contains_or_clause=" << telemetry.contains_or_clause;
+        if (telemetry.time_range_millis.has_value()) {
+            std::cerr << " clp.query_shape.time_range_millis=" << *telemetry.time_range_millis;
+        }
+        std::cerr << " clp.search.termination_stage=" << telemetry.termination_stage << '\n';
+
+        if (false == telemetry.archive_id.empty()) {
+            set_string_attribute(m_span, "clp.search.archive_id", telemetry.archive_id);
+        }
+        if (false == telemetry.query_id.empty()) {
+            set_string_attribute(m_span, "clp.search.query_id", telemetry.query_id);
+        }
+        if (false == telemetry.task_id.empty()) {
+            set_string_attribute(m_span, "clp.search.task_id", telemetry.task_id);
+        }
+        m_span->SetAttribute("clp.search.query_hash", static_cast<int64_t>(telemetry.query_hash));
+        if (telemetry.query.has_value()) {
+            set_string_attribute(m_span, "clp.search.query", *telemetry.query);
+        }
+
         for (auto const& [key, value] : uint64_attributes) {
             set_uint64_attribute(m_span, key, value);
         }
