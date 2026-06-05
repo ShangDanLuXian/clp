@@ -5,6 +5,7 @@
 #include <cctype>
 #include <cstdint>
 #include <cstdlib>
+#include <iostream>  // DEBUG (testing branch only)
 #include <limits>
 #include <memory>
 #include <optional>
@@ -290,6 +291,26 @@ public:
     }
 
     auto set_telemetry(SearchTelemetry const& telemetry) -> void {
+        // DEBUG (testing branch only, not for merge): dump the collected telemetry to stderr so it's
+        // visible on the API-only build, which doesn't export anything.
+        std::cerr << "[clp-s telemetry]"
+                  << " archive_id=" << telemetry.archive_id
+                  << " query_hash=" << telemetry.query_hash
+                  << " query_id=" << telemetry.query_id
+                  << " task_id=" << telemetry.task_id
+                  << " num_predicates=" << telemetry.num_predicates
+                  << " contains_or=" << telemetry.contains_or_clause
+                  << " pure_wildcard=" << telemetry.column_shape_metrics.pure_wildcard
+                  << " some_wildcard=" << telemetry.column_shape_metrics.some_wildcard
+                  << " no_wildcard=" << telemetry.column_shape_metrics.no_wildcard
+                  << " total=" << telemetry.total_archive_records
+                  << " candidates=" << telemetry.candidate_records_after_schema_matching
+                  << " matched=" << telemetry.records_matching_query
+                  << " matched_schemas=" << telemetry.num_matched_schemas
+                  << " schemas_with_matches=" << telemetry.num_schemas_with_matches
+                  << " termination=" << telemetry.termination_stage
+                  << " query=" << telemetry.query.value_or("") << '\n';
+
         if (false == telemetry.archive_id.empty()) {
             set_string_attribute(m_span, "clp.search.archive_id", telemetry.archive_id);
         }
