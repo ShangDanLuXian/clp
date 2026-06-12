@@ -4,7 +4,9 @@
 # See: https://docs.yscope.com/clp/main/user-docs/reference-telemetry
 telemetry:
   disable: false
-  endpoint: "https://telemetry.yscope.io"
+  # DEBUG: Point telemetry at a local stand-in backend (e.g. Jaeger on the Docker host)
+  # instead of y-scope's production endpoint (testing branch only, do not merge).
+  endpoint: "http://host.docker.internal:4319"
 
 #package:
 #  storage_engine: "clp-s"

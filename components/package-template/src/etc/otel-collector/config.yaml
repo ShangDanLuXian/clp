@@ -45,10 +45,12 @@ exporters:
 service:
   extensions: ["health_check"]
   pipelines:
+    # DEBUG: Route metrics/logs to the debug exporter only, since the local stand-in backend
+    # (Jaeger) only accepts traces (testing branch only, do not merge).
     metrics:
       receivers: ["otlp"]
       processors: ["resourcedetection", "batch"]
-      exporters: ["otlp_http"]
+      exporters: ["debug"]
     traces:
       receivers: ["otlp"]
       processors: ["resourcedetection", "batch"]
@@ -56,4 +58,4 @@ service:
     logs:
       receivers: ["otlp"]
       processors: ["resourcedetection", "batch"]
-      exporters: ["otlp_http"]
+      exporters: ["debug"]

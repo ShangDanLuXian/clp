@@ -682,8 +682,15 @@ services:
     group_add:
       - "${CLP_DOCKER_GID:-999}"
     environment:
-      CLP_TELEMETRY_ENDPOINT: "${CLP_TELEMETRY_ENDPOINT:-https://telemetry.yscope.io}"
+      # DEBUG: Default the upload target to a local stand-in backend on the Docker host
+      # (testing branch only, do not merge).
+      CLP_TELEMETRY_ENDPOINT: "${CLP_TELEMETRY_ENDPOINT:-http://host.docker.internal:4319}"
       OTEL_RESOURCE_ATTRIBUTES: "${OTEL_RESOURCE_ATTRIBUTES:-}"
+    # DEBUG: Let the collector resolve the Docker host on Linux (testing branch only,
+    # do not merge). NOTE: This replaces the noop `extra_hosts` placeholders from
+    # `service_defaults`, which the collector doesn't use.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - host_ip: "${CLP_OTEL_COLLECTOR_HOST:-127.0.0.1}"
         published: "${CLP_OTEL_COLLECTOR_PORT:-4318}"
