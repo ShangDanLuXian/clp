@@ -35,6 +35,10 @@ processors:
     override: false
 
 exporters:
+  # DEBUG: Log received spans so they can be inspected via `docker logs` (testing branch only,
+  # do not merge).
+  debug:
+    verbosity: "detailed"
   otlp_http:
     endpoint: "${env:CLP_TELEMETRY_ENDPOINT}"
 
@@ -48,7 +52,7 @@ service:
     traces:
       receivers: ["otlp"]
       processors: ["resourcedetection", "batch"]
-      exporters: ["otlp_http"]
+      exporters: ["debug", "otlp_http"]
     logs:
       receivers: ["otlp"]
       processors: ["resourcedetection", "batch"]

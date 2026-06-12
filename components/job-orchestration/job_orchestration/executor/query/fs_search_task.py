@@ -103,6 +103,8 @@ def _make_core_clp_s_command_and_env_vars(
         ))
         # fmt: on
         env_vars = None
+    # DEBUG: Unconditionally publish search telemetry (testing branch only, do not merge).
+    command.append("--enable-telemetry")
     return command, env_vars
 
 
@@ -260,6 +262,13 @@ def search_entry_point(
             task_id=task_id,
             start_time=start_time,
         )
+
+    # DEBUG: Forward query identity to the search telemetry span (testing branch only,
+    # do not merge).
+    if core_clp_env_vars is None:
+        core_clp_env_vars = dict(os.environ)
+    core_clp_env_vars["CLP_QUERY_ID"] = str(job_id)
+    core_clp_env_vars["CLP_TASK_ID"] = str(task_id)
 
     task_results, _ = run_query_task(
         sql_adapter=sql_adapter,
