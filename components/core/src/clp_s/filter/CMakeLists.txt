@@ -12,6 +12,7 @@ set(
         FilterReader.hpp
         HashAlgorithm.cpp
         HashAlgorithm.hpp
+        IndexDefs.hpp
         XxHash.cpp
         XxHash.hpp
 )
