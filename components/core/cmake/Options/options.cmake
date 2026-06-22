@@ -317,6 +317,7 @@ endfunction()
 
 function(set_clp_s_filter_dependencies)
     set_clp_need_flags(
+        CLP_NEED_MSGPACKCXX
         CLP_NEED_XXHASH
         CLP_NEED_YSTDLIB
     )

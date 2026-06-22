@@ -3,6 +3,10 @@
 
 #include <array>
 #include <cstdint>
+#include <string>
+#include <vector>
+
+#include <msgpack.hpp>
 
 namespace clp_s::filter {
 // Four-byte magic number identifying a Packed Filter pack object.
@@ -47,6 +51,25 @@ struct PackedFilterHeader {
 };
 
 static_assert(64 == sizeof(PackedFilterHeader));
+
+/**
+ * Metadata section of a Packed Filter, serialized with msgpack and located immediately after the
+ * `PackedFilterHeader`. It records the mapping from local archive ID to archive ID, and the size
+ * and Index ID of each index blob (indexed positionally).
+ */
+struct IndexMetadata {
+    // The archive ID of each archive, indexed by local archive ID. The encoding is described by the
+    // header's `archive_id_encoding_type`.
+    std::vector<std::string> archive_ids;
+
+    // The serialized size, in bytes, of each index's blob.
+    std::vector<uint32_t> index_sizes;
+
+    // The Index ID of each index.
+    std::vector<uint16_t> index_ids;
+
+    MSGPACK_DEFINE_MAP(archive_ids, index_sizes, index_ids);
+};
 }  // namespace clp_s::filter
 
 #endif  // CLP_S_FILTER_PACKED_FILTER_DEFS_HPP
