@@ -8,6 +8,8 @@
 
 #include <msgpack.hpp>
 
+#include <clp_s/filter/IndexDefs.hpp>
+
 namespace clp_s::filter {
 // Four-byte magic number identifying a Packed Filter pack object.
 // NOTE: Placeholder value, subject to change.
@@ -69,6 +71,21 @@ struct IndexMetadata {
     std::vector<uint16_t> index_ids;
 
     MSGPACK_DEFINE_MAP(archive_ids, index_sizes, index_ids);
+};
+
+/**
+ * Metadata for a single index's blob within a Packed Filter, serialized with msgpack and located at
+ * the start of the index's blob. The per-archive sub-blobs are concatenated immediately after it,
+ * sized by `archive_index_sizes`.
+ */
+struct IndexBlobMetadata {
+    // The implementation version of the index that produced this blob.
+    index_version_t impl_version{};
+
+    // The serialized size, in bytes, of each archive's sub-blob, indexed by local archive ID.
+    std::vector<uint32_t> archive_index_sizes;
+
+    MSGPACK_DEFINE_MAP(impl_version, archive_index_sizes);
 };
 }  // namespace clp_s::filter
 
