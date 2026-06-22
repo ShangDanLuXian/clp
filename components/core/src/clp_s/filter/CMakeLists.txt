@@ -13,6 +13,7 @@ set(
         HashAlgorithm.cpp
         HashAlgorithm.hpp
         IndexDefs.hpp
+        PackedFilterDefs.hpp
         XxHash.cpp
         XxHash.hpp
 )
