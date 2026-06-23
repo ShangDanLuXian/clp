@@ -14,6 +14,8 @@ set(
         HashAlgorithm.hpp
         IndexDefs.hpp
         PackedFilterDefs.hpp
+        PackedFilterWriter.cpp
+        PackedFilterWriter.hpp
         XxHash.cpp
         XxHash.hpp
 )

@@ -6,7 +6,9 @@
 
 namespace {
 using clp_s::filter::ErrorCodeEnum;
+using clp_s::filter::PackedFilterErrorCodeEnum;
 using ErrorCategory = ystdlib::error_handling::ErrorCategory<ErrorCodeEnum>;
+using PackedFilterErrorCategory = ystdlib::error_handling::ErrorCategory<PackedFilterErrorCodeEnum>;
 }  // namespace
 
 template <>
@@ -31,6 +33,22 @@ auto ErrorCategory::message(ErrorCodeEnum error_enum) const -> std::string {
             return "filter type is unsupported";
         case ErrorCodeEnum::UnsupportedFilterNormalization:
             return "filter normalization is unsupported";
+    }
+    return "unknown error code enum";
+}
+
+template <>
+auto PackedFilterErrorCategory::name() const noexcept -> char const* {
+    return "clp_s::filter::PackedFilterErrorCode";
+}
+
+template <>
+auto PackedFilterErrorCategory::message(PackedFilterErrorCodeEnum error_enum) const -> std::string {
+    switch (error_enum) {
+        case PackedFilterErrorCodeEnum::ArchiveCountMismatch:
+            return "the number of archive blobs does not match the number of archives";
+        case PackedFilterErrorCodeEnum::SerializedSizeOutOfRange:
+            return "a serialized size exceeds the format's field width";
     }
     return "unknown error code enum";
 }

@@ -17,8 +17,16 @@ enum class ErrorCodeEnum : uint8_t {
 };
 
 using ErrorCode = ystdlib::error_handling::ErrorCode<ErrorCodeEnum>;
+
+enum class PackedFilterErrorCodeEnum : uint8_t {
+    ArchiveCountMismatch = 1,
+    SerializedSizeOutOfRange,
+};
+
+using PackedFilterErrorCode = ystdlib::error_handling::ErrorCode<PackedFilterErrorCodeEnum>;
 }  // namespace clp_s::filter
 
 YSTDLIB_ERROR_HANDLING_MARK_AS_ERROR_CODE_ENUM(clp_s::filter::ErrorCodeEnum);
+YSTDLIB_ERROR_HANDLING_MARK_AS_ERROR_CODE_ENUM(clp_s::filter::PackedFilterErrorCodeEnum);
 
 #endif  // CLP_S_FILTER_ERROR_CODE_HPP
