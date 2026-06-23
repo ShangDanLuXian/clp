@@ -12,7 +12,9 @@ set(
         FilterReader.hpp
         HashAlgorithm.cpp
         HashAlgorithm.hpp
+        IndexBuilder.hpp
         IndexDefs.hpp
+        IndexRunner.hpp
         PackedFilterDefs.hpp
         PackedFilterReader.cpp
         PackedFilterReader.hpp
