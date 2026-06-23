@@ -49,6 +49,14 @@ auto PackedFilterErrorCategory::message(PackedFilterErrorCodeEnum error_enum) co
             return "the number of archive blobs does not match the number of archives";
         case PackedFilterErrorCodeEnum::SerializedSizeOutOfRange:
             return "a serialized size exceeds the format's field width";
+        case PackedFilterErrorCodeEnum::Truncated:
+            return "the serialized pack is truncated";
+        case PackedFilterErrorCodeEnum::InvalidMagicNumber:
+            return "the magic number does not match a Packed Filter";
+        case PackedFilterErrorCodeEnum::UnsupportedFormatVersion:
+            return "the Packed Filter format major version is unsupported";
+        case PackedFilterErrorCodeEnum::CorruptMetadata:
+            return "the Packed Filter metadata is malformed";
     }
     return "unknown error code enum";
 }

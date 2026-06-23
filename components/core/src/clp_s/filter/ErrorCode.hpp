@@ -21,6 +21,10 @@ using ErrorCode = ystdlib::error_handling::ErrorCode<ErrorCodeEnum>;
 enum class PackedFilterErrorCodeEnum : uint8_t {
     ArchiveCountMismatch = 1,
     SerializedSizeOutOfRange,
+    Truncated,
+    InvalidMagicNumber,
+    UnsupportedFormatVersion,
+    CorruptMetadata,
 };
 
 using PackedFilterErrorCode = ystdlib::error_handling::ErrorCode<PackedFilterErrorCodeEnum>;
