@@ -13,11 +13,13 @@ set(
         HashAlgorithm.cpp
         HashAlgorithm.hpp
         IndexBuilder.hpp
+        IndexBuilderSpecification.hpp
         IndexDefs.hpp
         IndexRunner.hpp
         PackedFilterDefs.hpp
         PackedFilterReader.cpp
         PackedFilterReader.hpp
+        PackedFilterSpecification.hpp
         PackedFilterWriter.cpp
         PackedFilterWriter.hpp
         XxHash.cpp
