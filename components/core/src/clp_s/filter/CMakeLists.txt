@@ -15,6 +15,8 @@ set(
         IndexBuilder.hpp
         IndexBuilderSpecification.hpp
         IndexDefs.hpp
+        IndexRegistry.cpp
+        IndexRegistry.hpp
         IndexRunner.hpp
         PackedFilterDefs.hpp
         PackedFilterReader.cpp

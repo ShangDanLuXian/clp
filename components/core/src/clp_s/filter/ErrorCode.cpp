@@ -6,8 +6,10 @@
 
 namespace {
 using clp_s::filter::ErrorCodeEnum;
+using clp_s::filter::IndexErrorCodeEnum;
 using clp_s::filter::PackedFilterErrorCodeEnum;
 using ErrorCategory = ystdlib::error_handling::ErrorCategory<ErrorCodeEnum>;
+using IndexErrorCategory = ystdlib::error_handling::ErrorCategory<IndexErrorCodeEnum>;
 using PackedFilterErrorCategory = ystdlib::error_handling::ErrorCategory<PackedFilterErrorCodeEnum>;
 }  // namespace
 
@@ -57,6 +59,28 @@ auto PackedFilterErrorCategory::message(PackedFilterErrorCodeEnum error_enum) co
             return "the Packed Filter format major version is unsupported";
         case PackedFilterErrorCodeEnum::CorruptMetadata:
             return "the Packed Filter metadata is malformed";
+    }
+    return "unknown error code enum";
+}
+
+template <>
+auto IndexErrorCategory::name() const noexcept -> char const* {
+    return "clp_s::filter::IndexErrorCode";
+}
+
+template <>
+auto IndexErrorCategory::message(IndexErrorCodeEnum error_enum) const -> std::string {
+    switch (error_enum) {
+        case IndexErrorCodeEnum::DuplicateIndexName:
+            return "an index is already registered with the given name";
+        case IndexErrorCodeEnum::DuplicateIndexId:
+            return "an index is already registered with the given Index ID";
+        case IndexErrorCodeEnum::UnknownIndexName:
+            return "no index is registered with the given name";
+        case IndexErrorCodeEnum::UnknownIndexId:
+            return "no index is registered with the given Index ID";
+        case IndexErrorCodeEnum::UnsupportedArchiveVersion:
+            return "no registered index builder supports the archive version";
     }
     return "unknown error code enum";
 }

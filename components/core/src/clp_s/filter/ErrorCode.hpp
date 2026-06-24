@@ -28,9 +28,20 @@ enum class PackedFilterErrorCodeEnum : uint8_t {
 };
 
 using PackedFilterErrorCode = ystdlib::error_handling::ErrorCode<PackedFilterErrorCodeEnum>;
+
+enum class IndexErrorCodeEnum : uint8_t {
+    DuplicateIndexName = 1,
+    DuplicateIndexId,
+    UnknownIndexName,
+    UnknownIndexId,
+    UnsupportedArchiveVersion,
+};
+
+using IndexErrorCode = ystdlib::error_handling::ErrorCode<IndexErrorCodeEnum>;
 }  // namespace clp_s::filter
 
 YSTDLIB_ERROR_HANDLING_MARK_AS_ERROR_CODE_ENUM(clp_s::filter::ErrorCodeEnum);
 YSTDLIB_ERROR_HANDLING_MARK_AS_ERROR_CODE_ENUM(clp_s::filter::PackedFilterErrorCodeEnum);
+YSTDLIB_ERROR_HANDLING_MARK_AS_ERROR_CODE_ENUM(clp_s::filter::IndexErrorCodeEnum);
 
 #endif  // CLP_S_FILTER_ERROR_CODE_HPP
