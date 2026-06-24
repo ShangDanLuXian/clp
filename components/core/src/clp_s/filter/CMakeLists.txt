@@ -2,6 +2,8 @@ set(
         CLP_S_FILTER_SOURCES
         BloomFilter.cpp
         BloomFilter.hpp
+        BloomFilterIndexBuilder.cpp
+        BloomFilterIndexBuilder.hpp
         ErrorCode.cpp
         ErrorCode.hpp
         FilterBuilder.cpp
