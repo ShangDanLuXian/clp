@@ -30,6 +30,18 @@ struct PackedFilterIndexRequest {
 };
 
 /**
+ * A description of one index that can be built for a given archive version. Callers list the
+ * supported indexes for an archive version, then choose which to build by passing the chosen names
+ * back as `PackedFilterIndexRequest`s.
+ */
+struct SupportedIndex {
+    std::string name;
+    index_id_t index_id{};
+    index_version_t index_version{};
+    archive_section_bitmap_t archive_section_bitmap{};
+};
+
+/**
  * Registry of all known index implementations. Index implementations register themselves with a
  * unique name and Index ID, after which the registry creates `IndexBuilder`s (by name, at build
  * time) and `IndexRunner`s (by Index ID, at filtering time) on their behalf.
@@ -72,6 +84,16 @@ public:
             IndexRunnerFactory runner_factory,
             std::vector<IndexBuilderSpecification> builder_specs
     ) -> ystdlib::error_handling::Result<void>;
+
+    /**
+     * Lists every registered index that has a builder supporting `archive_version`, i.e. the
+     * indexes that can be built into a Packed Filter over archives of that version. Callers present
+     * this set so a user can choose which indexes to build.
+     * @param archive_version
+     * @return The supported indexes, ordered by Index ID.
+     */
+    [[nodiscard]] auto list_supported_indexes(archive_version_t archive_version) const
+            -> std::vector<SupportedIndex>;
 
     /**
      * Creates an `IndexBuilder` for the index registered with the given name, selecting the builder

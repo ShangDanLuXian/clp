@@ -37,26 +37,24 @@ auto IndexRegistry::register_index(
     return ystdlib::error_handling::success();
 }
 
-auto IndexRegistry::select_builder_spec(
-        std::string_view name,
-        archive_version_t archive_version
-) const -> ystdlib::error_handling::Result<SelectedBuilderSpec> {
-    auto const name_it{m_index_id_by_name.find(std::string{name})};
-    if (m_index_id_by_name.cend() == name_it) {
-        return IndexErrorCode{IndexErrorCodeEnum::UnknownIndexName};
+auto IndexRegistry::list_supported_indexes(archive_version_t archive_version) const
+        -> std::vector<SupportedIndex> {
+    std::vector<SupportedIndex> supported_indexes;
+    for (auto const& [name, index_id] : m_index_id_by_name) {
+        auto const selected_result{select_builder_spec(name, archive_version)};
+        if (selected_result.has_error()) {
+            continue;
+        }
+        auto const* const spec{selected_result.value().spec};
+        supported_indexes.push_back(SupportedIndex{
+                name,
+                index_id,
+                spec->get_index_version(),
+                spec->get_archive_section_bitmap()
+        });
     }
-
-    auto const& registered_index{m_indexes_by_id.at(name_it->second)};
-    auto const spec_it{std::ranges::find_if(
-            registered_index.builder_specs,
-            [archive_version](IndexBuilderSpecification const& spec) {
-                return spec.supports_archive_version(archive_version);
-            }
-    )};
-    if (registered_index.builder_specs.cend() == spec_it) {
-        return IndexErrorCode{IndexErrorCodeEnum::UnsupportedArchiveVersion};
-    }
-    return SelectedBuilderSpec{name_it->second, &(*spec_it)};
+    std::ranges::sort(supported_indexes, {}, &SupportedIndex::index_id);
+    return supported_indexes;
 }
 
 auto IndexRegistry::create_writer(
@@ -104,5 +102,27 @@ auto IndexRegistry::create_reader(
         return IndexErrorCode{IndexErrorCodeEnum::UnknownIndexId};
     }
     return index_it->second.runner_factory(index_version, archive_blobs);
+}
+
+auto IndexRegistry::select_builder_spec(
+        std::string_view name,
+        archive_version_t archive_version
+) const -> ystdlib::error_handling::Result<SelectedBuilderSpec> {
+    auto const name_it{m_index_id_by_name.find(std::string{name})};
+    if (m_index_id_by_name.cend() == name_it) {
+        return IndexErrorCode{IndexErrorCodeEnum::UnknownIndexName};
+    }
+
+    auto const& registered_index{m_indexes_by_id.at(name_it->second)};
+    auto const spec_it{std::ranges::find_if(
+            registered_index.builder_specs,
+            [archive_version](IndexBuilderSpecification const& spec) {
+                return spec.supports_archive_version(archive_version);
+            }
+    )};
+    if (registered_index.builder_specs.cend() == spec_it) {
+        return IndexErrorCode{IndexErrorCodeEnum::UnsupportedArchiveVersion};
+    }
+    return SelectedBuilderSpec{name_it->second, &(*spec_it)};
 }
 }  // namespace clp_s::filter
