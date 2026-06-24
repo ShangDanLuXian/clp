@@ -1,7 +1,12 @@
 set(
         CLP_S_FILTER_SOURCES
+        BitmapView.hpp
         BloomFilter.cpp
         BloomFilter.hpp
+        BloomFilterIndexBuilder.cpp
+        BloomFilterIndexBuilder.hpp
+        BloomFilterIndexRunner.cpp
+        BloomFilterIndexRunner.hpp
         ErrorCode.cpp
         ErrorCode.hpp
         FilterBuilder.cpp
@@ -12,6 +17,24 @@ set(
         FilterReader.hpp
         HashAlgorithm.cpp
         HashAlgorithm.hpp
+        IndexBuilder.hpp
+        IndexBuilderSpecification.hpp
+        IndexDefs.hpp
+        IndexRegistry.cpp
+        IndexRegistry.hpp
+        IndexRunner.hpp
+        PackedFilterBuilder.cpp
+        PackedFilterBuilder.hpp
+        PackedFilterDefs.hpp
+        PackedFilterReader.cpp
+        PackedFilterReader.hpp
+        PackedFilterRunner.cpp
+        PackedFilterRunner.hpp
+        PackedFilterSpecification.hpp
+        PackedFilterWriter.cpp
+        PackedFilterWriter.hpp
+        RegisterIndexes.cpp
+        RegisterIndexes.hpp
         XxHash.cpp
         XxHash.hpp
 )
@@ -28,6 +51,7 @@ if(CLP_BUILD_CLP_S_FILTER)
                 clp_s_filter
                 PUBLIC
                 clp_s::clp_dependencies
+                msgpack-cxx
                 ystdlib::containers
                 ystdlib::error_handling
                 PRIVATE
