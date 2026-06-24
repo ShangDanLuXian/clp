@@ -17,6 +17,7 @@
 #include <clp_s/filter/IndexDefs.hpp>
 #include <clp_s/filter/IndexRunner.hpp>
 #include <clp_s/filter/PackedFilterBuilder.hpp>
+#include <clp_s/filter/PackedFilterRunner.hpp>
 #include <clp_s/filter/PackedFilterSpecification.hpp>
 
 namespace clp_s::filter {
@@ -150,6 +151,20 @@ public:
             index_version_t index_version,
             std::vector<std::span<char const>> const& archive_blobs
     ) -> ystdlib::error_handling::Result<std::unique_ptr<IndexRunner>>;
+
+    /**
+     * Creates a `PackedFilterRunner` for a serialized Packed Filter, loading an `IndexRunner` for
+     * each of its indexes whose Index ID is registered. Indexes with an unregistered Index ID, or
+     * whose runner fails to load, are skipped and reported via the returned runner's
+     * `get_skipped_index_ids`.
+     * @param pack The serialized pack object. Ownership is taken so that the loaded runners can hold
+     * views into it.
+     * @return A result containing the created runner on success, or an error code indicating the
+     * failure:
+     * - Forwards `PackedFilterReader::create`'s return values if the pack is malformed.
+     */
+    [[nodiscard]] auto create_packed_filter_runner(std::vector<char> pack)
+            -> ystdlib::error_handling::Result<PackedFilterRunner>;
 
 private:
     // Types

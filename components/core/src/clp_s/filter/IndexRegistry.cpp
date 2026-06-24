@@ -17,6 +17,8 @@
 #include <clp_s/filter/IndexDefs.hpp>
 #include <clp_s/filter/IndexRunner.hpp>
 #include <clp_s/filter/PackedFilterBuilder.hpp>
+#include <clp_s/filter/PackedFilterReader.hpp>
+#include <clp_s/filter/PackedFilterRunner.hpp>
 #include <clp_s/filter/PackedFilterSpecification.hpp>
 
 namespace clp_s::filter {
@@ -102,6 +104,30 @@ auto IndexRegistry::create_reader(
         return IndexErrorCode{IndexErrorCodeEnum::UnknownIndexId};
     }
     return index_it->second.runner_factory(index_version, archive_blobs);
+}
+
+auto IndexRegistry::create_packed_filter_runner(std::vector<char> pack)
+        -> ystdlib::error_handling::Result<PackedFilterRunner> {
+    auto const reader{YSTDLIB_ERROR_HANDLING_TRYX(PackedFilterReader::create(pack))};
+    std::vector<PackedFilterRunner::ActiveRunner> active_runners;
+    std::vector<index_id_t> skipped_index_ids;
+    for (auto const& index_blob : reader.get_index_blobs()) {
+        auto runner_result{
+                create_reader(index_blob.index_id, index_blob.impl_version, index_blob.archive_blobs)
+        };
+        if (runner_result.has_error()) {
+            skipped_index_ids.push_back(index_blob.index_id);
+            continue;
+        }
+        active_runners.push_back(
+                PackedFilterRunner::ActiveRunner{index_blob.index_id, std::move(runner_result.value())}
+        );
+    }
+    return PackedFilterRunner{
+            std::move(pack),
+            std::move(active_runners),
+            std::move(skipped_index_ids)
+    };
 }
 
 auto IndexRegistry::select_builder_spec(

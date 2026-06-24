@@ -23,6 +23,8 @@ set(
         PackedFilterDefs.hpp
         PackedFilterReader.cpp
         PackedFilterReader.hpp
+        PackedFilterRunner.cpp
+        PackedFilterRunner.hpp
         PackedFilterSpecification.hpp
         PackedFilterWriter.cpp
         PackedFilterWriter.hpp
