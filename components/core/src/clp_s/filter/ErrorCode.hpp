@@ -25,6 +25,7 @@ enum class PackedFilterErrorCodeEnum : uint8_t {
     InvalidMagicNumber,
     UnsupportedFormatVersion,
     CorruptMetadata,
+    LocalArchiveIdOutOfRange,
 };
 
 using PackedFilterErrorCode = ystdlib::error_handling::ErrorCode<PackedFilterErrorCodeEnum>;

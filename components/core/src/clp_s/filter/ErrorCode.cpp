@@ -59,6 +59,8 @@ auto PackedFilterErrorCategory::message(PackedFilterErrorCodeEnum error_enum) co
             return "the Packed Filter format major version is unsupported";
         case PackedFilterErrorCodeEnum::CorruptMetadata:
             return "the Packed Filter metadata is malformed";
+        case PackedFilterErrorCodeEnum::LocalArchiveIdOutOfRange:
+            return "the local archive id is outside the range of indexed archives";
     }
     return "unknown error code enum";
 }

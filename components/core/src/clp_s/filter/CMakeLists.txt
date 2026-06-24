@@ -18,6 +18,8 @@ set(
         IndexRegistry.cpp
         IndexRegistry.hpp
         IndexRunner.hpp
+        PackedFilterBuilder.cpp
+        PackedFilterBuilder.hpp
         PackedFilterDefs.hpp
         PackedFilterReader.cpp
         PackedFilterReader.hpp
