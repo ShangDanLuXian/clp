@@ -32,6 +32,8 @@ set(
         PackedFilterSpecification.hpp
         PackedFilterWriter.cpp
         PackedFilterWriter.hpp
+        RegisterIndexes.cpp
+        RegisterIndexes.hpp
         XxHash.cpp
         XxHash.hpp
 )
