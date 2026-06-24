@@ -4,6 +4,8 @@ set(
         BloomFilter.hpp
         BloomFilterIndexBuilder.cpp
         BloomFilterIndexBuilder.hpp
+        BloomFilterIndexRunner.cpp
+        BloomFilterIndexRunner.hpp
         ErrorCode.cpp
         ErrorCode.hpp
         FilterBuilder.cpp
