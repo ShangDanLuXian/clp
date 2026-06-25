@@ -64,6 +64,8 @@ endif()
 
 set(
         CLP_F_EXE_SOURCES
+        AtomicWorkQueue.cpp
+        AtomicWorkQueue.hpp
         CommandLineArguments.cpp
         CommandLineArguments.hpp
         PerformanceMetrics.cpp
