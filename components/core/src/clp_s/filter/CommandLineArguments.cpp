@@ -356,7 +356,7 @@ auto CommandLineArguments::parse_arguments(int argc, char const* argv[])
                 po::value<std::string>(&input_path_list_file_path)
                     ->value_name("FILE")
                     ->default_value(input_path_list_file_path),
-                "Build pack for files specified in FILE"
+                "Run pack for files specified in FILE"
             )(
                 "auth",
                 po::value<std::string>(&auth)
