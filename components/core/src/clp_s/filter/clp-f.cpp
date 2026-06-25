@@ -1,7 +1,10 @@
 #include <chrono>
 #include <cstddef>
 #include <exception>
+#include <functional>
 #include <string>
+#include <thread>
+#include <utility>
 #include <vector>
 
 #include <fmt/format.h>
@@ -15,6 +18,7 @@
 
 #include <clp_s/FileWriter.hpp>
 
+#include "AtomicWorkQueue.hpp"
 #include "CommandLineArguments.hpp"
 #include "PerformanceMetrics.hpp"
 
@@ -51,6 +55,38 @@ auto write_performance_report(
  */
 [[nodiscard]] auto run_pack(CommandLineArguments const& command_line_arguments)
         -> ystdlib::error_handling::Result<void>;
+
+/**
+ * Thread function for the build-pack benchmarking path. Each thread claims batches of
+ * archives from the work queue, builds a pack from each batch, and records performance
+ * metrics.
+ *
+ * @param metrics Reference to the caller's metrics slot; overwritten with the thread's
+ * local metrics upon completion.
+ * @param queue Shared work queue for distributing input paths across threads.
+ * @param command_line_arguments Configuration including output directory and
+ * archives-per-pack count.
+ */
+auto build_pack_thread(
+        clp_s::filter::PerformanceMetrics& metrics,
+        clp_s::filter::AtomicWorkQueue& queue,
+        CommandLineArguments const& command_line_arguments
+) -> void;
+
+/**
+ * Thread function for the run-pack benchmarking path. Each thread claims pack paths
+ * from the work queue, searches each pack, and records performance metrics.
+ *
+ * @param metrics Reference to the caller's metrics slot; overwritten with the thread's
+ * local metrics upon completion.
+ * @param queue Shared work queue for distributing input paths across threads.
+ * @param command_line_arguments Configuration including KQL query and network auth.
+ */
+auto run_pack_thread(
+        clp_s::filter::PerformanceMetrics& metrics,
+        clp_s::filter::AtomicWorkQueue& queue,
+        CommandLineArguments const& command_line_arguments
+) -> void;
 
 auto write_performance_report(
         std::string const& report_file_path,
@@ -97,13 +133,61 @@ auto write_performance_report(
     writer.close();
 }
 
-auto build_pack([[maybe_unused]] CommandLineArguments const& command_line_arguments)
+auto build_pack_thread(
+        clp_s::filter::PerformanceMetrics& metrics,
+        clp_s::filter::AtomicWorkQueue& queue,
+        CommandLineArguments const& command_line_arguments
+) -> void {
+    clp_s::filter::PerformanceMetrics local_metrics;
+    auto const num_archives_per_pack{command_line_arguments.get_num_archives_per_pack()};
+
+    while (auto const batch = queue.get_items(num_archives_per_pack)) {
+        // TODO: Build a pack from the batch of archives.
+        for (auto const& archive : batch.value()) {
+            local_metrics.mark_item_processed();
+        }
+    }
+
+    local_metrics.mark_finished();
+    metrics = std::move(local_metrics);
+}
+
+auto run_pack_thread(
+        clp_s::filter::PerformanceMetrics& metrics,
+        clp_s::filter::AtomicWorkQueue& queue,
+        [[maybe_unused]] CommandLineArguments const& command_line_arguments
+) -> void {
+    clp_s::filter::PerformanceMetrics local_metrics;
+
+    while (auto const item = queue.get_item()) {
+        // TODO: Search the pack at the given path.
+        local_metrics.mark_item_processed();
+    }
+
+    local_metrics.mark_finished();
+    metrics = std::move(local_metrics);
+}
+
+auto build_pack(CommandLineArguments const& command_line_arguments)
         -> ystdlib::error_handling::Result<void> {
-    std::vector<clp_s::filter::PerformanceMetrics> metrics;
-    metrics.reserve(command_line_arguments.get_num_threads());
+    auto const num_threads{command_line_arguments.get_num_threads()};
+    std::vector<clp_s::filter::PerformanceMetrics> metrics(num_threads);
+    clp_s::filter::AtomicWorkQueue queue{command_line_arguments.get_input_paths()};
     auto const start_time{std::chrono::steady_clock::now()};
 
-    SPDLOG_INFO("Build-pack stub.");
+    std::vector<std::thread> threads;
+    threads.reserve(num_threads);
+    for (auto& metrics_slot : metrics) {
+        threads.emplace_back(
+                build_pack_thread,
+                std::ref(metrics_slot),
+                std::ref(queue),
+                std::cref(command_line_arguments)
+        );
+    }
+    for (auto& thread : threads) {
+        thread.join();
+    }
 
     auto const end_time{std::chrono::steady_clock::now()};
     auto const& report_file_path{command_line_arguments.get_report_file_path()};
@@ -111,20 +195,33 @@ auto build_pack([[maybe_unused]] CommandLineArguments const& command_line_argume
         write_performance_report(
                 report_file_path.value(),
                 std::chrono::duration_cast<std::chrono::nanoseconds>(end_time - start_time),
-                command_line_arguments.get_num_threads(),
+                num_threads,
                 metrics
         );
     }
     return ystdlib::error_handling::success();
 }
 
-auto run_pack([[maybe_unused]] CommandLineArguments const& command_line_arguments)
+auto run_pack(CommandLineArguments const& command_line_arguments)
         -> ystdlib::error_handling::Result<void> {
-    std::vector<clp_s::filter::PerformanceMetrics> metrics;
-    metrics.reserve(command_line_arguments.get_num_threads());
+    auto const num_threads{command_line_arguments.get_num_threads()};
+    std::vector<clp_s::filter::PerformanceMetrics> metrics(num_threads);
+    clp_s::filter::AtomicWorkQueue queue{command_line_arguments.get_input_paths()};
     auto const start_time{std::chrono::steady_clock::now()};
 
-    SPDLOG_INFO("Run-pack stub.");
+    std::vector<std::thread> threads;
+    threads.reserve(num_threads);
+    for (auto& metric_slot : metrics) {
+        threads.emplace_back(
+                run_pack_thread,
+                std::ref(metric_slot),
+                std::ref(queue),
+                std::cref(command_line_arguments)
+        );
+    }
+    for (auto& thread : threads) {
+        thread.join();
+    }
 
     auto const end_time{std::chrono::steady_clock::now()};
     auto const& report_file_path{command_line_arguments.get_report_file_path()};
@@ -132,7 +229,7 @@ auto run_pack([[maybe_unused]] CommandLineArguments const& command_line_argument
         write_performance_report(
                 report_file_path.value(),
                 std::chrono::duration_cast<std::chrono::nanoseconds>(end_time - start_time),
-                command_line_arguments.get_num_threads(),
+                num_threads,
                 metrics
         );
     }
