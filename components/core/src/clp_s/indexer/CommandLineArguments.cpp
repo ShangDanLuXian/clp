@@ -27,6 +27,11 @@ CommandLineArguments::parse_arguments(int argc, char const** argv) {
             "create-table",
             po::bool_switch(&m_should_create_table),
             "Create the column metadata table if it doesn't exist"
+    )(
+            "packed-filter-output",
+            po::value<std::string>(&m_packed_filter_output_path),
+            "Build a Packed Filter over all archives under ARCHIVE_PATH and write it to this path"
+            " (no metadata database is used in this mode)"
     );
     // clang-format on
     clp::GlobalMetadataDBConfig metadata_db_config{output_options};
@@ -84,13 +89,19 @@ CommandLineArguments::parse_arguments(int argc, char const** argv) {
         }
 
         // Validate required parameters
-        if (m_dataset_name.empty()) {
-            throw std::invalid_argument("Dataset name not specified or empty.");
-        }
         if (archive_path.empty()) {
             throw std::invalid_argument("Archive path not specified or empty.");
         }
         m_archive_path = get_path_object_for_raw_path(archive_path);
+
+        // In Packed Filter build mode, neither the dataset name nor a metadata database is used.
+        if (false == m_packed_filter_output_path.empty()) {
+            return ParsingResult::Success;
+        }
+
+        if (m_dataset_name.empty()) {
+            throw std::invalid_argument("Dataset name not specified or empty.");
+        }
 
         // Initialize and validate global metadata DB config
         if (clp::GlobalMetadataDBConfig::MetadataDBType::MySQL
