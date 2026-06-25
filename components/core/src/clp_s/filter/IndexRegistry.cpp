@@ -109,6 +109,7 @@ auto IndexRegistry::create_reader(
 auto IndexRegistry::create_packed_filter_runner(std::vector<char> pack)
         -> ystdlib::error_handling::Result<PackedFilterRunner> {
     auto const reader{YSTDLIB_ERROR_HANDLING_TRYX(PackedFilterReader::create(pack))};
+    auto archive_ids{reader.get_archive_ids()};
     std::vector<PackedFilterRunner::ActiveRunner> active_runners;
     std::vector<index_id_t> skipped_index_ids;
     for (auto const& index_blob : reader.get_index_blobs()) {
@@ -125,6 +126,7 @@ auto IndexRegistry::create_packed_filter_runner(std::vector<char> pack)
     }
     return PackedFilterRunner{
             std::move(pack),
+            std::move(archive_ids),
             std::move(active_runners),
             std::move(skipped_index_ids)
     };

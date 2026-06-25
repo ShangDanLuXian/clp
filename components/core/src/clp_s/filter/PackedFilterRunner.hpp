@@ -1,7 +1,9 @@
 #ifndef CLP_S_FILTER_PACKED_FILTER_RUNNER_HPP
 #define CLP_S_FILTER_PACKED_FILTER_RUNNER_HPP
 
+#include <cstddef>
 #include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -42,10 +44,12 @@ public:
     // Constructors
     PackedFilterRunner(
             std::vector<char> pack,
+            std::vector<std::string> archive_ids,
             std::vector<ActiveRunner> active_runners,
             std::vector<index_id_t> skipped_index_ids
     )
             : m_pack{std::move(pack)},
+              m_archive_ids{std::move(archive_ids)},
               m_active_runners{std::move(active_runners)},
               m_skipped_index_ids{std::move(skipped_index_ids)} {}
 
@@ -64,6 +68,18 @@ public:
     ) -> ystdlib::error_handling::Result<void>;
 
     /**
+     * @return The number of archives the Packed Filter covers.
+     */
+    [[nodiscard]] auto get_num_archives() const -> size_t { return m_archive_ids.size(); }
+
+    /**
+     * @return The archive ID of each archive in the Packed Filter, indexed by local archive ID.
+     */
+    [[nodiscard]] auto get_archive_ids() const -> std::vector<std::string> const& {
+        return m_archive_ids;
+    }
+
+    /**
      * @return The Index IDs of indexes in the Packed Filter that could not be loaded and were
      * skipped.
      */
@@ -74,6 +90,7 @@ public:
 private:
     // Variables
     std::vector<char> m_pack;
+    std::vector<std::string> m_archive_ids;
     std::vector<ActiveRunner> m_active_runners;
     std::vector<index_id_t> m_skipped_index_ids;
 };
