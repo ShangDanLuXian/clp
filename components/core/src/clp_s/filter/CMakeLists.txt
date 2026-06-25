@@ -66,6 +66,8 @@ set(
         CLP_F_EXE_SOURCES
         CommandLineArguments.cpp
         CommandLineArguments.hpp
+        PerformanceMetrics.cpp
+        PerformanceMetrics.hpp
 )
 
 
