@@ -1,10 +1,13 @@
 #include "CommandLineArguments.hpp"
 
+#include <cstddef>
 #include <exception>
+#include <filesystem>
 #include <iostream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include <boost/program_options.hpp>
 #include <boost/program_options/options_description.hpp>
@@ -24,6 +27,9 @@ namespace {
 constexpr std::string_view cNoAuth{"none"};
 constexpr std::string_view cS3Auth{"s3"};
 
+// Validation constants
+constexpr size_t cMaxNumThreads{256};
+
 /**
  * Read a list of newline-delimited paths from a file and put them into a vector passed by reference
  * @param input_path_list_file_path path to the file containing the list of paths
@@ -42,6 +48,13 @@ constexpr std::string_view cS3Auth{"s3"};
  * @throws std::invalid_argument if the authorization option is invalid
  */
 auto validate_network_auth(std::string_view auth_method, NetworkAuthOption& auth) -> void;
+
+/**
+ * Duplicates or truncates an input vector to a given length.
+ * @param input_vector
+ * @param target_length
+ */
+auto modify_input_length(std::vector<Path>& input_vector, size_t target_length) -> void;
 
 auto read_paths_from_file(
         std::string const& input_path_list_file_path,
@@ -84,6 +97,24 @@ auto validate_network_auth(std::string_view auth_method, NetworkAuthOption& auth
     } else if (cNoAuth != auth_method) {
         throw std::invalid_argument(fmt::format("Invalid authentication type \"{}\"", auth_method));
     }
+}
+
+auto modify_input_length(std::vector<Path>& input_vector, size_t target_length) -> void {
+    if (input_vector.empty() || input_vector.size() == target_length) {
+        return;
+    }
+
+    if (input_vector.size() > target_length) {
+        input_vector.resize(target_length);
+        return;
+    }
+
+    std::vector<Path> new_input_vector{input_vector};
+    while (new_input_vector.size() < target_length) {
+        new_input_vector.insert(new_input_vector.end(), input_vector.begin(), input_vector.end());
+    }
+    new_input_vector.resize(target_length);
+    input_vector = new_input_vector;
 }
 }  // namespace
 
@@ -178,6 +209,8 @@ auto CommandLineArguments::parse_arguments(int argc, char const* argv[])
 
             std::string input_path_list_file_path;
             std::string auth{cNoAuth};
+            size_t duplicate_inputs_until{0};
+            std::string performance_report_file_path;
             po::options_description build_pack_options("Build options");
             // clang-format off
             build_pack_options.add_options()(
@@ -194,6 +227,31 @@ auto CommandLineArguments::parse_arguments(int argc, char const* argv[])
                 "Type of authentication required for network requests (s3 | none). Authentication"
                 " with s3 requires the AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY environment"
                 " variables, and optionally the AWS_SESSION_TOKEN environment variable."
+            )(
+                "num-threads",
+                po::value<size_t>(&m_num_threads)
+                    ->value_name("THREADS")
+                    ->default_value(m_num_threads),
+                "Number of threads to use for pack building."
+            )(
+                "duplicate-inputs-until",
+                po::value<size_t>(&duplicate_inputs_until)
+                    ->value_name("NUM_ARCHIVES")
+                    ->default_value(duplicate_inputs_until),
+                "Number of archives to take as input by duplicating or truncating the set of "
+                "archives given as input. A value of zero indicates no changes to the input."
+            )(
+                "num-archives-per-pack",
+                po::value<size_t>(&m_num_archives_per_pack)
+                    ->value_name("ARCHIVES_PER_PACK")
+                    ->default_value(m_num_archives_per_pack),
+                "Number of archives to build into each pack."
+            )(
+                "performance-report-file-path",
+                po::value<std::string>(&performance_report_file_path)
+                    ->value_name("REPORT_PATH")
+                    ->default_value(performance_report_file_path),
+                "File path to write a performance report. By default no report is written."
             );
             // clang-format on
             po::positional_options_description positional_options;
@@ -227,6 +285,19 @@ auto CommandLineArguments::parse_arguments(int argc, char const* argv[])
                 throw std::invalid_argument("No output directory specified.");
             }
 
+            if (false == std::filesystem::exists(m_output_dir)) {
+                std::ignore = std::filesystem::create_directories(m_output_dir);
+            }
+
+            if (false == performance_report_file_path.empty()) {
+                std::filesystem::path path{performance_report_file_path};
+                path.remove_filename();
+                if (false == path.empty()) {
+                    std::ignore = std::filesystem::create_directories(path);
+                }
+                m_performance_report_file_path.emplace(performance_report_file_path);
+            }
+
             if (false == input_path_list_file_path.empty()
                 && false == read_paths_from_file(input_path_list_file_path, input_paths))
             {
@@ -243,6 +314,20 @@ auto CommandLineArguments::parse_arguments(int argc, char const* argv[])
 
             if (m_input_paths.empty()) {
                 throw std::invalid_argument("No input paths specified.");
+            }
+
+            if (0 != duplicate_inputs_until) {
+                modify_input_length(m_input_paths, duplicate_inputs_until);
+            }
+
+            if (m_num_threads > cMaxNumThreads) {
+                throw std::invalid_argument(
+                        fmt::format(
+                                "--num-threads {} exceeds maximum of {}.",
+                                m_num_threads,
+                                cMaxNumThreads
+                        )
+                );
             }
 
             validate_network_auth(auth, m_network_auth);
@@ -263,6 +348,7 @@ auto CommandLineArguments::parse_arguments(int argc, char const* argv[])
 
             std::string input_path_list_file_path;
             std::string auth{cNoAuth};
+            std::string performance_report_file_path;
             po::options_description run_pack_options("Run options");
             // clang-format off
             run_pack_options.add_options()(
@@ -279,6 +365,18 @@ auto CommandLineArguments::parse_arguments(int argc, char const* argv[])
                 "Type of authentication required for network requests (s3 | none). Authentication"
                 " with s3 requires the AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY environment"
                 " variables, and optionally the AWS_SESSION_TOKEN environment variable."
+            )(
+                "num-threads",
+                po::value<size_t>(&m_num_threads)
+                    ->value_name("THREADS")
+                    ->default_value(m_num_threads),
+                "Number of threads to use for pack building."
+            )(
+                "performance-report-file-path",
+                po::value<std::string>(&performance_report_file_path)
+                    ->value_name("REPORT_PATH")
+                    ->default_value(performance_report_file_path),
+                "File path to write a performance report. By default no report is written."
             );
             // clang-format on
             po::positional_options_description positional_options;
@@ -328,6 +426,25 @@ auto CommandLineArguments::parse_arguments(int argc, char const* argv[])
 
             if (m_input_paths.empty()) {
                 throw std::invalid_argument("No input paths specified.");
+            }
+
+            if (m_num_threads > cMaxNumThreads) {
+                throw std::invalid_argument(
+                        fmt::format(
+                                "--num-threads {} exceeds maximum of {}.",
+                                m_num_threads,
+                                cMaxNumThreads
+                        )
+                );
+            }
+
+            if (false == performance_report_file_path.empty()) {
+                std::filesystem::path path{performance_report_file_path};
+                path.remove_filename();
+                if (false == path.empty()) {
+                    std::ignore = std::filesystem::create_directories(path);
+                }
+                m_performance_report_file_path.emplace(performance_report_file_path);
             }
 
             validate_network_auth(auth, m_network_auth);

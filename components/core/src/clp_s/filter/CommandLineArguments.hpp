@@ -1,7 +1,10 @@
 #ifndef CLP_S_FILTER_COMMANDLINEARGUMENTS_HPP
 #define CLP_S_FILTER_COMMANDLINEARGUMENTS_HPP
 
+#include <cstddef>
+#include <optional>
 #include <string>
+#include <vector>
 
 #include <clp_s/InputConfig.hpp>
 
@@ -36,6 +39,16 @@ public:
         return m_network_auth;
     }
 
+    [[nodiscard]] auto get_num_threads() const -> size_t { return m_num_threads; }
+
+    [[nodiscard]] auto get_report_file_path() const -> std::optional<std::string> const& {
+        return m_performance_report_file_path;
+    }
+
+    [[nodiscard]] auto get_num_archives_per_pack() const -> size_t {
+        return m_num_archives_per_pack;
+    }
+
     [[nodiscard]] auto get_kql_query() const -> std::string const& { return m_kql_query; }
 
 private:
@@ -51,9 +64,12 @@ private:
     // General arguments
     std::vector<Path> m_input_paths;
     NetworkAuthOption m_network_auth{};
+    size_t m_num_threads{1};
+    std::optional<std::string> m_performance_report_file_path;
 
     // Pack building arguments
     std::string m_output_dir;
+    size_t m_num_archives_per_pack{16};
 
     // Pack running arguments
     std::string m_kql_query;
