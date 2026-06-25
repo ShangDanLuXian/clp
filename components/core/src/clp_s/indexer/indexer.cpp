@@ -37,7 +37,8 @@ int main(int argc, char const* argv[]) {
             == clp_s::indexer::build_packed_filter(
                     command_line_arguments.get_archive_path(),
                     command_line_arguments.get_packed_filter_output_path(),
-                    clp_s::NetworkAuthOption{}
+                    clp_s::NetworkAuthOption{},
+                    command_line_arguments.get_packed_filter_max_size()
             ))
         {
             return 1;

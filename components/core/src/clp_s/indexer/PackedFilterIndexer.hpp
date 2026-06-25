@@ -1,27 +1,35 @@
 #ifndef CLP_S_INDEXER_PACKEDFILTERINDEXER_HPP
 #define CLP_S_INDEXER_PACKEDFILTERINDEXER_HPP
 
+#include <cstddef>
 #include <string>
 
 #include "../InputConfig.hpp"
 
 namespace clp_s::indexer {
+// Default upper bound on a single pack's serialized size (32 MiB).
+constexpr size_t cDefaultMaxPackSize{32ULL * 1024 * 1024};
+
 /**
- * Builds a Bloom filter Packed Filter over every archive found under `input_path` and writes the
- * serialized pack to a local file.
+ * Builds size-bounded Bloom filter Packed Filters over the archives found under `input_path`.
  *
- * All archives under `input_path` are grouped into a single pack with one candidate bit per archive,
- * so that filtering can later prune (i.e. avoid opening) archives that cannot match a query.
+ * Archives are processed in archive-id order and greedily grouped into packs: archives are added to
+ * the current pack until adding the next one would exceed `max_pack_size`, at which point the
+ * current pack is finalized and a new one is started. Each pack carries one candidate bit per
+ * archive it contains, so that filtering can later prune (i.e. avoid opening) archives that cannot
+ * match a query. The packs are written to `output_dir` as `0.pack`, `1.pack`, ... in build order.
  *
  * @param input_path A dataset path; every archive under it (filesystem or network/S3) is indexed.
- * @param output_path Local filesystem path the serialized pack is written to.
+ * @param output_dir Local directory the pack files are written to (created if it doesn't exist).
  * @param network_auth Authentication used when reading archives over the network.
- * @return Whether the Packed Filter was built and written successfully.
+ * @param max_pack_size Upper bound on each pack's serialized size, in bytes.
+ * @return Whether every pack was built and written successfully.
  */
 [[nodiscard]] auto build_packed_filter(
         Path const& input_path,
-        std::string const& output_path,
-        NetworkAuthOption const& network_auth
+        std::string const& output_dir,
+        NetworkAuthOption const& network_auth,
+        size_t max_pack_size
 ) -> bool;
 }  // namespace clp_s::indexer
 

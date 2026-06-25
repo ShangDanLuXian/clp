@@ -100,7 +100,6 @@ set(
         ../FileReader.hpp
         ../FileWriter.cpp
         ../FileWriter.hpp
-        ../filter/BitmapView.hpp
         ../filter/BloomFilter.cpp
         ../filter/BloomFilter.hpp
         ../filter/BloomFilterIndexBuilder.cpp
@@ -114,18 +113,8 @@ set(
         ../filter/HashAlgorithm.cpp
         ../filter/HashAlgorithm.hpp
         ../filter/IndexBuilder.hpp
-        ../filter/IndexBuilderSpecification.hpp
         ../filter/IndexDefs.hpp
-        ../filter/IndexRegistry.cpp
-        ../filter/IndexRegistry.hpp
-        ../filter/IndexRunner.hpp
-        ../filter/PackedFilterBuilder.cpp
-        ../filter/PackedFilterBuilder.hpp
         ../filter/PackedFilterDefs.hpp
-        ../filter/PackedFilterReader.cpp
-        ../filter/PackedFilterReader.hpp
-        ../filter/PackedFilterRunner.cpp
-        ../filter/PackedFilterRunner.hpp
         ../filter/PackedFilterSpecification.hpp
         ../filter/PackedFilterWriter.cpp
         ../filter/PackedFilterWriter.hpp

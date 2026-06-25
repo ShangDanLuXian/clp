@@ -30,8 +30,13 @@ CommandLineArguments::parse_arguments(int argc, char const** argv) {
     )(
             "packed-filter-output",
             po::value<std::string>(&m_packed_filter_output_path),
-            "Build a Packed Filter over all archives under ARCHIVE_PATH and write it to this path"
-            " (no metadata database is used in this mode)"
+            "Build size-bounded Packed Filters over all archives under ARCHIVE_PATH and write them to"
+            " this directory (no metadata database is used in this mode)"
+    )(
+            "packed-filter-max-size",
+            po::value<size_t>(&m_packed_filter_max_size)
+                    ->default_value(m_packed_filter_max_size),
+            "Upper bound on each built pack's serialized size, in bytes"
     );
     // clang-format on
     clp::GlobalMetadataDBConfig metadata_db_config{output_options};
