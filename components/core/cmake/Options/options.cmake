@@ -313,6 +313,8 @@ function(validate_clp_s_filter_dependencies)
         CLP_BUILD_CLP_STRING_UTILS
         CLP_BUILD_CLP_S_ARCHIVEREADER
         CLP_BUILD_CLP_S_CLP_DEPENDENCIES
+        CLP_BUILD_CLP_S_SEARCH_AST
+        CLP_BUILD_CLP_S_SEARCH_KQL
     )
 endfunction()
 

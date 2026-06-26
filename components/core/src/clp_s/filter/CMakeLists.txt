@@ -23,6 +23,10 @@ set(
         IndexRegistry.cpp
         IndexRegistry.hpp
         IndexRunner.hpp
+        PackBuilder.cpp
+        PackBuilder.hpp
+        PackSearcher.cpp
+        PackSearcher.hpp
         PackedFilterBuilder.cpp
         PackedFilterBuilder.hpp
         PackedFilterDefs.hpp
@@ -58,6 +62,8 @@ if(CLP_BUILD_CLP_S_FILTER)
                 PRIVATE
                 clp::string_utils
                 clp_s::archive_reader
+                clp_s::search::ast
+                clp_s::search::kql
                 xxHash::xxhash
         )
 endif()

@@ -20,6 +20,8 @@
 
 #include "AtomicWorkQueue.hpp"
 #include "CommandLineArguments.hpp"
+#include "PackBuilder.hpp"
+#include "PackSearcher.hpp"
 #include "PerformanceMetrics.hpp"
 
 using clp_s::filter::CommandLineArguments;
@@ -142,7 +144,15 @@ auto build_pack_thread(
     auto const num_archives_per_pack{command_line_arguments.get_num_archives_per_pack()};
 
     while (auto const batch = queue.get_items(num_archives_per_pack)) {
-        // TODO: Build a pack from the batch of archives.
+        if (false
+            == clp_s::filter::build_pack_from_archives(
+                    batch.value(),
+                    command_line_arguments.get_output_dir(),
+                    command_line_arguments.get_network_auth()
+            ))
+        {
+            SPDLOG_ERROR("Failed to build a pack from a batch of archives.");
+        }
         for (auto const& archive : batch.value()) {
             local_metrics.mark_item_processed();
         }
@@ -160,7 +170,15 @@ auto run_pack_thread(
     clp_s::filter::PerformanceMetrics local_metrics;
 
     while (auto const item = queue.get_item()) {
-        // TODO: Search the pack at the given path.
+        if (false
+            == clp_s::filter::search_pack(
+                    command_line_arguments.get_kql_query(),
+                    *item.value(),
+                    command_line_arguments.get_network_auth()
+            ))
+        {
+            SPDLOG_ERROR("Failed to search a pack.");
+        }
         local_metrics.mark_item_processed();
     }
 
