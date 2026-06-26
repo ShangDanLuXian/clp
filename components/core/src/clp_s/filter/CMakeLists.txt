@@ -52,6 +52,7 @@ if(CLP_BUILD_CLP_S_FILTER)
                 PUBLIC
                 clp_s::clp_dependencies
                 msgpack-cxx
+                nlohmann_json::nlohmann_json
                 ystdlib::containers
                 ystdlib::error_handling
                 PRIVATE
