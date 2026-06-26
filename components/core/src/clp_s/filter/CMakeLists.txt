@@ -57,6 +57,7 @@ if(CLP_BUILD_CLP_S_FILTER)
                 ystdlib::error_handling
                 PRIVATE
                 clp::string_utils
+                clp_s::archive_reader
                 xxHash::xxhash
         )
 endif()
