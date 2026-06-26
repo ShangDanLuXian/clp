@@ -54,7 +54,10 @@ struct Archive {
 ) -> bool {
     ArchiveReader archive_reader;
     archive_reader.open(archive.path, network_auth);
-    archive_reader.read_dictionaries_and_metadata();
+    // The Bloom filter indexes only the variable dictionary, so read just that (as the search path
+    // does) rather than `read_dictionaries_and_metadata`, which also reads per-table schema metadata
+    // the index doesn't need.
+    archive_reader.read_variable_dictionary();
 
     auto builder_result{filter::BloomFilterIndexBuilder::create(
             nlohmann::json::object(),
