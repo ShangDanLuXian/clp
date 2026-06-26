@@ -4,10 +4,8 @@
 #include <spdlog/sinks/stdout_sinks.h>
 #include <spdlog/spdlog.h>
 
-#include "../InputConfig.hpp"
 #include "CommandLineArguments.hpp"
 #include "IndexManager.hpp"
-#include "PackedFilterIndexer.hpp"
 
 using clp_s::indexer::CommandLineArguments;
 
@@ -30,20 +28,6 @@ int main(int argc, char const* argv[]) {
         case CommandLineArguments::ParsingResult::Success:
             // Continue processing
             break;
-    }
-
-    if (command_line_arguments.is_build_packed_filter()) {
-        if (false
-            == clp_s::indexer::build_packed_filter(
-                    command_line_arguments.get_archive_path(),
-                    command_line_arguments.get_packed_filter_output_path(),
-                    clp_s::NetworkAuthOption{},
-                    command_line_arguments.get_packed_filter_max_size()
-            ))
-        {
-            return 1;
-        }
-        return 0;
     }
 
     try {

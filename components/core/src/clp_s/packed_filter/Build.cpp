@@ -1,4 +1,4 @@
-#include "PackedFilterIndexer.hpp"
+#include "Build.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -15,14 +15,14 @@
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 
-#include "../ArchiveReader.hpp"
-#include "../filter/BloomFilterIndexBuilder.hpp"
-#include "../filter/IndexDefs.hpp"
-#include "../filter/PackedFilterSpecification.hpp"
-#include "../filter/PackedFilterWriter.hpp"
-#include "../InputConfig.hpp"
+#include <clp_s/ArchiveReader.hpp>
+#include <clp_s/filter/BloomFilterIndexBuilder.hpp>
+#include <clp_s/filter/IndexDefs.hpp>
+#include <clp_s/filter/PackedFilterSpecification.hpp>
+#include <clp_s/filter/PackedFilterWriter.hpp>
+#include <clp_s/InputConfig.hpp>
 
-namespace clp_s::indexer {
+namespace clp_s::packed_filter {
 namespace {
 // The Bloom filter index identity, matching `filter::register_indexes`.
 constexpr filter::index_id_t cBloomFilterIndexId{filter::cOfficialOpenSourceIndexIdBegin};
@@ -248,4 +248,4 @@ auto build_packed_filter(
 
     return true;
 }
-}  // namespace clp_s::indexer
+}  // namespace clp_s::packed_filter

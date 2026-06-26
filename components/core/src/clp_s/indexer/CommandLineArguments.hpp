@@ -1,7 +1,6 @@
 #ifndef CLP_S_INDEXER_COMMANDLINEARGUMENTS_HPP
 #define CLP_S_INDEXER_COMMANDLINEARGUMENTS_HPP
 
-#include <cstddef>
 #include <optional>
 #include <string>
 
@@ -33,24 +32,6 @@ public:
 
     Path const& get_archive_path() const { return m_archive_path; }
 
-    /**
-     * @return The directory the built packs should be written to, or an empty string if the indexer
-     * is not in Packed Filter build mode.
-     */
-    std::string const& get_packed_filter_output_path() const {
-        return m_packed_filter_output_path;
-    }
-
-    /**
-     * @return The upper bound on each built pack's serialized size, in bytes.
-     */
-    size_t get_packed_filter_max_size() const { return m_packed_filter_max_size; }
-
-    /**
-     * @return Whether the indexer should build Packed Filters instead of updating column metadata.
-     */
-    bool is_build_packed_filter() const { return false == m_packed_filter_output_path.empty(); }
-
     std::optional<clp::GlobalMetadataDBConfig> const& get_db_config() const {
         return m_metadata_db_config;
     }
@@ -65,8 +46,6 @@ private:
     std::string m_program_name;
     std::string m_dataset_name;
     Path m_archive_path;
-    std::string m_packed_filter_output_path;
-    size_t m_packed_filter_max_size{32ULL * 1024 * 1024};
 
     std::optional<clp::GlobalMetadataDBConfig> m_metadata_db_config;
     bool m_should_create_table{false};

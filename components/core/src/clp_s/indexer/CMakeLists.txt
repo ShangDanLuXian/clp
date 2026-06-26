@@ -100,26 +100,6 @@ set(
         ../FileReader.hpp
         ../FileWriter.cpp
         ../FileWriter.hpp
-        ../filter/BloomFilter.cpp
-        ../filter/BloomFilter.hpp
-        ../filter/BloomFilterIndexBuilder.cpp
-        ../filter/BloomFilterIndexBuilder.hpp
-        ../filter/ErrorCode.cpp
-        ../filter/ErrorCode.hpp
-        ../filter/FilterBuilder.cpp
-        ../filter/FilterBuilder.hpp
-        ../filter/FilterOptions.cpp
-        ../filter/FilterOptions.hpp
-        ../filter/HashAlgorithm.cpp
-        ../filter/HashAlgorithm.hpp
-        ../filter/IndexBuilder.hpp
-        ../filter/IndexDefs.hpp
-        ../filter/PackedFilterDefs.hpp
-        ../filter/PackedFilterSpecification.hpp
-        ../filter/PackedFilterWriter.cpp
-        ../filter/PackedFilterWriter.hpp
-        ../filter/XxHash.cpp
-        ../filter/XxHash.hpp
         ../FloatFormatEncoding.cpp
         ../FloatFormatEncoding.hpp
         ../InputConfig.cpp
@@ -153,8 +133,6 @@ set(
         IndexManager.hpp
         MySQLIndexStorage.cpp
         MySQLIndexStorage.hpp
-        PackedFilterIndexer.cpp
-        PackedFilterIndexer.hpp
 )
 
 if(CLP_BUILD_EXECUTABLES)
@@ -175,7 +153,6 @@ if(CLP_BUILD_EXECUTABLES)
                 OpenSSL::Crypto
                 simdjson::simdjson
                 spdlog::spdlog
-                xxHash::xxhash
                 ystdlib::containers
                 ystdlib::error_handling
                 zstd::libzstd_static

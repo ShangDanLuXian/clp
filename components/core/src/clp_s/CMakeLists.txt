@@ -2,7 +2,7 @@ add_subdirectory(ffi)
 add_subdirectory(filter)
 add_subdirectory(indexer)
 add_subdirectory(log_converter)
-add_subdirectory(packed_filter_query)
+add_subdirectory(packed_filter)
 add_subdirectory(search)
 add_subdirectory(timestamp_parser)
 

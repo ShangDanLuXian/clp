@@ -201,14 +201,14 @@ tasks:
       - "{{.G_CORE_COMPONENT_BUILD_DIR}}/clp-s"
       - "{{.G_CORE_COMPONENT_BUILD_DIR}}/indexer"
       - "{{.G_CORE_COMPONENT_BUILD_DIR}}/log-converter"
-      - "{{.G_CORE_COMPONENT_BUILD_DIR}}/packed-filter-query"
+      - "{{.G_CORE_COMPONENT_BUILD_DIR}}/packed-filter"
       - "{{.G_CORE_COMPONENT_BUILD_DIR}}/reducer-server"
     cmds:
       - task: "utils:cmake:build"
         vars:
           BUILD_DIR: "{{.G_CORE_COMPONENT_BUILD_DIR}}"
           JOBS: "{{.G_CPP_MAX_PARALLELISM_PER_BUILD_TASK}}"
-          TARGETS: ["clg", "clo", "clp", "clp-s", "indexer", "log-converter", "packed-filter-query", "reducer-server"]
+          TARGETS: ["clg", "clo", "clp", "clp-s", "indexer", "log-converter", "packed-filter", "reducer-server"]
 
   # NOTE: We rely on cargo for checksumming. It automatically rebuilds when source files change or
   # when a binary is missing.
