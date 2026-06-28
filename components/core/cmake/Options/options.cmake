@@ -322,6 +322,7 @@ function(set_clp_s_filter_dependencies)
     set_clp_need_flags(
         CLP_NEED_MSGPACKCXX
         CLP_NEED_NLOHMANN_JSON
+        CLP_NEED_SPDLOG
         CLP_NEED_XXHASH
         CLP_NEED_YSTDLIB
     )

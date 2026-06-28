@@ -64,6 +64,7 @@ if(CLP_BUILD_CLP_S_FILTER)
                 clp_s::archive_reader
                 clp_s::search::ast
                 clp_s::search::kql
+                spdlog::spdlog
                 xxHash::xxhash
         )
 endif()
