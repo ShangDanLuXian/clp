@@ -35,7 +35,9 @@ enum class ArchiveIdEncodingType : uint16_t {
  * The fields are ordered so that the struct's natural alignment introduces no padding, keeping it
  * exactly 64 bytes. `metadata_section_size` is the size of the metadata section that immediately
  * follows the header, so the first index blob begins at `sizeof(PackedFilterHeader) +
- * metadata_section_size`.
+ * metadata_section_size`. `pack_size` is the total size of the whole pack object (header included),
+ * letting a reader size its buffer from the header alone; it is zero in packs written before the
+ * field existed.
  */
 struct PackedFilterHeader {
     std::array<uint8_t, 4> magic_number{};
@@ -49,7 +51,8 @@ struct PackedFilterHeader {
     uint16_t num_indexes{};
     uint16_t archive_id_encoding_type{};
     uint32_t metadata_section_size{};
-    std::array<uint64_t, 5> reserved_padding{};
+    uint64_t pack_size{};
+    std::array<uint64_t, 4> reserved_padding{};
 };
 
 static_assert(64 == sizeof(PackedFilterHeader));

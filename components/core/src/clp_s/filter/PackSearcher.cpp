@@ -3,11 +3,9 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <filesystem>
 #include <memory>
 #include <sstream>
 #include <string>
-#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -17,6 +15,7 @@
 #include <clp/ReaderInterface.hpp>
 #include <clp_s/filter/IndexRegistry.hpp>
 #include <clp_s/filter/IndexRunner.hpp>
+#include <clp_s/filter/PackedFilterDefs.hpp>
 #include <clp_s/filter/PackedFilterRunner.hpp>
 #include <clp_s/filter/RegisterIndexes.hpp>
 #include <clp_s/InputConfig.hpp>
@@ -34,10 +33,10 @@ constexpr size_t cReadChunkSize{64ULL * 1024};
 /**
  * Reads the entire contents of a (filesystem or network) pack into memory.
  *
- * When the pack's size is known up front (filesystem packs), the destination is sized once and the
- * whole pack is read in a single bulk read, avoiding the repeated reallocations and copies of a
- * growing vector. Network packs, whose size isn't known ahead of time, fall back to a chunked read
- * that grows the buffer geometrically.
+ * The pack's fixed-size header is read first to validate the magic number and recover the total
+ * `pack_size`, so the destination buffer is sized once and the remainder read in a single bulk read
+ * — for both filesystem and network packs, with no reallocations. Packs written before `pack_size`
+ * existed (where it reads as zero) fall back to a chunked read that grows the buffer geometrically.
  *
  * @param pack_path
  * @param network_auth
@@ -55,25 +54,44 @@ constexpr size_t cReadChunkSize{64ULL * 1024};
         return false;
     }
 
-    // Fast path: when the size is known up front, size the buffer once and read the whole pack in a
-    // single bulk read — no reallocations and no intermediate chunk buffer.
-    if (InputSource::Filesystem == pack_path.source) {
-        std::error_code error_code;
-        auto const pack_size{std::filesystem::file_size(pack_path.path, error_code)};
-        if (false == static_cast<bool>(error_code)) {
-            contents.resize(pack_size);
-            if (pack_size > 0
-                && clp::ErrorCode_Success
-                           != reader->try_read_exact_length(contents.data(), pack_size))
-            {
-                SPDLOG_ERROR("Failed to read pack '{}'.", pack_path.path);
-                return false;
-            }
-            return true;
-        }
-        // Couldn't stat the file; fall through to the chunked read below.
+    // Read the fixed-size header first; it carries the total pack size, so we can size the buffer
+    // from the header alone rather than relying on an out-of-band file size.
+    PackedFilterHeader header{};
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+    if (clp::ErrorCode_Success
+        != reader->try_read_exact_length(reinterpret_cast<char*>(&header), sizeof(header)))
+    {
+        SPDLOG_ERROR("Failed to read the header of pack '{}'.", pack_path.path);
+        return false;
+    }
+    if (cPackedFilterMagicNumber != header.magic_number) {
+        SPDLOG_ERROR("'{}' is not a Packed Filter pack.", pack_path.path);
+        return false;
     }
 
+    // Seed the buffer with the header bytes we already read, then read the rest after it.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+    auto const* const header_bytes{reinterpret_cast<char const*>(&header)};
+    contents.assign(header_bytes, header_bytes + sizeof(header));
+
+    if (header.pack_size >= sizeof(PackedFilterHeader)) {
+        contents.resize(header.pack_size);
+        if (auto const remaining{header.pack_size - sizeof(PackedFilterHeader)};
+            remaining > 0
+            && clp::ErrorCode_Success
+                       != reader->try_read_exact_length(
+                               // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+                               contents.data() + sizeof(PackedFilterHeader),
+                               remaining
+                       ))
+        {
+            SPDLOG_ERROR("Failed to read pack '{}'.", pack_path.path);
+            return false;
+        }
+        return true;
+    }
+
+    // Pack predates the recorded `pack_size`; read the remainder in chunks.
     std::array<char, cReadChunkSize> buffer{};
     while (true) {
         size_t num_bytes_read{0};

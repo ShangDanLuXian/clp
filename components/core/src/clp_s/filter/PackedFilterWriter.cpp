@@ -102,6 +102,7 @@ auto PackedFilterWriter::serialize() const -> ystdlib::error_handling::Result<st
     header.num_indexes = static_cast<uint16_t>(m_index_ids.size());
     header.archive_id_encoding_type = static_cast<uint16_t>(ArchiveIdEncodingType::UuidString);
     header.metadata_section_size = static_cast<uint32_t>(metadata_buffer.size());
+    header.pack_size = sizeof(PackedFilterHeader) + metadata_buffer.size() + total_index_blobs_size;
 
     std::vector<char> output;
     output.reserve(sizeof(PackedFilterHeader) + metadata_buffer.size() + total_index_blobs_size);
