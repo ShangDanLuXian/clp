@@ -3,9 +3,11 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <sstream>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -31,6 +33,12 @@ constexpr size_t cReadChunkSize{64ULL * 1024};
 
 /**
  * Reads the entire contents of a (filesystem or network) pack into memory.
+ *
+ * When the pack's size is known up front (filesystem packs), the destination is sized once and the
+ * whole pack is read in a single bulk read, avoiding the repeated reallocations and copies of a
+ * growing vector. Network packs, whose size isn't known ahead of time, fall back to a chunked read
+ * that grows the buffer geometrically.
+ *
  * @param pack_path
  * @param network_auth
  * @param contents Returned pack bytes.
@@ -45,6 +53,25 @@ constexpr size_t cReadChunkSize{64ULL * 1024};
     if (nullptr == reader) {
         SPDLOG_ERROR("Failed to open pack '{}'.", pack_path.path);
         return false;
+    }
+
+    // Fast path: when the size is known up front, size the buffer once and read the whole pack in a
+    // single bulk read — no reallocations and no intermediate chunk buffer.
+    if (InputSource::Filesystem == pack_path.source) {
+        std::error_code error_code;
+        auto const pack_size{std::filesystem::file_size(pack_path.path, error_code)};
+        if (false == static_cast<bool>(error_code)) {
+            contents.resize(pack_size);
+            if (pack_size > 0
+                && clp::ErrorCode_Success
+                           != reader->try_read_exact_length(contents.data(), pack_size))
+            {
+                SPDLOG_ERROR("Failed to read pack '{}'.", pack_path.path);
+                return false;
+            }
+            return true;
+        }
+        // Couldn't stat the file; fall through to the chunked read below.
     }
 
     std::array<char, cReadChunkSize> buffer{};
