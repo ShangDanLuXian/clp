@@ -2,14 +2,13 @@
 
 #include <cstddef>
 #include <memory>
-#include <span>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include <ystdlib/error_handling/Result.hpp>
 
-#include <clp/BufferReader.hpp>
+#include <clp/ReaderInterface.hpp>
 #include <clp_s/filter/FilterReader.hpp>
 #include <clp_s/filter/IndexDefs.hpp>
 #include <clp_s/filter/IndexRunner.hpp>
@@ -141,13 +140,13 @@ enum class MatchState {
 
 auto BloomFilterIndexRunner::create(
         index_version_t /*index_version*/,
-        std::vector<std::span<char const>> const& archive_blobs
+        std::size_t num_archives,
+        clp::ReaderInterface& reader
 ) -> ystdlib::error_handling::Result<std::unique_ptr<IndexRunner>> {
     std::vector<FilterReader> filter_readers;
-    filter_readers.reserve(archive_blobs.size());
-    for (auto const archive_blob : archive_blobs) {
-        clp::BufferReader buffer_reader{archive_blob.data(), archive_blob.size()};
-        filter_readers.push_back(YSTDLIB_ERROR_HANDLING_TRYX(FilterReader::try_read(buffer_reader)));
+    filter_readers.reserve(num_archives);
+    for (std::size_t archive_idx{0}; archive_idx < num_archives; ++archive_idx) {
+        filter_readers.push_back(YSTDLIB_ERROR_HANDLING_TRYX(FilterReader::try_read(reader)));
     }
     return std::unique_ptr<IndexRunner>{
             std::unique_ptr<BloomFilterIndexRunner>(

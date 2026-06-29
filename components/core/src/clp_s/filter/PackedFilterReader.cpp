@@ -77,21 +77,22 @@ auto PackedFilterReader::create(std::span<char const> pack)
             return PackedFilterErrorCode{PackedFilterErrorCodeEnum::CorruptMetadata};
         }
 
-        std::vector<std::span<char const>> archive_blobs;
-        archive_blobs.reserve(header.num_archives);
-        size_t cursor{archive_blobs_offset};
+        // Expose the concatenated per-archive blobs as a single span rather than slicing them into
+        // one span per archive; the runner reads each archive's (self-delimiting) blob back in
+        // order. This keeps the per-archive sizes available for validation while avoiding the
+        // per-archive span allocation.
+        size_t archive_blobs_size{0};
         for (auto const archive_blob_size : blob_metadata.archive_index_sizes) {
-            if (index_blob_span.size() - cursor < archive_blob_size) {
-                return PackedFilterErrorCode{PackedFilterErrorCodeEnum::Truncated};
-            }
-            archive_blobs.push_back(index_blob_span.subspan(cursor, archive_blob_size));
-            cursor += archive_blob_size;
+            archive_blobs_size += archive_blob_size;
+        }
+        if (index_blob_span.size() - archive_blobs_offset < archive_blobs_size) {
+            return PackedFilterErrorCode{PackedFilterErrorCodeEnum::Truncated};
         }
 
         index_blobs.push_back(IndexBlobView{
                 .index_id = metadata.index_ids[index_idx],
                 .impl_version = blob_metadata.impl_version,
-                .archive_blobs = std::move(archive_blobs)
+                .archive_blobs = index_blob_span.subspan(archive_blobs_offset, archive_blobs_size)
         });
     }
 

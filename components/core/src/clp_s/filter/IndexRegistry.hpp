@@ -1,8 +1,8 @@
 #ifndef CLP_S_FILTER_INDEX_REGISTRY_HPP
 #define CLP_S_FILTER_INDEX_REGISTRY_HPP
 
+#include <cstddef>
 #include <memory>
-#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -12,6 +12,7 @@
 #include <nlohmann/json.hpp>
 #include <ystdlib/error_handling/Result.hpp>
 
+#include <clp/ReaderInterface.hpp>
 #include <clp_s/filter/IndexBuilder.hpp>
 #include <clp_s/filter/IndexBuilderSpecification.hpp>
 #include <clp_s/filter/IndexDefs.hpp>
@@ -53,15 +54,18 @@ public:
     /**
      * A factory for creating an `IndexRunner` from an index's serialized blobs.
      * @param index_version The version of the serialized index, as read from the Packed Filter.
-     * @param archive_blobs The index's serialized data for each archive, indexed by local archive
-     * ID.
+     * @param num_archives The number of archives the Packed Filter covers, i.e. the number of
+     * per-archive blobs to read from `reader`.
+     * @param reader A reader positioned at the start of the index's concatenated per-archive blobs.
+     * The factory reads `num_archives` self-delimiting blobs from it in local-archive-ID order.
      * @return A result containing the created runner on success, or an error code indicating the
      * failure:
      * - Error codes are defined by the implementation.
      */
     using IndexRunnerFactory = auto (*)(
             index_version_t index_version,
-            std::vector<std::span<char const>> const& archive_blobs
+            size_t num_archives,
+            clp::ReaderInterface& reader
     ) -> ystdlib::error_handling::Result<std::unique_ptr<IndexRunner>>;
 
     // Constructors
@@ -139,8 +143,8 @@ public:
      * Creates an `IndexRunner` for the index registered with the given Index ID.
      * @param index_id The Index ID read from the Packed Filter.
      * @param index_version The index version read from the Packed Filter.
-     * @param archive_blobs The index's serialized data for each archive, indexed by local archive
-     * ID.
+     * @param num_archives The number of per-archive blobs the runner should read from `reader`.
+     * @param reader A reader positioned at the start of the index's concatenated per-archive blobs.
      * @return A result containing the created runner on success, or an error code indicating the
      * failure:
      * - IndexErrorCodeEnum::UnknownIndexId if no index is registered with `index_id`.
@@ -149,7 +153,8 @@ public:
     [[nodiscard]] auto create_reader(
             index_id_t index_id,
             index_version_t index_version,
-            std::vector<std::span<char const>> const& archive_blobs
+            size_t num_archives,
+            clp::ReaderInterface& reader
     ) -> ystdlib::error_handling::Result<std::unique_ptr<IndexRunner>>;
 
     /**

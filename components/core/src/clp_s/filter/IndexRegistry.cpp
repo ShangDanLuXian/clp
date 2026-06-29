@@ -1,8 +1,8 @@
 #include <clp_s/filter/IndexRegistry.hpp>
 
 #include <algorithm>
+#include <cstddef>
 #include <memory>
-#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -11,6 +11,7 @@
 #include <nlohmann/json.hpp>
 #include <ystdlib/error_handling/Result.hpp>
 
+#include <clp/BufferReader.hpp>
 #include <clp_s/filter/ErrorCode.hpp>
 #include <clp_s/filter/IndexBuilder.hpp>
 #include <clp_s/filter/IndexBuilderSpecification.hpp>
@@ -97,24 +98,32 @@ auto IndexRegistry::create_packed_filter_builder(
 auto IndexRegistry::create_reader(
         index_id_t index_id,
         index_version_t index_version,
-        std::vector<std::span<char const>> const& archive_blobs
+        size_t num_archives,
+        clp::ReaderInterface& reader
 ) -> ystdlib::error_handling::Result<std::unique_ptr<IndexRunner>> {
     auto const index_it{m_indexes_by_id.find(index_id)};
     if (m_indexes_by_id.cend() == index_it) {
         return IndexErrorCode{IndexErrorCodeEnum::UnknownIndexId};
     }
-    return index_it->second.runner_factory(index_version, archive_blobs);
+    return index_it->second.runner_factory(index_version, num_archives, reader);
 }
 
 auto IndexRegistry::create_packed_filter_runner(std::vector<char> pack)
         -> ystdlib::error_handling::Result<PackedFilterRunner> {
     auto const reader{YSTDLIB_ERROR_HANDLING_TRYX(PackedFilterReader::create(pack))};
+    auto const num_archives{reader.get_num_archives()};
     auto archive_ids{reader.get_archive_ids()};
     std::vector<PackedFilterRunner::ActiveRunner> active_runners;
     std::vector<index_id_t> skipped_index_ids;
     for (auto const& index_blob : reader.get_index_blobs()) {
+        // The index's per-archive blobs are concatenated; hand the runner factory a reader over
+        // that region so it can read each blob back in order without us slicing per-archive spans.
+        clp::BufferReader blob_reader{
+                index_blob.archive_blobs.data(),
+                index_blob.archive_blobs.size()
+        };
         auto runner_result{
-                create_reader(index_blob.index_id, index_blob.impl_version, index_blob.archive_blobs)
+                create_reader(index_blob.index_id, index_blob.impl_version, num_archives, blob_reader)
         };
         if (runner_result.has_error()) {
             skipped_index_ids.push_back(index_blob.index_id);

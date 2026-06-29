@@ -1,13 +1,14 @@
 #ifndef CLP_S_FILTER_BLOOM_FILTER_INDEX_RUNNER_HPP
 #define CLP_S_FILTER_BLOOM_FILTER_INDEX_RUNNER_HPP
 
+#include <cstddef>
 #include <memory>
-#include <span>
 #include <utility>
 #include <vector>
 
 #include <ystdlib/error_handling/Result.hpp>
 
+#include <clp/ReaderInterface.hpp>
 #include <clp_s/filter/FilterReader.hpp>
 #include <clp_s/filter/IndexDefs.hpp>
 #include <clp_s/filter/IndexRunner.hpp>
@@ -33,14 +34,17 @@ public:
      * Factory matching `IndexRegistry::IndexRunnerFactory`.
      * @param index_version The serialized index version (currently unused; the blob layout is
      * self-describing).
-     * @param archive_blobs One serialized Bloom filter per archive, indexed by local archive ID.
+     * @param num_archives The number of per-archive Bloom filters to read from `reader`.
+     * @param reader A reader positioned at the start of the index's concatenated per-archive Bloom
+     * filters. Each filter is self-delimiting, so the runner reads `num_archives` of them in order.
      * @return A result containing the created runner on success, or an error code indicating the
      * failure:
      * - Forwards `FilterReader::try_read`'s return values if a blob is malformed.
      */
     [[nodiscard]] static auto create(
             index_version_t index_version,
-            std::vector<std::span<char const>> const& archive_blobs
+            std::size_t num_archives,
+            clp::ReaderInterface& reader
     ) -> ystdlib::error_handling::Result<std::unique_ptr<IndexRunner>>;
 
     // Methods (IndexRunner)

@@ -13,15 +13,18 @@
 
 namespace clp_s::filter {
 /**
- * A parsed view of a single index's blob within a Packed Filter. The blob views point into the
- * buffer passed to `PackedFilterReader::create`, so they remain valid only while that buffer does.
+ * A parsed view of a single index's blob within a Packed Filter. The blob view points into the
+ * buffer passed to `PackedFilterReader::create`, so it remains valid only while that buffer does.
  */
 struct IndexBlobView {
     index_id_t index_id{};
     index_version_t impl_version{};
 
-    // The index's serialized data for each archive, indexed by local archive ID.
-    std::vector<std::span<char const>> archive_blobs;
+    // The index's serialized data for all archives, concatenated in local-archive-ID order. The
+    // per-archive boundaries are not materialized here; a runner reads its archives' blobs back
+    // sequentially (each blob is self-delimiting), which avoids slicing the region into one span
+    // per archive.
+    std::span<char const> archive_blobs;
 };
 
 /**
