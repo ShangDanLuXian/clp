@@ -35,7 +35,6 @@ auto PackedFilterWriter::add_index(
     }
 
     IndexBlobMetadata blob_metadata;
-    blob_metadata.impl_version = impl_version;
     blob_metadata.archive_index_sizes.reserve(archive_blobs.size());
     size_t total_blob_size{0};
     for (auto const& blob : archive_blobs) {
@@ -48,6 +47,9 @@ auto PackedFilterWriter::add_index(
 
     msgpack::sbuffer metadata_buffer;
     msgpack::pack(metadata_buffer, blob_metadata);
+    if (metadata_buffer.size() > std::numeric_limits<uint32_t>::max()) {
+        return PackedFilterErrorCode{PackedFilterErrorCodeEnum::SerializedSizeOutOfRange};
+    }
 
     std::vector<char> index_blob;
     index_blob.reserve(metadata_buffer.size() + total_blob_size);
@@ -57,6 +59,8 @@ auto PackedFilterWriter::add_index(
     }
 
     m_index_ids.push_back(index_id);
+    m_index_impl_versions.push_back(impl_version);
+    m_index_blob_metadata_sizes.push_back(static_cast<uint32_t>(metadata_buffer.size()));
     m_index_blobs.push_back(std::move(index_blob));
     return ystdlib::error_handling::success();
 }
@@ -71,6 +75,8 @@ auto PackedFilterWriter::serialize() const -> ystdlib::error_handling::Result<st
     IndexMetadata metadata;
     metadata.archive_ids = m_archive_ids;
     metadata.index_ids = m_index_ids;
+    metadata.index_impl_versions = m_index_impl_versions;
+    metadata.index_blob_metadata_sizes = m_index_blob_metadata_sizes;
     metadata.index_sizes.reserve(m_index_blobs.size());
     size_t total_index_blobs_size{0};
     for (auto const& index_blob : m_index_blobs) {

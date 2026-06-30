@@ -16,8 +16,8 @@ namespace clp_s::filter {
 constexpr std::array<uint8_t, 4> cPackedFilterMagicNumber{0x43, 0x4C, 0x50, 0x46};
 
 // Current Packed Filter format version, as a semantic version.
-constexpr uint8_t cPackedFilterFormatMajorVersion{0};
-constexpr uint8_t cPackedFilterFormatMinorVersion{1};
+constexpr uint8_t cPackedFilterFormatMajorVersion{1};
+constexpr uint8_t cPackedFilterFormatMinorVersion{0};
 constexpr uint16_t cPackedFilterFormatPatchVersion{0};
 
 /**
@@ -59,36 +59,50 @@ static_assert(64 == sizeof(PackedFilterHeader));
 
 /**
  * Metadata section of a Packed Filter, serialized with msgpack and located immediately after the
- * `PackedFilterHeader`. It records the mapping from local archive ID to archive ID, and the size
- * and Index ID of each index blob (indexed positionally).
+ * `PackedFilterHeader`. It records the mapping from local archive ID to archive ID, and, for each
+ * index (indexed positionally), its total blob size, Index ID, implementation version, and the size
+ * of its `IndexBlobMetadata`.
+ *
+ * Recording each index's `IndexBlobMetadata` size here lets a reader read that (variable-length)
+ * metadata in a single sized read rather than parsing it incrementally from the stream.
  */
 struct IndexMetadata {
     // The archive ID of each archive, indexed by local archive ID. The encoding is described by the
     // header's `archive_id_encoding_type`.
     std::vector<std::string> archive_ids;
 
-    // The serialized size, in bytes, of each index's blob.
+    // The total serialized size, in bytes, of each index's region (its `IndexBlobMetadata` plus its
+    // concatenated per-archive sub-blobs).
     std::vector<uint32_t> index_sizes;
 
     // The Index ID of each index.
     std::vector<uint16_t> index_ids;
 
-    MSGPACK_DEFINE_MAP(archive_ids, index_sizes, index_ids);
+    // The implementation version of the index that produced each index's blob.
+    std::vector<uint32_t> index_impl_versions;
+
+    // The serialized size, in bytes, of each index's `IndexBlobMetadata`.
+    std::vector<uint32_t> index_blob_metadata_sizes;
+
+    MSGPACK_DEFINE_MAP(
+            archive_ids,
+            index_sizes,
+            index_ids,
+            index_impl_versions,
+            index_blob_metadata_sizes
+    );
 };
 
 /**
  * Metadata for a single index's blob within a Packed Filter, serialized with msgpack and located at
- * the start of the index's blob. The per-archive sub-blobs are concatenated immediately after it,
- * sized by `archive_index_sizes`.
+ * the start of the index's region. Its serialized size is recorded in `IndexMetadata`. The
+ * per-archive sub-blobs are concatenated immediately after it, sized by `archive_index_sizes`.
  */
 struct IndexBlobMetadata {
-    // The implementation version of the index that produced this blob.
-    index_version_t impl_version{};
-
     // The serialized size, in bytes, of each archive's sub-blob, indexed by local archive ID.
     std::vector<uint32_t> archive_index_sizes;
 
-    MSGPACK_DEFINE_MAP(impl_version, archive_index_sizes);
+    MSGPACK_DEFINE_MAP(archive_index_sizes);
 };
 }  // namespace clp_s::filter
 
