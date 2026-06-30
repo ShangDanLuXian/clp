@@ -10,8 +10,8 @@
 #include <utility>
 #include <vector>
 
-#include <boost/uuid/uuid_io.hpp>
 #include <boost/uuid/random_generator.hpp>
+#include <boost/uuid/uuid_io.hpp>
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 
@@ -45,8 +45,8 @@ constexpr index_version_t cBloomFilterIndexVersion{make_index_version(1, 0, 0)};
     ArchiveReader archive_reader;
     archive_reader.open(archive_path, network_auth);
     // The Bloom filter indexes only the variable dictionary, so read just that (as the search path
-    // does) rather than `read_dictionaries_and_metadata`, which also reads per-table schema metadata
-    // the index doesn't need.
+    // does) rather than `read_dictionaries_and_metadata`, which also reads per-table schema
+    // metadata the index doesn't need.
     archive_reader.read_variable_dictionary();
 
     auto builder_result{BloomFilterIndexBuilder::create(
@@ -137,7 +137,10 @@ auto build_pack_from_archives(
         auto const& pack{pack_result.value()};
 
         boost::uuids::random_generator boost_uuid_generator;
-        auto const pack_path{std::filesystem::path{output_dir} / (boost::uuids::to_string(boost_uuid_generator()) + ".pack")};
+        auto const pack_path{
+                std::filesystem::path{output_dir}
+                / (boost::uuids::to_string(boost_uuid_generator()) + ".pack")
+        };
         std::ofstream pack_output{pack_path, std::ios::binary | std::ios::trunc};
         if (false == pack_output.is_open()) {
             SPDLOG_ERROR("Failed to open output file '{}'.", pack_path.string());

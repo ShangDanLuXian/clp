@@ -1,5 +1,3 @@
-#include <clp_s/filter/RegisterIndexes.hpp>
-
 #include <optional>
 #include <utility>
 #include <vector>
@@ -11,6 +9,7 @@
 #include <clp_s/filter/IndexBuilderSpecification.hpp>
 #include <clp_s/filter/IndexDefs.hpp>
 #include <clp_s/filter/IndexRegistry.hpp>
+#include <clp_s/filter/RegisterIndexes.hpp>
 #include <clp_s/SingleFileArchiveDefs.hpp>
 
 namespace clp_s::filter {

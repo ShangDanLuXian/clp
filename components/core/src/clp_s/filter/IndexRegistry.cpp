@@ -1,5 +1,3 @@
-#include <clp_s/filter/IndexRegistry.hpp>
-
 #include <algorithm>
 #include <cstddef>
 #include <memory>
@@ -17,6 +15,7 @@
 #include <clp_s/filter/IndexBuilder.hpp>
 #include <clp_s/filter/IndexBuilderSpecification.hpp>
 #include <clp_s/filter/IndexDefs.hpp>
+#include <clp_s/filter/IndexRegistry.hpp>
 #include <clp_s/filter/IndexRunner.hpp>
 #include <clp_s/filter/PackedFilterBuilder.hpp>
 #include <clp_s/filter/PackedFilterReader.hpp>
@@ -50,12 +49,14 @@ auto IndexRegistry::list_supported_indexes(archive_version_t archive_version) co
             continue;
         }
         auto const* const spec{selected_result.value().spec};
-        supported_indexes.push_back(SupportedIndex{
-                name,
-                index_id,
-                spec->get_index_version(),
-                spec->get_archive_section_bitmap()
-        });
+        supported_indexes.push_back(
+                SupportedIndex{
+                        name,
+                        index_id,
+                        spec->get_index_version(),
+                        spec->get_archive_section_bitmap()
+                }
+        );
     }
     std::ranges::sort(supported_indexes, {}, &SupportedIndex::index_id);
     return supported_indexes;
@@ -87,11 +88,13 @@ auto IndexRegistry::create_packed_filter_builder(
         auto builder{YSTDLIB_ERROR_HANDLING_TRYX(
                 selected.spec->create_builder(request.config, packed_filter_spec)
         )};
-        active_indexes.push_back(PackedFilterBuilder::ActiveIndex{
-                selected.index_id,
-                selected.spec->get_index_version(),
-                std::move(builder)
-        });
+        active_indexes.push_back(
+                PackedFilterBuilder::ActiveIndex{
+                        selected.index_id,
+                        selected.spec->get_index_version(),
+                        std::move(builder)
+                }
+        );
     }
     return PackedFilterBuilder{std::move(archive_ids), archive_version, std::move(active_indexes)};
 }
@@ -139,10 +142,12 @@ auto IndexRegistry::create_packed_filter_runner(clp::ReaderInterface& reader)
             if (runner_result.has_error()) {
                 skipped_index_ids.push_back(descriptor.index_id);
             } else {
-                active_runners.push_back(PackedFilterRunner::ActiveRunner{
-                        descriptor.index_id,
-                        std::move(runner_result.value())
-                });
+                active_runners.push_back(
+                        PackedFilterRunner::ActiveRunner{
+                                descriptor.index_id,
+                                std::move(runner_result.value())
+                        }
+                );
             }
         } else {
             skipped_index_ids.push_back(descriptor.index_id);
@@ -162,10 +167,9 @@ auto IndexRegistry::create_packed_filter_runner(clp::ReaderInterface& reader)
     };
 }
 
-auto IndexRegistry::select_builder_spec(
-        std::string_view name,
-        archive_version_t archive_version
-) const -> ystdlib::error_handling::Result<SelectedBuilderSpec> {
+auto
+IndexRegistry::select_builder_spec(std::string_view name, archive_version_t archive_version) const
+        -> ystdlib::error_handling::Result<SelectedBuilderSpec> {
     auto const name_it{m_index_id_by_name.find(std::string{name})};
     if (m_index_id_by_name.cend() == name_it) {
         return IndexErrorCode{IndexErrorCodeEnum::UnknownIndexName};

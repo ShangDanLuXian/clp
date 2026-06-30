@@ -1,5 +1,3 @@
-#include <clp_s/filter/PackedFilterWriter.hpp>
-
 #include <cstdint>
 #include <cstring>
 #include <limits>
@@ -14,6 +12,7 @@
 #include <clp_s/filter/ErrorCode.hpp>
 #include <clp_s/filter/IndexDefs.hpp>
 #include <clp_s/filter/PackedFilterDefs.hpp>
+#include <clp_s/filter/PackedFilterWriter.hpp>
 
 namespace clp_s::filter {
 namespace {

@@ -49,8 +49,10 @@ TEST_CASE("index-defs-archive-section-bitmap", "[clp_s][indexing]") {
 
     REQUIRE(clp_s::filter::to_archive_section_bitmap(ArchiveSection::Metadata)
             == clp_s::filter::to_archive_section_bitmap(ArchiveSection::Metadata));
-    REQUIRE_FALSE(clp_s::filter::contains(
-            clp_s::filter::to_archive_section_bitmap(ArchiveSection::Metadata),
-            ArchiveSection::Dictionaries
-    ));
+    REQUIRE_FALSE(
+            clp_s::filter::contains(
+                    clp_s::filter::to_archive_section_bitmap(ArchiveSection::Metadata),
+                    ArchiveSection::Dictionaries
+            )
+    );
 }

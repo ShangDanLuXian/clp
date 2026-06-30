@@ -41,11 +41,9 @@ public:
      * failure:
      * - Forwards `FilterReader::try_read`'s return values if a blob is malformed.
      */
-    [[nodiscard]] static auto create(
-            index_version_t index_version,
-            std::size_t num_archives,
-            clp::ReaderInterface& reader
-    ) -> ystdlib::error_handling::Result<std::unique_ptr<IndexRunner>>;
+    [[nodiscard]] static auto
+    create(index_version_t index_version, std::size_t num_archives, clp::ReaderInterface& reader)
+            -> ystdlib::error_handling::Result<std::unique_ptr<IndexRunner>>;
 
     // Methods (IndexRunner)
     [[nodiscard]] auto filter(

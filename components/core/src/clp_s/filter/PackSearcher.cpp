@@ -41,8 +41,8 @@ auto search_pack(
         return false;
     }
 
-    // Stream the pack straight from the reader; the index runners deserialize what they need, so the
-    // whole pack is never buffered in memory.
+    // Stream the pack straight from the reader; the index runners deserialize what they need, so
+    // the whole pack is never buffered in memory.
     auto reader{try_create_reader(pack_path, network_auth)};
     if (nullptr == reader) {
         SPDLOG_ERROR("Failed to open pack '{}'.", pack_path.path);

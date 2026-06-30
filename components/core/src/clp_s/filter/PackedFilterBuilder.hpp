@@ -68,8 +68,8 @@ public:
             -> ystdlib::error_handling::Result<void>;
 
     /**
-     * Collects each builder's per-archive blobs and serializes the full pack. Must be called at most
-     * once, after every archive has been added.
+     * Collects each builder's per-archive blobs and serializes the full pack. Must be called at
+     * most once, after every archive has been added.
      * @return A result containing the serialized pack on success, or an error code indicating the
      * failure:
      * - Forwards `PackedFilterWriter::add_index` and `PackedFilterWriter::serialize` return values

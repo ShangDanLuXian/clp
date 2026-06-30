@@ -121,8 +121,8 @@ public:
 
     /**
      * Creates a `PackedFilterBuilder` that builds the requested indexes over the given archives.
-     * Each request's builder is selected from its index's specifications based on the shared archive
-     * version, exactly as in `create_writer`.
+     * Each request's builder is selected from its index's specifications based on the shared
+     * archive version, exactly as in `create_writer`.
      * @param archive_ids The archive ID of each archive, indexed by local archive ID.
      * @param archive_version The shared archive version of every archive being indexed.
      * @param index_requests The indexes to build.
@@ -163,7 +163,8 @@ public:
      * directly from `reader` into the runner; the whole pack is never buffered. Indexes with an
      * unregistered Index ID, or whose runner fails to load, are skipped (their blobs forward-seeked
      * over) and reported via the returned runner's `get_skipped_index_ids`.
-     * @param reader Positioned at the start of the pack. Read in full during the call; not retained.
+     * @param reader Positioned at the start of the pack. Read in full during the call; not
+     * retained.
      * @return A result containing the created runner on success, or an error code indicating the
      * failure:
      * - Forwards `PackedFilterReader::create`'s return values if the pack is malformed.
@@ -198,8 +199,8 @@ private:
      * `create_packed_filter_builder`.
      * @param name
      * @param archive_version
-     * @return A result containing the selected specification on success, or an error code indicating
-     * the failure:
+     * @return A result containing the selected specification on success, or an error code
+     * indicating the failure:
      * - IndexErrorCodeEnum::UnknownIndexName if no index is registered with `name`.
      * - IndexErrorCodeEnum::UnsupportedArchiveVersion if no registered builder supports
      *   `archive_version`.

@@ -22,11 +22,11 @@ namespace clp_s::filter {
  * An `IndexBuilder` that builds a Bloom filter over each archive's variable dictionary values, so
  * that filtering can prune archives whose dictionary cannot contain a queried value.
  *
- * Each archive's filter is serialized into its own blob using the same layout as `FilterBuilder`, so
- * that `BloomFilterIndexRunner` can read it back with a `FilterReader`.
+ * Each archive's filter is serialized into its own blob using the same layout as `FilterBuilder`,
+ * so that `BloomFilterIndexRunner` can read it back with a `FilterReader`.
  *
- * Requires the framework to have loaded each archive's `ArchiveSection::Dictionaries` before calling
- * `add_archive`.
+ * Requires the framework to have loaded each archive's `ArchiveSection::Dictionaries` before
+ * calling `add_archive`.
  */
 class BloomFilterIndexBuilder : public IndexBuilder {
 public:
@@ -44,16 +44,15 @@ public:
      *   supported range.
      * - ErrorCodeEnum::UnsupportedFilterNormalization if "normalization" is not a known strategy.
      */
-    [[nodiscard]] static auto create(
-            nlohmann::json const& config,
-            PackedFilterSpecification const& packed_filter_spec
-    ) -> ystdlib::error_handling::Result<std::unique_ptr<IndexBuilder>>;
+    [[nodiscard]] static auto
+    create(nlohmann::json const& config, PackedFilterSpecification const& packed_filter_spec)
+            -> ystdlib::error_handling::Result<std::unique_ptr<IndexBuilder>>;
 
     // Methods (IndexBuilder)
     /**
      * Builds and serializes a Bloom filter over `archive_reader`'s variable dictionary values.
-     * @param local_archive_id Must equal the number of archives already added, i.e. archives must be
-     * added in order of ascending local archive ID.
+     * @param local_archive_id Must equal the number of archives already added, i.e. archives must
+     * be added in order of ascending local archive ID.
      * @param archive_reader
      * @return A void result on success, or an error code indicating the failure:
      * - PackedFilterErrorCodeEnum::LocalArchiveIdOutOfRange if `local_archive_id` is not the next

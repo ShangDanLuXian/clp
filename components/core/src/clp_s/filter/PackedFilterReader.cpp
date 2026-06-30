@@ -1,5 +1,3 @@
-#include <clp_s/filter/PackedFilterReader.hpp>
-
 #include <cstddef>
 #include <exception>
 #include <utility>
@@ -13,6 +11,7 @@
 #include <clp_s/filter/ErrorCode.hpp>
 #include <clp_s/filter/IndexDefs.hpp>
 #include <clp_s/filter/PackedFilterDefs.hpp>
+#include <clp_s/filter/PackedFilterReader.hpp>
 
 namespace clp_s::filter {
 auto PackedFilterReader::create(clp::ReaderInterface& reader)
@@ -60,11 +59,13 @@ auto PackedFilterReader::create(clp::ReaderInterface& reader)
     std::vector<IndexDescriptor> index_descriptors;
     index_descriptors.reserve(header.num_indexes);
     for (size_t index_idx{0}; index_idx < header.num_indexes; ++index_idx) {
-        index_descriptors.push_back(IndexDescriptor{
-                .index_id = metadata.index_ids[index_idx],
-                .impl_version = metadata.index_impl_versions[index_idx],
-                .blob_size = metadata.index_sizes[index_idx]
-        });
+        index_descriptors.push_back(
+                IndexDescriptor{
+                        .index_id = metadata.index_ids[index_idx],
+                        .impl_version = metadata.index_impl_versions[index_idx],
+                        .blob_size = metadata.index_sizes[index_idx]
+                }
+        );
     }
 
     auto const archive_version{make_index_version(

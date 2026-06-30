@@ -1,5 +1,3 @@
-#include <clp_s/filter/BloomFilterIndexRunner.hpp>
-
 #include <cstddef>
 #include <memory>
 #include <string>
@@ -9,6 +7,7 @@
 #include <ystdlib/error_handling/Result.hpp>
 
 #include <clp/ReaderInterface.hpp>
+#include <clp_s/filter/BloomFilterIndexRunner.hpp>
 #include <clp_s/filter/FilterReader.hpp>
 #include <clp_s/filter/IndexDefs.hpp>
 #include <clp_s/filter/IndexRunner.hpp>
@@ -80,10 +79,9 @@ enum class MatchState {
  * Recursively evaluates a query (sub)expression against an archive's Bloom filter, mirroring the
  * 3-valued logic of `EvaluateTimestampIndex`.
  */
-[[nodiscard]] auto evaluate(
-        std::shared_ptr<ast::Expression> const& expression,
-        FilterReader const& filter_reader
-) -> MatchState {
+[[nodiscard]] auto
+evaluate(std::shared_ptr<ast::Expression> const& expression, FilterReader const& filter_reader)
+        -> MatchState {
     if (nullptr == expression) {
         return MatchState::Unknown;
     }
@@ -148,11 +146,9 @@ auto BloomFilterIndexRunner::create(
     for (std::size_t archive_idx{0}; archive_idx < num_archives; ++archive_idx) {
         filter_readers.push_back(YSTDLIB_ERROR_HANDLING_TRYX(FilterReader::try_read(reader)));
     }
-    return std::unique_ptr<IndexRunner>{
-            std::unique_ptr<BloomFilterIndexRunner>(
-                    new BloomFilterIndexRunner{std::move(filter_readers)}
-            )
-    };
+    return std::unique_ptr<IndexRunner>{std::unique_ptr<BloomFilterIndexRunner>(
+            new BloomFilterIndexRunner{std::move(filter_readers)}
+    )};
 }
 
 auto BloomFilterIndexRunner::filter(

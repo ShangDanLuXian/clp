@@ -1,5 +1,3 @@
-#include <clp_s/filter/BloomFilterIndexBuilder.hpp>
-
 #include <sys/types.h>
 
 #include <cstddef>
@@ -18,6 +16,7 @@
 #include <clp/WriterInterface.hpp>
 #include <clp_s/ArchiveReader.hpp>
 #include <clp_s/DictionaryReader.hpp>
+#include <clp_s/filter/BloomFilterIndexBuilder.hpp>
 #include <clp_s/filter/ErrorCode.hpp>
 #include <clp_s/filter/FilterBuilder.hpp>
 #include <clp_s/filter/FilterOptions.hpp>
@@ -30,8 +29,9 @@ namespace {
 constexpr double cDefaultFalsePositiveRate{0.001};
 
 /**
- * A `clp::WriterInterface` that appends all written bytes into a growable in-memory buffer. Only the
- * append path is implemented, which is all `FilterBuilder::write` requires; seeking is unsupported.
+ * A `clp::WriterInterface` that appends all written bytes into a growable in-memory buffer. Only
+ * the append path is implemented, which is all `FilterBuilder::write` requires; seeking is
+ * unsupported.
  */
 class VectorWriter : public clp::WriterInterface {
 public:
@@ -133,12 +133,14 @@ auto BloomFilterIndexBuilder::add_archive(
 
     auto const variable_dictionary{archive_reader.get_variable_dictionary()};
     auto const& entries{variable_dictionary->get_entries()};
-    auto filter_builder{YSTDLIB_ERROR_HANDLING_TRYX(FilterBuilder::create(
-            FilterType::Bloom,
-            m_normalization,
-            entries.size(),
-            m_false_positive_rate
-    ))};
+    auto filter_builder{YSTDLIB_ERROR_HANDLING_TRYX(
+            FilterBuilder::create(
+                    FilterType::Bloom,
+                    m_normalization,
+                    entries.size(),
+                    m_false_positive_rate
+            )
+    )};
     for (auto const& entry : entries) {
         filter_builder.add(entry.get_value());
     }

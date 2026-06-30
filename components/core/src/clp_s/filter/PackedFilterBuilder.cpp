@@ -1,5 +1,3 @@
-#include <clp_s/filter/PackedFilterBuilder.hpp>
-
 #include <cstdint>
 #include <span>
 #include <vector>
@@ -7,6 +5,7 @@
 #include <ystdlib/error_handling/Result.hpp>
 
 #include <clp_s/filter/ErrorCode.hpp>
+#include <clp_s/filter/PackedFilterBuilder.hpp>
 
 namespace clp_s::filter {
 auto PackedFilterBuilder::add_archive(
@@ -29,11 +28,9 @@ auto PackedFilterBuilder::serialize() -> ystdlib::error_handling::Result<std::ve
         std::vector<std::span<char const>> const archive_blobs{
                 active_index.builder->get_archive_blobs()
         };
-        YSTDLIB_ERROR_HANDLING_TRYV(m_writer.add_index(
-                active_index.index_id,
-                active_index.index_version,
-                archive_blobs
-        ));
+        YSTDLIB_ERROR_HANDLING_TRYV(
+                m_writer.add_index(active_index.index_id, active_index.index_version, archive_blobs)
+        );
     }
     return m_writer.serialize();
 }

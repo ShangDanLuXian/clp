@@ -1,10 +1,9 @@
-#include <clp_s/filter/PackedFilterRunner.hpp>
-
 #include <memory>
 
 #include <ystdlib/error_handling/Result.hpp>
 
 #include <clp_s/filter/IndexRunner.hpp>
+#include <clp_s/filter/PackedFilterRunner.hpp>
 
 namespace clp_s::search::ast {
 class Expression;
