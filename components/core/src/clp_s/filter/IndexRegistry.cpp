@@ -125,17 +125,11 @@ auto IndexRegistry::create_packed_filter_runner(clp::ReaderInterface& reader)
     std::vector<PackedFilterRunner::ActiveRunner> active_runners;
     std::vector<index_id_t> skipped_index_ids;
     for (auto const& descriptor : pack_reader.get_index_descriptors()) {
-        auto const region_end{region_offset + descriptor.region_size};
+        auto const region_end{region_offset + descriptor.blob_size};
 
-        // Only registered indexes are loaded. For those, seek past the index's `IndexBlobMetadata`
-        // (whose size we know from the metadata) to the start of the blobs, then let the runner read
-        // the blobs straight from the reader.
+        // Only registered indexes are loaded. The reader is positioned at the start of the index's
+        // blobs, so the runner reads them straight from it.
         if (m_indexes_by_id.contains(descriptor.index_id)) {
-            if (clp::ErrorCode_Success
-                != reader.try_seek_from_begin(region_offset + descriptor.blob_metadata_size))
-            {
-                return PackedFilterErrorCode{PackedFilterErrorCodeEnum::Truncated};
-            }
             auto runner_result{create_reader(
                     descriptor.index_id,
                     descriptor.impl_version,
@@ -154,7 +148,7 @@ auto IndexRegistry::create_packed_filter_runner(clp::ReaderInterface& reader)
             skipped_index_ids.push_back(descriptor.index_id);
         }
 
-        // Realign to the next index's region regardless of how far we advanced.
+        // Realign to the next index's blob regardless of how far the runner advanced.
         if (clp::ErrorCode_Success != reader.try_seek_from_begin(region_end)) {
             return PackedFilterErrorCode{PackedFilterErrorCodeEnum::Truncated};
         }

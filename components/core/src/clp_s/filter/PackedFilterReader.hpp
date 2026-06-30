@@ -14,20 +14,16 @@
 
 namespace clp_s::filter {
 /**
- * A description of one index in a Packed Filter, parsed from the metadata section. The index's region
- * (its `IndexBlobMetadata` followed by its concatenated per-archive sub-blobs) follows the metadata
- * section in `index_id`-positional order and is read separately, directly from the reader.
+ * A description of one index in a Packed Filter, parsed from the metadata section. The index's blob
+ * (its concatenated per-archive sub-blobs) follows the metadata section in `index_id`-positional
+ * order and is read separately, directly from the reader.
  */
 struct IndexDescriptor {
     index_id_t index_id{};
     index_version_t impl_version{};
 
-    // The serialized size, in bytes, of the index's `IndexBlobMetadata`.
-    uint32_t blob_metadata_size{};
-
-    // The total size, in bytes, of the index's region (`IndexBlobMetadata` plus concatenated
-    // sub-blobs).
-    uint32_t region_size{};
+    // The size, in bytes, of the index's blob (its concatenated per-archive sub-blobs).
+    uint32_t blob_size{};
 };
 
 /**

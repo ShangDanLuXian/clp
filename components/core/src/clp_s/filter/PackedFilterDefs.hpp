@@ -60,19 +60,18 @@ static_assert(64 == sizeof(PackedFilterHeader));
 /**
  * Metadata section of a Packed Filter, serialized with msgpack and located immediately after the
  * `PackedFilterHeader`. It records the mapping from local archive ID to archive ID, and, for each
- * index (indexed positionally), its total blob size, Index ID, implementation version, and the size
- * of its `IndexBlobMetadata`.
+ * index (indexed positionally), its blob size, Index ID, and implementation version.
  *
- * Recording each index's `IndexBlobMetadata` size here lets a reader read that (variable-length)
- * metadata in a single sized read rather than parsing it incrementally from the stream.
+ * Each index's blob, located after this section, is just its per-archive sub-blobs concatenated in
+ * local-archive-ID order; the sub-blobs are self-delimiting, so neither per-archive sizes nor any
+ * per-index metadata are stored alongside the blob.
  */
 struct IndexMetadata {
     // The archive ID of each archive, indexed by local archive ID. The encoding is described by the
     // header's `archive_id_encoding_type`.
     std::vector<std::string> archive_ids;
 
-    // The total serialized size, in bytes, of each index's region (its `IndexBlobMetadata` plus its
-    // concatenated per-archive sub-blobs).
+    // The serialized size, in bytes, of each index's blob.
     std::vector<uint32_t> index_sizes;
 
     // The Index ID of each index.
@@ -81,28 +80,7 @@ struct IndexMetadata {
     // The implementation version of the index that produced each index's blob.
     std::vector<uint32_t> index_impl_versions;
 
-    // The serialized size, in bytes, of each index's `IndexBlobMetadata`.
-    std::vector<uint32_t> index_blob_metadata_sizes;
-
-    MSGPACK_DEFINE_MAP(
-            archive_ids,
-            index_sizes,
-            index_ids,
-            index_impl_versions,
-            index_blob_metadata_sizes
-    );
-};
-
-/**
- * Metadata for a single index's blob within a Packed Filter, serialized with msgpack and located at
- * the start of the index's region. Its serialized size is recorded in `IndexMetadata`. The
- * per-archive sub-blobs are concatenated immediately after it, sized by `archive_index_sizes`.
- */
-struct IndexBlobMetadata {
-    // The serialized size, in bytes, of each archive's sub-blob, indexed by local archive ID.
-    std::vector<uint32_t> archive_index_sizes;
-
-    MSGPACK_DEFINE_MAP(archive_index_sizes);
+    MSGPACK_DEFINE_MAP(archive_ids, index_sizes, index_ids, index_impl_versions);
 };
 }  // namespace clp_s::filter
 

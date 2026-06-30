@@ -19,9 +19,8 @@ namespace clp_s::filter {
  * The archives are fixed at construction, defining the local archive ID space and the
  * local-ID-to-archive-ID mapping. Each index's per-archive blobs are added with `add_index`, and
  * `serialize` produces the full pack: the 64-byte header, the msgpack-encoded `IndexMetadata`
- * section, and each index's region (msgpack `IndexBlobMetadata` followed by the raw per-archive
- * blobs). The index's implementation version and the size of its `IndexBlobMetadata` are recorded in
- * the top-level `IndexMetadata`.
+ * section, and each index's blob (its raw per-archive blobs concatenated in local-archive-ID
+ * order). Each index's implementation version is recorded in the top-level `IndexMetadata`.
  */
 class PackedFilterWriter {
 public:
@@ -63,7 +62,6 @@ private:
     archive_version_t m_archive_version;
     std::vector<index_id_t> m_index_ids;
     std::vector<index_version_t> m_index_impl_versions;
-    std::vector<uint32_t> m_index_blob_metadata_sizes;
     std::vector<std::vector<char>> m_index_blobs;
 };
 }  // namespace clp_s::filter
