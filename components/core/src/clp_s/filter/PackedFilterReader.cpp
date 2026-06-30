@@ -51,8 +51,7 @@ auto PackedFilterReader::create(clp::ReaderInterface& reader)
     }
     if (metadata.archive_ids.size() != header.num_archives
         || metadata.index_ids.size() != header.num_indexes
-        || metadata.index_sizes.size() != header.num_indexes
-        || metadata.index_impl_versions.size() != header.num_indexes)
+        || metadata.index_sizes.size() != header.num_indexes)
     {
         return PackedFilterErrorCode{PackedFilterErrorCodeEnum::CorruptMetadata};
     }
@@ -62,7 +61,6 @@ auto PackedFilterReader::create(clp::ReaderInterface& reader)
     for (size_t index_idx{0}; index_idx < header.num_indexes; ++index_idx) {
         index_descriptors.push_back(IndexDescriptor{
                 .index_id = metadata.index_ids[index_idx],
-                .impl_version = metadata.index_impl_versions[index_idx],
                 .blob_size = metadata.index_sizes[index_idx]
         });
     }

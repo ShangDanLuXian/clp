@@ -34,24 +34,29 @@ auto PackedFilterWriter::add_index(
         return PackedFilterErrorCode{PackedFilterErrorCodeEnum::ArchiveCountMismatch};
     }
 
+    IndexBlobMetadata blob_metadata;
+    blob_metadata.impl_version = impl_version;
+    blob_metadata.archive_index_sizes.reserve(archive_blobs.size());
     size_t total_blob_size{0};
     for (auto const& blob : archive_blobs) {
         if (blob.size() > std::numeric_limits<uint32_t>::max()) {
             return PackedFilterErrorCode{PackedFilterErrorCodeEnum::SerializedSizeOutOfRange};
         }
+        blob_metadata.archive_index_sizes.push_back(static_cast<uint32_t>(blob.size()));
         total_blob_size += blob.size();
     }
 
-    // The index's blob is just its per-archive sub-blobs concatenated; they are self-delimiting, so
-    // no per-archive sizes are stored and the runner reads them back sequentially.
+    msgpack::sbuffer metadata_buffer;
+    msgpack::pack(metadata_buffer, blob_metadata);
+
     std::vector<char> index_blob;
-    index_blob.reserve(total_blob_size);
+    index_blob.reserve(metadata_buffer.size() + total_blob_size);
+    append_bytes(std::span<char const>{metadata_buffer.data(), metadata_buffer.size()}, index_blob);
     for (auto const& blob : archive_blobs) {
         append_bytes(blob, index_blob);
     }
 
     m_index_ids.push_back(index_id);
-    m_index_impl_versions.push_back(impl_version);
     m_index_blobs.push_back(std::move(index_blob));
     return ystdlib::error_handling::success();
 }
@@ -66,7 +71,6 @@ auto PackedFilterWriter::serialize() const -> ystdlib::error_handling::Result<st
     IndexMetadata metadata;
     metadata.archive_ids = m_archive_ids;
     metadata.index_ids = m_index_ids;
-    metadata.index_impl_versions = m_index_impl_versions;
     metadata.index_sizes.reserve(m_index_blobs.size());
     size_t total_index_blobs_size{0};
     for (auto const& index_blob : m_index_blobs) {

@@ -59,11 +59,8 @@ static_assert(64 == sizeof(PackedFilterHeader));
 
 /**
  * Metadata section of a Packed Filter, serialized with msgpack and located immediately after the
- * `PackedFilterHeader`. It records the mapping from local archive ID to archive ID, and the size,
- * Index ID, and implementation version of each index (indexed positionally).
- *
- * Each index's blob, located after this section, is just its per-archive sub-blobs concatenated in
- * local-archive-ID order; the sub-blobs are self-delimiting, so no per-archive sizes are stored.
+ * `PackedFilterHeader`. It records the mapping from local archive ID to archive ID, and the size
+ * and Index ID of each index blob (indexed positionally).
  */
 struct IndexMetadata {
     // The archive ID of each archive, indexed by local archive ID. The encoding is described by the
@@ -76,10 +73,22 @@ struct IndexMetadata {
     // The Index ID of each index.
     std::vector<uint16_t> index_ids;
 
-    // The implementation version of the index that produced each index's blob.
-    std::vector<uint32_t> index_impl_versions;
+    MSGPACK_DEFINE_MAP(archive_ids, index_sizes, index_ids);
+};
 
-    MSGPACK_DEFINE_MAP(archive_ids, index_sizes, index_ids, index_impl_versions);
+/**
+ * Metadata for a single index's blob within a Packed Filter, serialized with msgpack and located at
+ * the start of the index's blob. The per-archive sub-blobs are concatenated immediately after it,
+ * sized by `archive_index_sizes`.
+ */
+struct IndexBlobMetadata {
+    // The implementation version of the index that produced this blob.
+    index_version_t impl_version{};
+
+    // The serialized size, in bytes, of each archive's sub-blob, indexed by local archive ID.
+    std::vector<uint32_t> archive_index_sizes;
+
+    MSGPACK_DEFINE_MAP(impl_version, archive_index_sizes);
 };
 }  // namespace clp_s::filter
 

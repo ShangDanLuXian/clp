@@ -2,12 +2,14 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <exception>
 #include <memory>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
+#include <msgpack.hpp>
 #include <nlohmann/json.hpp>
 #include <ystdlib/error_handling/Result.hpp>
 
@@ -19,11 +21,44 @@
 #include <clp_s/filter/IndexDefs.hpp>
 #include <clp_s/filter/IndexRunner.hpp>
 #include <clp_s/filter/PackedFilterBuilder.hpp>
+#include <clp_s/filter/PackedFilterDefs.hpp>
 #include <clp_s/filter/PackedFilterReader.hpp>
 #include <clp_s/filter/PackedFilterRunner.hpp>
 #include <clp_s/filter/PackedFilterSpecification.hpp>
 
 namespace clp_s::filter {
+namespace {
+/**
+ * Reads a single msgpack `IndexBlobMetadata` object from `reader`, one byte at a time so the read
+ * stops exactly at the object's end without consuming any of the index's blob bytes that follow it.
+ * Leaves `reader` positioned at the start of the index's concatenated per-archive sub-blobs.
+ * @param reader
+ * @param metadata Returned metadata.
+ * @return Whether the metadata was read and deserialized successfully.
+ */
+[[nodiscard]] auto
+read_index_blob_metadata(clp::ReaderInterface& reader, IndexBlobMetadata& metadata) -> bool {
+    msgpack::unpacker unpacker;
+    msgpack::object_handle object_handle;
+    while (false == unpacker.next(object_handle)) {
+        unpacker.reserve_buffer(1);
+        size_t num_bytes_read{0};
+        if (clp::ErrorCode_Success != reader.try_read(unpacker.buffer(), 1, num_bytes_read)
+            || 0 == num_bytes_read)
+        {
+            return false;
+        }
+        unpacker.buffer_consumed(num_bytes_read);
+    }
+    try {
+        object_handle.get().convert(metadata);
+    } catch (std::exception const&) {
+        return false;
+    }
+    return true;
+}
+}  // namespace
+
 auto IndexRegistry::register_index(
         std::string name,
         index_id_t index_id,
@@ -127,24 +162,34 @@ auto IndexRegistry::create_packed_filter_runner(clp::ReaderInterface& reader)
     for (auto const& descriptor : pack_reader.get_index_descriptors()) {
         auto const region_end{region_offset + descriptor.blob_size};
 
-        // For a registered index the runner reads its blobs straight from the reader; an
-        // unregistered Index ID errors out before reading anything.
-        auto runner_result{create_reader(
-                descriptor.index_id,
-                descriptor.impl_version,
-                num_archives,
-                reader
-        )};
-        if (runner_result.has_error()) {
-            skipped_index_ids.push_back(descriptor.index_id);
+        // Only registered indexes are loaded. For those, read the index's `IndexBlobMetadata` off
+        // the stream (which advances the reader to the blobs), then let the runner read the blobs
+        // straight from the reader.
+        if (m_indexes_by_id.contains(descriptor.index_id)) {
+            IndexBlobMetadata blob_metadata;
+            if (false == read_index_blob_metadata(reader, blob_metadata)) {
+                skipped_index_ids.push_back(descriptor.index_id);
+            } else {
+                auto runner_result{create_reader(
+                        descriptor.index_id,
+                        blob_metadata.impl_version,
+                        num_archives,
+                        reader
+                )};
+                if (runner_result.has_error()) {
+                    skipped_index_ids.push_back(descriptor.index_id);
+                } else {
+                    active_runners.push_back(PackedFilterRunner::ActiveRunner{
+                            descriptor.index_id,
+                            std::move(runner_result.value())
+                    });
+                }
+            }
         } else {
-            active_runners.push_back(PackedFilterRunner::ActiveRunner{
-                    descriptor.index_id,
-                    std::move(runner_result.value())
-            });
+            skipped_index_ids.push_back(descriptor.index_id);
         }
 
-        // Realign to the next index's blob regardless of how far the runner advanced.
+        // Realign to the next index's blob regardless of how far we advanced.
         if (clp::ErrorCode_Success != reader.try_seek_from_begin(region_end)) {
             return PackedFilterErrorCode{PackedFilterErrorCodeEnum::Truncated};
         }
