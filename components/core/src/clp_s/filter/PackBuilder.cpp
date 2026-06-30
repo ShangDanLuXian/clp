@@ -10,6 +10,8 @@
 #include <utility>
 #include <vector>
 
+#include <boost/uuid/uuid_io.hpp>
+#include <boost/uuid/random_generator.hpp>
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 
@@ -134,8 +136,8 @@ auto build_pack_from_archives(
         }
         auto const& pack{pack_result.value()};
 
-        // Name the pack after its first archive's id so concurrent builders never collide.
-        auto const pack_path{std::filesystem::path{output_dir} / (archive_ids.front() + ".pack")};
+        boost::uuids::random_generator boost_uuid_generator;
+        auto const pack_path{std::filesystem::path{output_dir} / (boost::uuids::to_string(boost_uuid_generator()) + ".pack")};
         std::ofstream pack_output{pack_path, std::ios::binary | std::ios::trunc};
         if (false == pack_output.is_open()) {
             SPDLOG_ERROR("Failed to open output file '{}'.", pack_path.string());
