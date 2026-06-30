@@ -1,28 +1,29 @@
 #include <clp_s/filter/PackedFilterReader.hpp>
 
 #include <cstddef>
-#include <cstring>
 #include <exception>
-#include <span>
 #include <utility>
 #include <vector>
 
 #include <msgpack.hpp>
 #include <ystdlib/error_handling/Result.hpp>
 
+#include <clp/ErrorCode.hpp>
+#include <clp/ReaderInterface.hpp>
 #include <clp_s/filter/ErrorCode.hpp>
 #include <clp_s/filter/IndexDefs.hpp>
 #include <clp_s/filter/PackedFilterDefs.hpp>
 
 namespace clp_s::filter {
-auto PackedFilterReader::create(std::span<char const> pack)
+auto PackedFilterReader::create(clp::ReaderInterface& reader)
         -> ystdlib::error_handling::Result<PackedFilterReader> {
-    if (pack.size() < sizeof(PackedFilterHeader)) {
+    PackedFilterHeader header{};
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+    if (clp::ErrorCode_Success
+        != reader.try_read_exact_length(reinterpret_cast<char*>(&header), sizeof(header)))
+    {
         return PackedFilterErrorCode{PackedFilterErrorCodeEnum::Truncated};
     }
-
-    PackedFilterHeader header{};
-    std::memcpy(&header, pack.data(), sizeof(PackedFilterHeader));
     if (cPackedFilterMagicNumber != header.magic_number) {
         return PackedFilterErrorCode{PackedFilterErrorCodeEnum::InvalidMagicNumber};
     }
@@ -30,69 +31,39 @@ auto PackedFilterReader::create(std::span<char const> pack)
         return PackedFilterErrorCode{PackedFilterErrorCodeEnum::UnsupportedFormatVersion};
     }
 
-    size_t const metadata_offset{sizeof(PackedFilterHeader)};
-    if (pack.size() - metadata_offset < header.metadata_section_size) {
+    std::vector<char> metadata_buffer(header.metadata_section_size);
+    if (header.metadata_section_size > 0
+        && clp::ErrorCode_Success
+                   != reader.try_read_exact_length(
+                           metadata_buffer.data(),
+                           header.metadata_section_size
+                   ))
+    {
         return PackedFilterErrorCode{PackedFilterErrorCodeEnum::Truncated};
     }
 
     IndexMetadata metadata;
     try {
-        auto const metadata_span{pack.subspan(metadata_offset, header.metadata_section_size)};
-        auto object_handle{msgpack::unpack(metadata_span.data(), metadata_span.size())};
+        auto object_handle{msgpack::unpack(metadata_buffer.data(), metadata_buffer.size())};
         object_handle.get().convert(metadata);
     } catch (std::exception const&) {
         return PackedFilterErrorCode{PackedFilterErrorCodeEnum::CorruptMetadata};
     }
     if (metadata.archive_ids.size() != header.num_archives
         || metadata.index_ids.size() != header.num_indexes
-        || metadata.index_sizes.size() != header.num_indexes)
+        || metadata.index_sizes.size() != header.num_indexes
+        || metadata.index_impl_versions.size() != header.num_indexes)
     {
         return PackedFilterErrorCode{PackedFilterErrorCodeEnum::CorruptMetadata};
     }
 
-    std::vector<IndexBlobView> index_blobs;
-    index_blobs.reserve(header.num_indexes);
-    size_t blob_offset{metadata_offset + header.metadata_section_size};
+    std::vector<IndexDescriptor> index_descriptors;
+    index_descriptors.reserve(header.num_indexes);
     for (size_t index_idx{0}; index_idx < header.num_indexes; ++index_idx) {
-        auto const index_size{metadata.index_sizes[index_idx]};
-        if (pack.size() - blob_offset < index_size) {
-            return PackedFilterErrorCode{PackedFilterErrorCodeEnum::Truncated};
-        }
-        auto const index_blob_span{pack.subspan(blob_offset, index_size)};
-        blob_offset += index_size;
-
-        IndexBlobMetadata blob_metadata;
-        size_t archive_blobs_offset{0};
-        try {
-            auto object_handle{msgpack::unpack(
-                    index_blob_span.data(),
-                    index_blob_span.size(),
-                    archive_blobs_offset
-            )};
-            object_handle.get().convert(blob_metadata);
-        } catch (std::exception const&) {
-            return PackedFilterErrorCode{PackedFilterErrorCodeEnum::CorruptMetadata};
-        }
-        if (blob_metadata.archive_index_sizes.size() != header.num_archives) {
-            return PackedFilterErrorCode{PackedFilterErrorCodeEnum::CorruptMetadata};
-        }
-
-        // Expose the concatenated per-archive blobs as a single span rather than slicing them into
-        // one span per archive; the runner reads each archive's (self-delimiting) blob back in
-        // order. This keeps the per-archive sizes available for validation while avoiding the
-        // per-archive span allocation.
-        size_t archive_blobs_size{0};
-        for (auto const archive_blob_size : blob_metadata.archive_index_sizes) {
-            archive_blobs_size += archive_blob_size;
-        }
-        if (index_blob_span.size() - archive_blobs_offset < archive_blobs_size) {
-            return PackedFilterErrorCode{PackedFilterErrorCodeEnum::Truncated};
-        }
-
-        index_blobs.push_back(IndexBlobView{
+        index_descriptors.push_back(IndexDescriptor{
                 .index_id = metadata.index_ids[index_idx],
-                .impl_version = blob_metadata.impl_version,
-                .archive_blobs = index_blob_span.subspan(archive_blobs_offset, archive_blobs_size)
+                .impl_version = metadata.index_impl_versions[index_idx],
+                .blob_size = metadata.index_sizes[index_idx]
         });
     }
 
@@ -104,7 +75,7 @@ auto PackedFilterReader::create(std::span<char const> pack)
     return PackedFilterReader{
             archive_version,
             std::move(metadata.archive_ids),
-            std::move(index_blobs)
+            std::move(index_descriptors)
     };
 }
 }  // namespace clp_s::filter

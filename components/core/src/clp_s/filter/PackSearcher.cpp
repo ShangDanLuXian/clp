@@ -1,6 +1,5 @@
 #include "PackSearcher.hpp"
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -11,11 +10,9 @@
 
 #include <spdlog/spdlog.h>
 
-#include <clp/ErrorCode.hpp>
 #include <clp/ReaderInterface.hpp>
 #include <clp_s/filter/IndexRegistry.hpp>
 #include <clp_s/filter/IndexRunner.hpp>
-#include <clp_s/filter/PackedFilterDefs.hpp>
 #include <clp_s/filter/PackedFilterRunner.hpp>
 #include <clp_s/filter/RegisterIndexes.hpp>
 #include <clp_s/InputConfig.hpp>
@@ -26,91 +23,6 @@
 namespace ast = clp_s::search::ast;
 
 namespace clp_s::filter {
-namespace {
-// Chunk size used when streaming a pack into memory.
-constexpr size_t cReadChunkSize{64ULL * 1024};
-
-/**
- * Reads the entire contents of a (filesystem or network) pack into memory.
- *
- * The pack's fixed-size header is read first to validate the magic number and recover the total
- * `pack_size`, so the destination buffer is sized once and the remainder read in a single bulk read
- * — for both filesystem and network packs, with no reallocations. Packs written before `pack_size`
- * existed (where it reads as zero) fall back to a chunked read that grows the buffer geometrically.
- *
- * @param pack_path
- * @param network_auth
- * @param contents Returned pack bytes.
- * @return Whether the pack was read successfully.
- */
-[[nodiscard]] auto read_pack(
-        Path const& pack_path,
-        NetworkAuthOption const& network_auth,
-        std::vector<char>& contents
-) -> bool {
-    auto reader{try_create_reader(pack_path, network_auth)};
-    if (nullptr == reader) {
-        SPDLOG_ERROR("Failed to open pack '{}'.", pack_path.path);
-        return false;
-    }
-
-    // Read the fixed-size header first; it carries the total pack size, so we can size the buffer
-    // from the header alone rather than relying on an out-of-band file size.
-    PackedFilterHeader header{};
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
-    if (clp::ErrorCode_Success
-        != reader->try_read_exact_length(reinterpret_cast<char*>(&header), sizeof(header)))
-    {
-        SPDLOG_ERROR("Failed to read the header of pack '{}'.", pack_path.path);
-        return false;
-    }
-    if (cPackedFilterMagicNumber != header.magic_number) {
-        SPDLOG_ERROR("'{}' is not a Packed Filter pack.", pack_path.path);
-        return false;
-    }
-
-    // Seed the buffer with the header bytes we already read, then read the rest after it.
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
-    auto const* const header_bytes{reinterpret_cast<char const*>(&header)};
-    contents.assign(header_bytes, header_bytes + sizeof(header));
-
-    if (header.pack_size >= sizeof(PackedFilterHeader)) {
-        contents.resize(header.pack_size);
-        if (auto const remaining{header.pack_size - sizeof(PackedFilterHeader)};
-            remaining > 0
-            && clp::ErrorCode_Success
-                       != reader->try_read_exact_length(
-                               // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-                               contents.data() + sizeof(PackedFilterHeader),
-                               remaining
-                       ))
-        {
-            SPDLOG_ERROR("Failed to read pack '{}'.", pack_path.path);
-            return false;
-        }
-        return true;
-    }
-
-    // Pack predates the recorded `pack_size`; read the remainder in chunks.
-    std::array<char, cReadChunkSize> buffer{};
-    while (true) {
-        size_t num_bytes_read{0};
-        auto const error_code{reader->try_read(buffer.data(), buffer.size(), num_bytes_read)};
-        if (num_bytes_read > 0) {
-            contents.insert(contents.end(), buffer.data(), buffer.data() + num_bytes_read);
-        }
-        if (clp::ErrorCode_EndOfFile == error_code) {
-            break;
-        }
-        if (clp::ErrorCode_Success != error_code) {
-            SPDLOG_ERROR("Failed to read pack '{}'.", pack_path.path);
-            return false;
-        }
-    }
-    return true;
-}
-}  // namespace
-
 auto search_pack(
         std::string const& kql_query,
         Path const& pack_path,
@@ -129,12 +41,15 @@ auto search_pack(
         return false;
     }
 
-    std::vector<char> pack;
-    if (false == read_pack(pack_path, network_auth, pack)) {
+    // Stream the pack straight from the reader; the index runners deserialize what they need, so the
+    // whole pack is never buffered in memory.
+    auto reader{try_create_reader(pack_path, network_auth)};
+    if (nullptr == reader) {
+        SPDLOG_ERROR("Failed to open pack '{}'.", pack_path.path);
         return false;
     }
 
-    auto runner_result{registry.create_packed_filter_runner(std::move(pack))};
+    auto runner_result{registry.create_packed_filter_runner(*reader)};
     if (runner_result.has_error()) {
         SPDLOG_ERROR("Failed to load pack '{}'.", pack_path.path);
         return false;

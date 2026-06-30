@@ -28,7 +28,7 @@ namespace clp_s::filter {
  * failing the whole Packed Filter; their Index IDs are reported by `get_skipped_index_ids` so the
  * caller can warn and continue.
  *
- * The runner owns the pack buffer, since an `IndexRunner` may hold views into its serialized blobs.
+ * Each `IndexRunner` owns its deserialized data, so the pack's bytes need not be retained.
  */
 class PackedFilterRunner {
 public:
@@ -43,13 +43,11 @@ public:
 
     // Constructors
     PackedFilterRunner(
-            std::vector<char> pack,
             std::vector<std::string> archive_ids,
             std::vector<ActiveRunner> active_runners,
             std::vector<index_id_t> skipped_index_ids
     )
-            : m_pack{std::move(pack)},
-              m_archive_ids{std::move(archive_ids)},
+            : m_archive_ids{std::move(archive_ids)},
               m_active_runners{std::move(active_runners)},
               m_skipped_index_ids{std::move(skipped_index_ids)} {}
 
@@ -89,7 +87,6 @@ public:
 
 private:
     // Variables
-    std::vector<char> m_pack;
     std::vector<std::string> m_archive_ids;
     std::vector<ActiveRunner> m_active_runners;
     std::vector<index_id_t> m_skipped_index_ids;

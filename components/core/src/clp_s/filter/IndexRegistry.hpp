@@ -158,17 +158,18 @@ public:
     ) -> ystdlib::error_handling::Result<std::unique_ptr<IndexRunner>>;
 
     /**
-     * Creates a `PackedFilterRunner` for a serialized Packed Filter, loading an `IndexRunner` for
-     * each of its indexes whose Index ID is registered. Indexes with an unregistered Index ID, or
-     * whose runner fails to load, are skipped and reported via the returned runner's
-     * `get_skipped_index_ids`.
-     * @param pack The serialized pack object. Ownership is taken so that the loaded runners can hold
-     * views into it.
+     * Creates a `PackedFilterRunner` for a Packed Filter read from `reader`, loading an
+     * `IndexRunner` for each of its indexes whose Index ID is registered. Each index's blob is read
+     * directly from `reader` into the runner; the whole pack is never buffered. Indexes with an
+     * unregistered Index ID, or whose runner fails to load, are skipped (their blobs forward-seeked
+     * over) and reported via the returned runner's `get_skipped_index_ids`.
+     * @param reader Positioned at the start of the pack. Read in full during the call; not retained.
      * @return A result containing the created runner on success, or an error code indicating the
      * failure:
      * - Forwards `PackedFilterReader::create`'s return values if the pack is malformed.
+     * - PackedFilterErrorCodeEnum::Truncated if the reader cannot advance past an index blob.
      */
-    [[nodiscard]] auto create_packed_filter_runner(std::vector<char> pack)
+    [[nodiscard]] auto create_packed_filter_runner(clp::ReaderInterface& reader)
             -> ystdlib::error_handling::Result<PackedFilterRunner>;
 
 private:

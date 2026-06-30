@@ -11,7 +11,8 @@
 #include <nlohmann/json.hpp>
 #include <ystdlib/error_handling/Result.hpp>
 
-#include <clp/BufferReader.hpp>
+#include <clp/ErrorCode.hpp>
+#include <clp/ReaderInterface.hpp>
 #include <clp_s/filter/ErrorCode.hpp>
 #include <clp_s/filter/IndexBuilder.hpp>
 #include <clp_s/filter/IndexBuilderSpecification.hpp>
@@ -108,33 +109,49 @@ auto IndexRegistry::create_reader(
     return index_it->second.runner_factory(index_version, num_archives, reader);
 }
 
-auto IndexRegistry::create_packed_filter_runner(std::vector<char> pack)
+auto IndexRegistry::create_packed_filter_runner(clp::ReaderInterface& reader)
         -> ystdlib::error_handling::Result<PackedFilterRunner> {
-    auto const reader{YSTDLIB_ERROR_HANDLING_TRYX(PackedFilterReader::create(pack))};
-    auto const num_archives{reader.get_num_archives()};
-    auto archive_ids{reader.get_archive_ids()};
+    auto const pack_reader{YSTDLIB_ERROR_HANDLING_TRYX(PackedFilterReader::create(reader))};
+    auto const num_archives{pack_reader.get_num_archives()};
+    auto archive_ids{pack_reader.get_archive_ids()};
+
+    // `PackedFilterReader::create` left the reader at the first index's blob; track absolute blob
+    // boundaries so we can forward-seek past indexes a runner doesn't (fully) consume.
+    size_t region_offset{0};
+    if (clp::ErrorCode_Success != reader.try_get_pos(region_offset)) {
+        return PackedFilterErrorCode{PackedFilterErrorCodeEnum::Truncated};
+    }
+
     std::vector<PackedFilterRunner::ActiveRunner> active_runners;
     std::vector<index_id_t> skipped_index_ids;
-    for (auto const& index_blob : reader.get_index_blobs()) {
-        // The index's per-archive blobs are concatenated; hand the runner factory a reader over
-        // that region so it can read each blob back in order without us slicing per-archive spans.
-        clp::BufferReader blob_reader{
-                index_blob.archive_blobs.data(),
-                index_blob.archive_blobs.size()
-        };
-        auto runner_result{
-                create_reader(index_blob.index_id, index_blob.impl_version, num_archives, blob_reader)
-        };
+    for (auto const& descriptor : pack_reader.get_index_descriptors()) {
+        auto const region_end{region_offset + descriptor.blob_size};
+
+        // For a registered index the runner reads its blobs straight from the reader; an
+        // unregistered Index ID errors out before reading anything.
+        auto runner_result{create_reader(
+                descriptor.index_id,
+                descriptor.impl_version,
+                num_archives,
+                reader
+        )};
         if (runner_result.has_error()) {
-            skipped_index_ids.push_back(index_blob.index_id);
-            continue;
+            skipped_index_ids.push_back(descriptor.index_id);
+        } else {
+            active_runners.push_back(PackedFilterRunner::ActiveRunner{
+                    descriptor.index_id,
+                    std::move(runner_result.value())
+            });
         }
-        active_runners.push_back(
-                PackedFilterRunner::ActiveRunner{index_blob.index_id, std::move(runner_result.value())}
-        );
+
+        // Realign to the next index's blob regardless of how far the runner advanced.
+        if (clp::ErrorCode_Success != reader.try_seek_from_begin(region_end)) {
+            return PackedFilterErrorCode{PackedFilterErrorCodeEnum::Truncated};
+        }
+        region_offset = region_end;
     }
+
     return PackedFilterRunner{
-            std::move(pack),
             std::move(archive_ids),
             std::move(active_runners),
             std::move(skipped_index_ids)
