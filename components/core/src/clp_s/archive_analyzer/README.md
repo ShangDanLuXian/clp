@@ -15,6 +15,9 @@ For each archive path you give it (a single-file archive or an archive directory
 * Per-column statistics: each column's path, type, number of values, and number of distinct
   values. This pass decompresses every record table, so it can take a while for large archives;
   skip it with `--no-columns`.
+* An MPT (merged parse tree) fingerprint: a canonical checksum of the archive's schema tree plus
+  one-way per-node hashes, letting `generate_report.py` identify archives with identical MPTs and
+  measure MPT similarity across archives - without exposing any key names.
 
 ## What it does NOT do
 

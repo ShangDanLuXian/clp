@@ -16,6 +16,7 @@
 #include <msgpack.hpp>
 #include <nlohmann/json.hpp>
 
+#include <clp_s/archive_analyzer/MptFingerprint.hpp>
 #include <clp_s/ArchiveReader.hpp>
 #include <clp_s/archive_constants.hpp>
 #include <clp_s/ColumnReader.hpp>
@@ -369,6 +370,8 @@ auto analyze_archive(std::string const& archive_path, bool collect_column_stats)
         stats.num_records += archive_reader.get_num_messages_for_schema(schema_id);
     }
 
+    stats.mpt = compute_mpt_fingerprint(*archive_reader.get_schema_tree());
+
     if (collect_column_stats) {
         archive_reader.open_packed_streams();
         ColumnStatsCollector collector;
@@ -398,6 +401,7 @@ auto print_stats_as_text(ArchiveStats const& stats) -> void {
         );
     }
     fmt::print("  Records: {} across {} schemas\n", stats.num_records, stats.num_schemas);
+    fmt::print("  MPT: {} nodes, checksum {}\n", stats.mpt.num_nodes, stats.mpt.checksum);
 
     fmt::print("\nComponents:\n");
     fmt::print("  {:<24} {:>12} {:>8}\n", "name", "size", "%");
@@ -458,6 +462,18 @@ auto stats_to_json(ArchiveStats const& stats) -> nlohmann::json {
         }));
     }
 
+    auto node_fingerprints = nlohmann::json::array();
+    for (auto const node_fingerprint : stats.mpt.node_fingerprints) {
+        // Fingerprints are serialized as hex strings since 64-bit values don't fit losslessly in
+        // JSON numbers.
+        node_fingerprints.push_back(fmt::format("{:016x}", node_fingerprint));
+    }
+    auto mpt = nlohmann::json::object({
+            {"num_nodes", stats.mpt.num_nodes},
+            {"checksum", stats.mpt.checksum},
+            {"node_fingerprints", std::move(node_fingerprints)}
+    });
+
     return nlohmann::json::object({
             {"path", stats.path},
             {"archive_format_version", stats.archive_format_version},
@@ -465,6 +481,7 @@ auto stats_to_json(ArchiveStats const& stats) -> nlohmann::json {
             {"uncompressed_size", stats.uncompressed_size},
             {"num_records", stats.num_records},
             {"num_schemas", stats.num_schemas},
+            {"mpt", std::move(mpt)},
             {"components", std::move(components)},
             {"columns", std::move(columns)}
     });

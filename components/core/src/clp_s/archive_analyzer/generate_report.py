@@ -150,7 +150,9 @@ def build_column_name_mapping(columns: List[Dict[str, Any]]) -> List[Tuple[str, 
 
 
 def summarize_report(report: Dict[str, Any]) -> Dict[str, Any]:
-    """Builds the sanitized summary for one archive's report."""
+    """Builds the sanitized summary for one archive's report. The MPT's per-node fingerprints are
+    intentionally omitted, keeping only the aggregate checksum and node count."""
+    mpt = coerce_to_dict(report.get("mpt")) or {}
     return {
         "archive": report.get("path", ""),
         "archive_format_version": report.get("archive_format_version", ""),
@@ -158,15 +160,117 @@ def summarize_report(report: Dict[str, Any]) -> Dict[str, Any]:
         "uncompressed_size": report.get("uncompressed_size", 0),
         "num_records": report.get("num_records", 0),
         "num_schemas": report.get("num_schemas", 0),
+        "mpt": {
+            "num_nodes": mpt.get("num_nodes", 0),
+            "checksum": str(mpt.get("checksum", "")),
+        },
         "components": normalize_entries(report.get("components", [])),
         "column_summary": summarize_columns(normalize_entries(report.get("columns", []))),
     }
+
+
+def build_mpt_similarity(reports: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Builds the cross-archive MPT (merged parse tree) similarity summary: groups of archives
+    whose MPTs are identical (same checksum), and the pairwise similarity of every archive pair
+    (Jaccard overlap of their MPT node fingerprints). Returns None when fewer than two archives
+    carry MPT data."""
+    entries = []
+    for report in reports:
+        mpt = coerce_to_dict(report.get("mpt")) or {}
+        checksum = str(mpt.get("checksum", ""))
+        if not checksum:
+            continue
+        raw_fingerprints = mpt.get("node_fingerprints", [])
+        fingerprints = (
+            {str(f) for f in raw_fingerprints} if isinstance(raw_fingerprints, list) else set()
+        )
+        entries.append(
+            {
+                "archive": str(report.get("path", "")),
+                "checksum": checksum,
+                "fingerprints": fingerprints,
+            }
+        )
+    if len(entries) < 2:
+        return None
+
+    groups: Dict[str, List[str]] = {}
+    for entry in entries:
+        groups.setdefault(entry["checksum"], []).append(entry["archive"])
+    identical_groups = [
+        {"checksum": checksum, "archives": archives}
+        for checksum, archives in sorted(groups.items())
+        if len(archives) > 1
+    ]
+
+    pairs = []
+    for i in range(len(entries)):
+        for j in range(i + 1, len(entries)):
+            entry_a, entry_b = entries[i], entries[j]
+            if entry_a["checksum"] == entry_b["checksum"]:
+                similarity = 100.0
+            elif entry_a["fingerprints"] and entry_b["fingerprints"]:
+                intersection = len(entry_a["fingerprints"] & entry_b["fingerprints"])
+                union = len(entry_a["fingerprints"] | entry_b["fingerprints"])
+                similarity = 100.0 * intersection / union if union > 0 else 0.0
+            else:
+                # Fingerprints are unavailable (e.g. an older analyzer build); only checksum
+                # equality can be evaluated for this pair.
+                continue
+            pairs.append(
+                {
+                    "archive_a": entry_a["archive"],
+                    "archive_b": entry_b["archive"],
+                    "similarity_percent": similarity,
+                }
+            )
+    pairs.sort(key=lambda pair: -pair["similarity_percent"])
+
+    return {
+        "num_archives": len(entries),
+        "identical_groups": identical_groups,
+        "pairwise": pairs,
+    }
+
+
+def render_mpt_similarity(similarity: Dict[str, Any], out: TextIO) -> None:
+    """Renders the cross-archive MPT similarity summary."""
+    out.write("MPT (merged parse tree) similarity across archives:\n")
+    if similarity["identical_groups"]:
+        for group in similarity["identical_groups"]:
+            out.write(
+                f"  {len(group['archives'])} archives share an identical MPT"
+                f" (checksum {group['checksum']}):\n"
+            )
+            for archive in group["archives"]:
+                out.write(f"    {archive}\n")
+    else:
+        out.write("  No two archives have identical MPTs.\n")
+
+    pairs = similarity["pairwise"]
+    if pairs:
+        max_rendered_pairs = 20
+        out.write("\n  Pairwise similarity (MPT node-set overlap):\n")
+        for pair in pairs[:max_rendered_pairs]:
+            out.write(
+                f"    {pair['similarity_percent']:>6.1f}%  {pair['archive_a']}"
+                f"  <->  {pair['archive_b']}\n"
+            )
+        if len(pairs) > max_rendered_pairs:
+            values = [pair["similarity_percent"] for pair in pairs]
+            out.write(
+                f"    ... {len(pairs) - max_rendered_pairs} more pairs"
+                f" (min {min(values):.1f}%, avg {sum(values) / len(values):.1f}%,"
+                f" max {max(values):.1f}%)\n"
+            )
+    out.write("\n")
 
 
 def render_text(
     analyzer_version: str,
     summaries: List[Dict[str, Any]],
     failures: List[Dict[str, Any]],
+    mpt_similarity: Optional[Dict[str, Any]],
     out: TextIO,
 ) -> None:
     """Renders the sanitized summaries as a human-readable text report."""
@@ -180,6 +284,9 @@ def render_text(
             out.write(f"  {failure.get('path', '')}\n")
             out.write(f"    {failure.get('error', '')}\n")
         out.write("\n")
+
+    if mpt_similarity is not None:
+        render_mpt_similarity(mpt_similarity, out)
 
     for summary in summaries:
         out.write(f"Archive: {summary['archive']}\n")
@@ -196,6 +303,9 @@ def render_text(
         out.write(
             f"  Records: {summary['num_records']} across {summary['num_schemas']} schemas\n"
         )
+        mpt = summary.get("mpt") or {}
+        if mpt.get("checksum"):
+            out.write(f"  MPT: {mpt.get('num_nodes', 0)} nodes, checksum {mpt['checksum']}\n")
 
         out.write("\n  Components:\n")
         out.write(f"    {'name':<24} {'size':>12} {'%':>8}\n")
@@ -324,6 +434,7 @@ def main() -> int:
         )
 
     summaries = [summarize_report(report) for report in reports]
+    mpt_similarity = build_mpt_similarity(reports)
 
     if args.mapping:
         with open(args.mapping, "w", encoding="utf-8") as mapping_file:
@@ -342,6 +453,7 @@ def main() -> int:
             "report_generator_version": REPORT_GENERATOR_VERSION,
             "contains_column_names": False,
             "failed_archives": failures,
+            "mpt_similarity": mpt_similarity,
             "reports": summaries,
         }
         rendered = json.dumps(output_document, indent=2) + "\n"
@@ -352,9 +464,9 @@ def main() -> int:
             sys.stdout.write(rendered)
     elif args.output:
         with open(args.output, "w", encoding="utf-8") as output_file:
-            render_text(analyzer_version, summaries, failures, output_file)
+            render_text(analyzer_version, summaries, failures, mpt_similarity, output_file)
     else:
-        render_text(analyzer_version, summaries, failures, sys.stdout)
+        render_text(analyzer_version, summaries, failures, mpt_similarity, sys.stdout)
 
     if args.output:
         print(f"Report written to {args.output}", file=sys.stderr)

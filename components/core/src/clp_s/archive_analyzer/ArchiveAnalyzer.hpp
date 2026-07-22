@@ -7,6 +7,7 @@
 
 #include <nlohmann/json_fwd.hpp>
 
+#include <clp_s/archive_analyzer/MptFingerprint.hpp>
 #include <clp_s/SchemaTree.hpp>
 
 namespace clp_s::archive_analyzer {
@@ -39,6 +40,7 @@ struct ArchiveStats {
     uint64_t uncompressed_size{};
     uint64_t num_records{};
     uint64_t num_schemas{};
+    MptFingerprint mpt;
     std::vector<ComponentStats> components;
     // Empty when the cardinality pass is skipped.
     std::vector<ColumnStats> columns;

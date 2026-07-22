@@ -5,6 +5,8 @@ set(
         ArchiveAnalyzer.hpp
         CommandLineArguments.cpp
         CommandLineArguments.hpp
+        MptFingerprint.cpp
+        MptFingerprint.hpp
 )
 
 if(CLP_BUILD_EXECUTABLES)
