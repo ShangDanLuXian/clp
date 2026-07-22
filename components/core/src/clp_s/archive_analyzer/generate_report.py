@@ -221,12 +221,35 @@ def main() -> int:
 
     try:
         if "-" == args.input:
-            analysis = json.load(sys.stdin)
+            raw_input_text = sys.stdin.read()
         else:
             with open(args.input, encoding="utf-8") as input_file:
-                analysis = json.load(input_file)
-    except (OSError, json.JSONDecodeError) as e:
+                raw_input_text = input_file.read()
+    except OSError as e:
         print(f"Failed to read analysis input: {e}", file=sys.stderr)
+        return 1
+
+    stripped_input = raw_input_text.lstrip()
+    if not stripped_input:
+        print(
+            "Analysis input is empty. The analyzer likely failed on every archive; check the"
+            " messages it printed to stderr.",
+            file=sys.stderr,
+        )
+        return 1
+    if stripped_input.startswith("#") or stripped_input.startswith("Archive:"):
+        print(
+            "Analysis input looks like the analyzer's text output, which this script can't"
+            " parse. Re-run the analyzer with --json, e.g.:"
+            " `archive-analyzer --json <archive> > analysis.json`.",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        analysis = json.loads(raw_input_text)
+    except json.JSONDecodeError as e:
+        print(f"Failed to parse analysis input as JSON: {e}", file=sys.stderr)
         return 1
 
     # Accept both the current wrapped format ({"analyzer_version", "reports": [...]}) and a bare

@@ -1,13 +1,59 @@
 #include <exception>
 #include <iostream>
 #include <string>
+#include <string_view>
 
 #include <nlohmann/json.hpp>
 
 #include <clp_s/archive_analyzer/ArchiveAnalyzer.hpp>
 #include <clp_s/archive_analyzer/CommandLineArguments.hpp>
+#include <clp_s/ErrorCode.hpp>
+#include <clp_s/TraceableException.hpp>
 
 using clp_s::archive_analyzer::CommandLineArguments;
+
+namespace {
+/**
+ * @param error_code
+ * @return The name of `error_code`.
+ */
+[[nodiscard]] auto error_code_to_string(clp_s::ErrorCode error_code) -> std::string_view {
+    switch (error_code) {
+        case clp_s::ErrorCodeSuccess:
+            return "Success";
+        case clp_s::ErrorCodeBadParam:
+            return "BadParam";
+        case clp_s::ErrorCodeCorrupt:
+            return "Corrupt";
+        case clp_s::ErrorCodeErrno:
+            return "Errno";
+        case clp_s::ErrorCodeEndOfFile:
+            return "EndOfFile";
+        case clp_s::ErrorCodeFileExists:
+            return "FileExists";
+        case clp_s::ErrorCodeFileNotFound:
+            return "FileNotFound";
+        case clp_s::ErrorCodeNotInit:
+            return "NotInit";
+        case clp_s::ErrorCodeNotReady:
+            return "NotReady";
+        case clp_s::ErrorCodeOutOfBounds:
+            return "OutOfBounds";
+        case clp_s::ErrorCodeTooLong:
+            return "TooLong";
+        case clp_s::ErrorCodeTruncated:
+            return "Truncated";
+        case clp_s::ErrorCodeUnsupported:
+            return "Unsupported";
+        case clp_s::ErrorCodeNoAccess:
+            return "NoAccess";
+        case clp_s::ErrorCodeMetadataCorrupted:
+            return "MetadataCorrupted";
+        default:
+            return "Unknown";
+    }
+}
+}  // namespace
 
 auto main(int argc, char const* argv[]) -> int {
     CommandLineArguments command_line_arguments{"archive-analyzer"};
@@ -37,6 +83,18 @@ auto main(int argc, char const* argv[]) -> int {
             } else {
                 clp_s::archive_analyzer::print_stats_as_text(stats);
             }
+        } catch (clp_s::TraceableException const& e) {
+            std::cerr << "Failed to analyze \"" << archive_path << "\": " << e.get_filename()
+                      << ":" << e.get_line_number() << " "
+                      << error_code_to_string(e.get_error_code()) << " (error code "
+                      << e.get_error_code() << ")\n";
+            if (clp_s::ErrorCodeUnsupported == e.get_error_code()) {
+                std::cerr << "Hint: this archive's format is not supported by this build of the"
+                             " analyzer. It may have been created by a different clp-s version;"
+                             " check whether this build's clp-s can read it (e.g. `clp-s x"
+                             " <archive> <output-dir>`).\n";
+            }
+            return_code = 1;
         } catch (std::exception const& e) {
             std::cerr << "Failed to analyze \"" << archive_path << "\": " << e.what() << "\n";
             return_code = 1;
