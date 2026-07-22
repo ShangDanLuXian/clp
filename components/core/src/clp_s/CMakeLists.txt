@@ -1,3 +1,4 @@
+add_subdirectory(archive_analyzer)
 add_subdirectory(ffi)
 add_subdirectory(filter)
 add_subdirectory(indexer)
