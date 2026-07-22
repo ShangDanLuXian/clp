@@ -433,9 +433,11 @@ auto print_stats_as_text(ArchiveStats const& stats) -> void {
 }
 
 auto stats_to_json(ArchiveStats const& stats) -> nlohmann::json {
-    auto components{nlohmann::json::array()};
+    // NOTE: The explicit `json::object`/`json::array` factories are used throughout instead of
+    // brace initialization, since the latter can silently produce arrays with unintended shapes.
+    auto components = nlohmann::json::array();
     for (auto const& component : stats.components) {
-        components.emplace_back(nlohmann::json{
+        components.push_back(nlohmann::json::object({
                 {"name", component.name},
                 {"size", component.size},
                 {"percentage",
@@ -443,20 +445,20 @@ auto stats_to_json(ArchiveStats const& stats) -> nlohmann::json {
                          ? 0.0
                          : 100.0 * static_cast<double>(component.size)
                                    / static_cast<double>(stats.total_size)}
-        });
+        }));
     }
 
-    auto columns{nlohmann::json::array()};
+    auto columns = nlohmann::json::array();
     for (auto const& column : stats.columns) {
-        columns.emplace_back(nlohmann::json{
+        columns.push_back(nlohmann::json::object({
                 {"path", column.path},
                 {"type", node_type_to_string(column.type)},
                 {"num_values", column.num_values},
                 {"num_distinct_values", column.num_distinct_values}
-        });
+        }));
     }
 
-    return nlohmann::json{
+    return nlohmann::json::object({
             {"path", stats.path},
             {"archive_format_version", stats.archive_format_version},
             {"total_size", stats.total_size},
@@ -465,6 +467,6 @@ auto stats_to_json(ArchiveStats const& stats) -> nlohmann::json {
             {"num_schemas", stats.num_schemas},
             {"components", std::move(components)},
             {"columns", std::move(columns)}
-    };
+    });
 }
 }  // namespace clp_s::archive_analyzer

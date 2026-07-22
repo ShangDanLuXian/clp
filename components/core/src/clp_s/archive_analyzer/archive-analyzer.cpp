@@ -68,15 +68,15 @@ auto main(int argc, char const* argv[]) -> int {
 
     int return_code{0};
     auto const output_json{command_line_arguments.get_output_json()};
-    auto failures{nlohmann::json::array()};
+    auto failures = nlohmann::json::array();
 
     // Records a failure on stderr and in the JSON output, without aborting the remaining
     // archives.
     auto record_failure
             = [&](std::string const& archive_path, std::string const& error_message) -> void {
         std::cerr << "Failed to analyze \"" << archive_path << "\": " << error_message << "\n";
-        failures.emplace_back(
-                nlohmann::json{{"path", archive_path}, {"error", error_message}}
+        failures.push_back(
+                nlohmann::json::object({{"path", archive_path}, {"error", error_message}})
         );
         return_code = 1;
     };

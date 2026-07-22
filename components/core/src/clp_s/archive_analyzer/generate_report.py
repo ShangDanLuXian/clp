@@ -37,6 +37,44 @@ CARDINALITY_RANGES: List[Tuple[float, str]] = [
 ]
 
 
+def coerce_to_dict(value: Any) -> Optional[Dict[str, Any]]:
+    """Coerces a JSON entry to a dict, tolerating shapes emitted by older analyzer builds: an
+    object flattened into a list of [key, value] pairs is converted; anything else non-dict yields
+    None."""
+    if isinstance(value, dict):
+        return value
+    if (
+        isinstance(value, list)
+        and value
+        and all(
+            isinstance(pair, list) and 2 == len(pair) and isinstance(pair[0], str)
+            for pair in value
+        )
+    ):
+        return {pair[0]: pair[1] for pair in value}
+    return None
+
+
+def normalize_entries(entries: Any) -> List[Dict[str, Any]]:
+    """Normalizes a JSON array of objects (reports, failures, components, columns), tolerating
+    artifacts emitted by older analyzer builds: entries wrapped in a single-element array are
+    unwrapped, pair-list entries are converted to dicts, and stray artifacts (e.g. empty arrays)
+    are dropped."""
+    normalized: List[Dict[str, Any]] = []
+    if not isinstance(entries, list):
+        return normalized
+    for entry in entries:
+        as_dict = coerce_to_dict(entry)
+        if as_dict is not None:
+            normalized.append(as_dict)
+        elif isinstance(entry, list):
+            for inner in entry:
+                inner_dict = coerce_to_dict(inner)
+                if inner_dict is not None:
+                    normalized.append(inner_dict)
+    return normalized
+
+
 def format_size(num_bytes: int) -> str:
     """Formats a byte count as a human-readable string (e.g. "1.2 MiB")."""
     size = float(num_bytes)
@@ -120,8 +158,8 @@ def summarize_report(report: Dict[str, Any]) -> Dict[str, Any]:
         "uncompressed_size": report.get("uncompressed_size", 0),
         "num_records": report.get("num_records", 0),
         "num_schemas": report.get("num_schemas", 0),
-        "components": report.get("components", []),
-        "column_summary": summarize_columns(report.get("columns", [])),
+        "components": normalize_entries(report.get("components", [])),
+        "column_summary": summarize_columns(normalize_entries(report.get("columns", []))),
     }
 
 
@@ -269,12 +307,12 @@ def main() -> int:
     # list of reports.
     if isinstance(analysis, list):
         analyzer_version = "unknown"
-        reports = analysis
+        reports = normalize_entries(analysis)
         failures = []
     else:
         analyzer_version = str(analysis.get("analyzer_version", "unknown"))
-        reports = analysis.get("reports", [])
-        failures = analysis.get("failures", [])
+        reports = normalize_entries(analysis.get("reports", []))
+        failures = normalize_entries(analysis.get("failures", []))
 
     if not reports and not failures:
         print("No archive reports found in the input.", file=sys.stderr)
@@ -293,7 +331,9 @@ def main() -> int:
             mapping_file.write("# Maps anonymized column IDs in the report to column paths.\n")
             for report in reports:
                 mapping_file.write(f"\nArchive: {report.get('path', '')}\n")
-                for column_id, path in build_column_name_mapping(report.get("columns", [])):
+                for column_id, path in build_column_name_mapping(
+                    normalize_entries(report.get("columns", []))
+                ):
                     mapping_file.write(f"  {column_id}  {path}\n")
 
     if args.json:
