@@ -22,6 +22,10 @@ auto main(int argc, char const* argv[]) -> int {
 
     int return_code{0};
     auto json_reports{nlohmann::json::array()};
+    if (false == command_line_arguments.get_output_json()) {
+        std::cout << "# archive-analyzer " << clp_s::archive_analyzer::get_analyzer_version()
+                  << "\n\n";
+    }
     for (auto const& archive_path : command_line_arguments.get_archive_paths()) {
         try {
             auto const stats{clp_s::archive_analyzer::analyze_archive(
@@ -41,7 +45,11 @@ auto main(int argc, char const* argv[]) -> int {
 
     if (command_line_arguments.get_output_json()) {
         constexpr int cJsonIndent{2};
-        std::cout << json_reports.dump(cJsonIndent) << "\n";
+        nlohmann::json const output{
+                {"analyzer_version", clp_s::archive_analyzer::get_analyzer_version()},
+                {"reports", std::move(json_reports)}
+        };
+        std::cout << output.dump(cJsonIndent) << "\n";
     }
     return return_code;
 }

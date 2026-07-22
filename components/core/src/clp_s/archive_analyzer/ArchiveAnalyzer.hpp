@@ -45,6 +45,12 @@ struct ArchiveStats {
 };
 
 /**
+ * @return The analyzer's version, including the git description of the source it was built from
+ * when available.
+ */
+[[nodiscard]] auto get_analyzer_version() -> std::string;
+
+/**
  * Analyzes an archive, collecting its total size, the size of each of its components, and
  * (optionally) per-column statistics.
  *

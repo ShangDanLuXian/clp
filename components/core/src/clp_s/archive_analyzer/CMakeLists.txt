@@ -13,6 +13,23 @@ if(CLP_BUILD_EXECUTABLES)
                 ${ARCHIVE_ANALYZER_SOURCES}
         )
         target_compile_features(archive-analyzer PRIVATE cxx_std_20)
+
+        # Embed the git description of the source the binary was built from, so reports carry
+        # their provenance.
+        execute_process(
+                COMMAND git describe --always --dirty
+                WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+                OUTPUT_VARIABLE ARCHIVE_ANALYZER_GIT_DESC
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+                ERROR_QUIET
+        )
+        if(ARCHIVE_ANALYZER_GIT_DESC)
+                target_compile_definitions(
+                        archive-analyzer
+                        PRIVATE
+                        ARCHIVE_ANALYZER_GIT_DESC="${ARCHIVE_ANALYZER_GIT_DESC}"
+                )
+        endif()
         target_include_directories(archive-analyzer PRIVATE ../../)
         target_link_libraries(
                 archive-analyzer

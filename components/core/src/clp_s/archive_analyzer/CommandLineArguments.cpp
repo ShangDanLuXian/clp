@@ -5,6 +5,8 @@
 
 #include <boost/program_options.hpp>
 
+#include <clp_s/archive_analyzer/ArchiveAnalyzer.hpp>
+
 namespace po = boost::program_options;
 
 namespace clp_s::archive_analyzer {
@@ -13,6 +15,7 @@ auto CommandLineArguments::parse_arguments(int argc, char const* argv[]) -> Pars
     // clang-format off
     visible_options.add_options()
             ("help,h", "Print help and exit.")
+            ("version,V", "Print the analyzer's version and exit.")
             (
                     "no-columns",
                     po::bool_switch(),
@@ -45,6 +48,11 @@ auto CommandLineArguments::parse_arguments(int argc, char const* argv[]) -> Pars
                 parsed_options
         );
         po::notify(parsed_options);
+
+        if (0 != parsed_options.count("version")) {
+            std::cout << m_program_name << " " << get_analyzer_version() << "\n";
+            return ParsingResult::InfoCommand;
+        }
 
         if (0 != parsed_options.count("help")) {
             std::cerr << "Usage: " << m_program_name << " [OPTIONS] ARCHIVE_PATH..." << "\n";

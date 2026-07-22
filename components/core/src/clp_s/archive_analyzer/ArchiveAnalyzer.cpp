@@ -37,6 +37,9 @@ public:
             : TraceableException(error_code, filename, line_number) {}
 };
 
+// The analyzer's version. Incremented whenever the analyzer's output or behaviour changes.
+constexpr std::string_view cAnalyzerVersion{"0.1.0"};
+
 // The name reported for the header and metadata section of a single-file archive.
 constexpr std::string_view cHeaderAndMetadataComponentName{"header+metadata"};
 
@@ -321,6 +324,14 @@ collect_single_file_components(std::string const& archive_path, uint64_t file_si
     return components;
 }
 }  // namespace
+
+auto get_analyzer_version() -> std::string {
+#ifdef ARCHIVE_ANALYZER_GIT_DESC
+    return fmt::format("{} ({})", cAnalyzerVersion, ARCHIVE_ANALYZER_GIT_DESC);
+#else
+    return std::string{cAnalyzerVersion};
+#endif
+}
 
 auto analyze_archive(std::string const& archive_path, bool collect_column_stats) -> ArchiveStats {
     ArchiveStats stats;
