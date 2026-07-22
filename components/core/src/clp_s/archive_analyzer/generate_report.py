@@ -17,6 +17,7 @@ Usage:
 
 import argparse
 import json
+import os
 import sys
 from typing import Any, Dict, List, Optional, TextIO, Tuple
 
@@ -124,11 +125,23 @@ def summarize_report(report: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def render_text(analyzer_version: str, summaries: List[Dict[str, Any]], out: TextIO) -> None:
+def render_text(
+    analyzer_version: str,
+    summaries: List[Dict[str, Any]],
+    failures: List[Dict[str, Any]],
+    out: TextIO,
+) -> None:
     """Renders the sanitized summaries as a human-readable text report."""
     out.write(f"# archive-analyzer report (analyzer {analyzer_version},")
     out.write(f" report generator {REPORT_GENERATOR_VERSION})\n")
     out.write("# This report contains no column names.\n\n")
+
+    if failures:
+        out.write(f"Archives that FAILED to analyze: {len(failures)}\n")
+        for failure in failures:
+            out.write(f"  {failure.get('path', '')}\n")
+            out.write(f"    {failure.get('error', '')}\n")
+        out.write("\n")
 
     for summary in summaries:
         out.write(f"Archive: {summary['archive']}\n")
@@ -257,13 +270,20 @@ def main() -> int:
     if isinstance(analysis, list):
         analyzer_version = "unknown"
         reports = analysis
+        failures = []
     else:
         analyzer_version = str(analysis.get("analyzer_version", "unknown"))
         reports = analysis.get("reports", [])
+        failures = analysis.get("failures", [])
 
-    if not reports:
+    if not reports and not failures:
         print("No archive reports found in the input.", file=sys.stderr)
         return 1
+    if not reports:
+        print(
+            "Warning: every archive failed to analyze; the report will only list the failures.",
+            file=sys.stderr,
+        )
 
     summaries = [summarize_report(report) for report in reports]
 
@@ -281,6 +301,7 @@ def main() -> int:
             "analyzer_version": analyzer_version,
             "report_generator_version": REPORT_GENERATOR_VERSION,
             "contains_column_names": False,
+            "failed_archives": failures,
             "reports": summaries,
         }
         rendered = json.dumps(output_document, indent=2) + "\n"
@@ -291,9 +312,9 @@ def main() -> int:
             sys.stdout.write(rendered)
     elif args.output:
         with open(args.output, "w", encoding="utf-8") as output_file:
-            render_text(analyzer_version, summaries, output_file)
+            render_text(analyzer_version, summaries, failures, output_file)
     else:
-        render_text(analyzer_version, summaries, sys.stdout)
+        render_text(analyzer_version, summaries, failures, sys.stdout)
 
     if args.output:
         print(f"Report written to {args.output}", file=sys.stderr)
@@ -306,4 +327,9 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except BrokenPipeError:
+        # The downstream consumer (e.g. `head`) closed the pipe; exit quietly.
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        sys.exit(1)

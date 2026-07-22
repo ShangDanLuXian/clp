@@ -67,47 +67,67 @@ auto main(int argc, char const* argv[]) -> int {
     }
 
     int return_code{0};
-    auto json_reports{nlohmann::json::array()};
-    if (false == command_line_arguments.get_output_json()) {
+    auto const output_json{command_line_arguments.get_output_json()};
+    auto failures{nlohmann::json::array()};
+
+    // Records a failure on stderr and in the JSON output, without aborting the remaining
+    // archives.
+    auto record_failure
+            = [&](std::string const& archive_path, std::string const& error_message) -> void {
+        std::cerr << "Failed to analyze \"" << archive_path << "\": " << error_message << "\n";
+        failures.emplace_back(
+                nlohmann::json{{"path", archive_path}, {"error", error_message}}
+        );
+        return_code = 1;
+    };
+
+    // In JSON mode, reports are streamed as they complete rather than buffered: the enclosing
+    // object is written incrementally, one report per line.
+    if (output_json) {
+        std::cout << "{\"analyzer_version\": "
+                  << nlohmann::json(clp_s::archive_analyzer::get_analyzer_version()).dump()
+                  << ", \"reports\": [";
+    } else {
         std::cout << "# archive-analyzer " << clp_s::archive_analyzer::get_analyzer_version()
                   << "\n\n";
     }
+
+    bool wrote_first_report{false};
     for (auto const& archive_path : command_line_arguments.get_archive_paths()) {
         try {
             auto const stats{clp_s::archive_analyzer::analyze_archive(
                     archive_path,
                     command_line_arguments.get_collect_column_stats()
             )};
-            if (command_line_arguments.get_output_json()) {
-                json_reports.emplace_back(clp_s::archive_analyzer::stats_to_json(stats));
+            if (output_json) {
+                if (wrote_first_report) {
+                    std::cout << ",";
+                }
+                std::cout << "\n" << clp_s::archive_analyzer::stats_to_json(stats).dump()
+                          << std::flush;
+                wrote_first_report = true;
             } else {
                 clp_s::archive_analyzer::print_stats_as_text(stats);
             }
         } catch (clp_s::TraceableException const& e) {
-            std::cerr << "Failed to analyze \"" << archive_path << "\": " << e.get_filename()
-                      << ":" << e.get_line_number() << " "
-                      << error_code_to_string(e.get_error_code()) << " (error code "
-                      << e.get_error_code() << ")\n";
+            std::string error_message{e.get_filename()};
+            error_message += ":" + std::to_string(e.get_line_number()) + " ";
+            error_message += error_code_to_string(e.get_error_code());
+            error_message += " (error code " + std::to_string(e.get_error_code()) + ")";
+            record_failure(archive_path, error_message);
             if (clp_s::ErrorCodeUnsupported == e.get_error_code()) {
                 std::cerr << "Hint: this archive's format is not supported by this build of the"
                              " analyzer. It may have been created by a different clp-s version;"
                              " check whether this build's clp-s can read it (e.g. `clp-s x"
                              " <archive> <output-dir>`).\n";
             }
-            return_code = 1;
         } catch (std::exception const& e) {
-            std::cerr << "Failed to analyze \"" << archive_path << "\": " << e.what() << "\n";
-            return_code = 1;
+            record_failure(archive_path, e.what());
         }
     }
 
-    if (command_line_arguments.get_output_json()) {
-        constexpr int cJsonIndent{2};
-        nlohmann::json const output{
-                {"analyzer_version", clp_s::archive_analyzer::get_analyzer_version()},
-                {"reports", std::move(json_reports)}
-        };
-        std::cout << output.dump(cJsonIndent) << "\n";
+    if (output_json) {
+        std::cout << "\n], \"failures\": " << failures.dump() << "}\n";
     }
     return return_code;
 }
