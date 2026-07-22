@@ -38,6 +38,7 @@ if(CLP_BUILD_EXECUTABLES)
                 Boost::program_options
                 clp_s::archive_reader
                 clp_s::io
+                clp_s::search::ast
                 fmt::fmt
                 msgpack-cxx
                 nlohmann_json::nlohmann_json
