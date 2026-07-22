@@ -199,6 +199,7 @@ tasks:
     internal: true
     sources: *core_source_files
     generates:
+      - "{{.G_CORE_COMPONENT_BUILD_DIR}}/archive-analyzer"
       - "{{.G_CORE_COMPONENT_BUILD_DIR}}/clg"
       - "{{.G_CORE_COMPONENT_BUILD_DIR}}/clo"
       - "{{.G_CORE_COMPONENT_BUILD_DIR}}/clp"
@@ -211,7 +212,15 @@ tasks:
         vars:
           BUILD_DIR: "{{.G_CORE_COMPONENT_BUILD_DIR}}"
           JOBS: "{{.G_CPP_MAX_PARALLELISM_PER_BUILD_TASK}}"
-          TARGETS: ["clg", "clo", "clp", "clp-s", "indexer", "log-converter", "reducer-server"]
+          TARGETS:
+            - "archive-analyzer"
+            - "clg"
+            - "clo"
+            - "clp"
+            - "clp-s"
+            - "indexer"
+            - "log-converter"
+            - "reducer-server"
 
   # NOTE: We rely on cargo for checksumming. It automatically rebuilds when source files change or
   # when a binary is missing.
