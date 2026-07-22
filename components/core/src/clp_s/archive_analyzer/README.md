@@ -79,3 +79,23 @@ archive-analyzer --version
 
 Every report starts with the analyzer's version and the git description of the source it was
 built from, so you (and we) always know which build produced a given report.
+
+## Preparing a shareable report
+
+The analyzer's own output includes column names, which may be sensitive. To produce a report that
+is safe to share, run the analyzer with `--json` and pass the result through
+`generate_report.py` (Python 3, standard library only):
+
+```bash
+archive-analyzer --json /path/to/archive > analysis.json
+python3 generate_report.py analysis.json -o report.txt --mapping column_names.local.txt
+```
+
+`report.txt` contains **no column names**: columns appear only as anonymized IDs (`column_001`,
+...) with their type and cardinality statistics, plus aggregated views (columns by type, and the
+distribution of columns across cardinality ranges). Review it, then share it if you're
+comfortable with its contents.
+
+`column_names.local.txt` maps the anonymized IDs back to real column paths. It is for your own
+reference (e.g. if we ask about a specific column on a call) and should **not** be shared.
+
