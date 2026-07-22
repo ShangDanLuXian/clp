@@ -153,6 +153,8 @@ def summarize_report(report: Dict[str, Any]) -> Dict[str, Any]:
     """Builds the sanitized summary for one archive's report. The MPT's per-node fingerprints are
     intentionally omitted, keeping only the aggregate checksum and node count."""
     mpt = coerce_to_dict(report.get("mpt")) or {}
+    log_type_dict = coerce_to_dict(report.get("log_type_dict")) or {}
+    array_dict = coerce_to_dict(report.get("array_dict")) or {}
     return {
         "archive": report.get("path", ""),
         "archive_format_version": report.get("archive_format_version", ""),
@@ -164,23 +166,33 @@ def summarize_report(report: Dict[str, Any]) -> Dict[str, Any]:
             "num_nodes": mpt.get("num_nodes", 0),
             "checksum": str(mpt.get("checksum", "")),
         },
+        "log_type_dict": {
+            "num_entries": log_type_dict.get("num_entries", 0),
+            "checksum": str(log_type_dict.get("checksum", "")),
+        },
+        "array_dict": {
+            "num_entries": array_dict.get("num_entries", 0),
+            "checksum": str(array_dict.get("checksum", "")),
+        },
         "components": normalize_entries(report.get("components", [])),
         "column_summary": summarize_columns(normalize_entries(report.get("columns", []))),
     }
 
 
-def build_mpt_similarity(reports: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """Builds the cross-archive MPT (merged parse tree) similarity summary: groups of archives
-    whose MPTs are identical (same checksum), and the pairwise similarity of every archive pair
-    (Jaccard overlap of their MPT node fingerprints). Returns None when fewer than two archives
-    carry MPT data."""
+def build_set_similarity(
+    reports: List[Dict[str, Any]], json_key: str, fingerprints_key: str
+) -> Optional[Dict[str, Any]]:
+    """Builds a cross-archive similarity summary for one fingerprinted set (the MPT, the log type
+    dictionary, ...): groups of archives whose sets are identical (same checksum), and the
+    pairwise similarity of every archive pair (Jaccard overlap of their per-item fingerprints).
+    Returns None when fewer than two archives carry the set's data."""
     entries = []
     for report in reports:
-        mpt = coerce_to_dict(report.get("mpt")) or {}
-        checksum = str(mpt.get("checksum", ""))
+        fingerprinted_set = coerce_to_dict(report.get(json_key)) or {}
+        checksum = str(fingerprinted_set.get("checksum", ""))
         if not checksum:
             continue
-        raw_fingerprints = mpt.get("node_fingerprints", [])
+        raw_fingerprints = fingerprinted_set.get(fingerprints_key, [])
         fingerprints = (
             {str(f) for f in raw_fingerprints} if isinstance(raw_fingerprints, list) else set()
         )
@@ -233,24 +245,24 @@ def build_mpt_similarity(reports: List[Dict[str, Any]]) -> Optional[Dict[str, An
     }
 
 
-def render_mpt_similarity(similarity: Dict[str, Any], out: TextIO) -> None:
-    """Renders the cross-archive MPT similarity summary."""
-    out.write("MPT (merged parse tree) similarity across archives:\n")
+def render_similarity(title: str, similarity: Dict[str, Any], out: TextIO) -> None:
+    """Renders one cross-archive similarity summary."""
+    out.write(f"{title} similarity across archives:\n")
     if similarity["identical_groups"]:
         for group in similarity["identical_groups"]:
             out.write(
-                f"  {len(group['archives'])} archives share an identical MPT"
+                f"  {len(group['archives'])} archives are identical"
                 f" (checksum {group['checksum']}):\n"
             )
             for archive in group["archives"]:
                 out.write(f"    {archive}\n")
     else:
-        out.write("  No two archives have identical MPTs.\n")
+        out.write("  No two archives are identical.\n")
 
     pairs = similarity["pairwise"]
     if pairs:
         max_rendered_pairs = 20
-        out.write("\n  Pairwise similarity (MPT node-set overlap):\n")
+        out.write("\n  Pairwise similarity (fingerprint-set overlap):\n")
         for pair in pairs[:max_rendered_pairs]:
             out.write(
                 f"    {pair['similarity_percent']:>6.1f}%  {pair['archive_a']}"
@@ -270,7 +282,7 @@ def render_text(
     analyzer_version: str,
     summaries: List[Dict[str, Any]],
     failures: List[Dict[str, Any]],
-    mpt_similarity: Optional[Dict[str, Any]],
+    similarities: List[Tuple[str, Optional[Dict[str, Any]]]],
     out: TextIO,
 ) -> None:
     """Renders the sanitized summaries as a human-readable text report."""
@@ -285,8 +297,9 @@ def render_text(
             out.write(f"    {failure.get('error', '')}\n")
         out.write("\n")
 
-    if mpt_similarity is not None:
-        render_mpt_similarity(mpt_similarity, out)
+    for title, similarity in similarities:
+        if similarity is not None:
+            render_similarity(title, similarity, out)
 
     for summary in summaries:
         out.write(f"Archive: {summary['archive']}\n")
@@ -306,6 +319,18 @@ def render_text(
         mpt = summary.get("mpt") or {}
         if mpt.get("checksum"):
             out.write(f"  MPT: {mpt.get('num_nodes', 0)} nodes, checksum {mpt['checksum']}\n")
+        log_type_dict = summary.get("log_type_dict") or {}
+        if log_type_dict.get("checksum"):
+            out.write(
+                f"  Log types: {log_type_dict.get('num_entries', 0)} entries,"
+                f" checksum {log_type_dict['checksum']}\n"
+            )
+        array_dict = summary.get("array_dict") or {}
+        if array_dict.get("checksum"):
+            out.write(
+                f"  Array types: {array_dict.get('num_entries', 0)} entries,"
+                f" checksum {array_dict['checksum']}\n"
+            )
 
         out.write("\n  Components:\n")
         out.write(f"    {'name':<24} {'size':>12} {'%':>8}\n")
@@ -434,7 +459,14 @@ def main() -> int:
         )
 
     summaries = [summarize_report(report) for report in reports]
-    mpt_similarity = build_mpt_similarity(reports)
+    mpt_similarity = build_set_similarity(reports, "mpt", "node_fingerprints")
+    log_type_similarity = build_set_similarity(reports, "log_type_dict", "entry_fingerprints")
+    array_type_similarity = build_set_similarity(reports, "array_dict", "entry_fingerprints")
+    similarities = [
+        ("MPT (merged parse tree)", mpt_similarity),
+        ("Log type", log_type_similarity),
+        ("Array type", array_type_similarity),
+    ]
 
     if args.mapping:
         with open(args.mapping, "w", encoding="utf-8") as mapping_file:
@@ -454,6 +486,8 @@ def main() -> int:
             "contains_column_names": False,
             "failed_archives": failures,
             "mpt_similarity": mpt_similarity,
+            "log_type_similarity": log_type_similarity,
+            "array_type_similarity": array_type_similarity,
             "reports": summaries,
         }
         rendered = json.dumps(output_document, indent=2) + "\n"
@@ -464,9 +498,9 @@ def main() -> int:
             sys.stdout.write(rendered)
     elif args.output:
         with open(args.output, "w", encoding="utf-8") as output_file:
-            render_text(analyzer_version, summaries, failures, mpt_similarity, output_file)
+            render_text(analyzer_version, summaries, failures, similarities, output_file)
     else:
-        render_text(analyzer_version, summaries, failures, mpt_similarity, sys.stdout)
+        render_text(analyzer_version, summaries, failures, similarities, sys.stdout)
 
     if args.output:
         print(f"Report written to {args.output}", file=sys.stderr)

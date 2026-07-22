@@ -7,6 +7,8 @@ set(
         CommandLineArguments.hpp
         MptFingerprint.cpp
         MptFingerprint.hpp
+        SetFingerprint.cpp
+        SetFingerprint.hpp
 )
 
 if(CLP_BUILD_EXECUTABLES)

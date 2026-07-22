@@ -18,6 +18,9 @@ For each archive path you give it (a single-file archive or an archive directory
 * An MPT (merged parse tree) fingerprint: a canonical checksum of the archive's schema tree plus
   one-way per-node hashes, letting `generate_report.py` identify archives with identical MPTs and
   measure MPT similarity across archives - without exposing any key names.
+* Log type and array dictionary fingerprints: the same checksum-plus-one-way-hash scheme applied
+  to each dictionary's entries, measuring how much archives share log message templates - without
+  exposing the templates themselves.
 
 ## What it does NOT do
 

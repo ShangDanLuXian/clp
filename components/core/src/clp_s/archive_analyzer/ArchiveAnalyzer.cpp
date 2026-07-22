@@ -372,6 +372,18 @@ auto analyze_archive(std::string const& archive_path, bool collect_column_stats)
 
     stats.mpt = compute_mpt_fingerprint(*archive_reader.get_schema_tree());
 
+    auto const fingerprint_dictionary
+            = [](LogTypeDictionaryReader const& dictionary) -> SetFingerprint {
+        std::vector<std::string_view> values;
+        values.reserve(dictionary.get_entries().size());
+        for (auto const& entry : dictionary.get_entries()) {
+            values.emplace_back(entry.get_value());
+        }
+        return compute_string_set_fingerprint(values);
+    };
+    stats.log_type_dict = fingerprint_dictionary(*archive_reader.get_log_type_dictionary());
+    stats.array_dict = fingerprint_dictionary(*archive_reader.get_array_dictionary());
+
     if (collect_column_stats) {
         archive_reader.open_packed_streams();
         ColumnStatsCollector collector;
@@ -402,6 +414,16 @@ auto print_stats_as_text(ArchiveStats const& stats) -> void {
     }
     fmt::print("  Records: {} across {} schemas\n", stats.num_records, stats.num_schemas);
     fmt::print("  MPT: {} nodes, checksum {}\n", stats.mpt.num_nodes, stats.mpt.checksum);
+    fmt::print(
+            "  Log types: {} entries, checksum {}\n",
+            stats.log_type_dict.num_items,
+            stats.log_type_dict.checksum
+    );
+    fmt::print(
+            "  Array types: {} entries, checksum {}\n",
+            stats.array_dict.num_items,
+            stats.array_dict.checksum
+    );
 
     fmt::print("\nComponents:\n");
     fmt::print("  {:<24} {:>12} {:>8}\n", "name", "size", "%");
@@ -462,17 +484,28 @@ auto stats_to_json(ArchiveStats const& stats) -> nlohmann::json {
         }));
     }
 
-    auto node_fingerprints = nlohmann::json::array();
-    for (auto const node_fingerprint : stats.mpt.node_fingerprints) {
-        // Fingerprints are serialized as hex strings since 64-bit values don't fit losslessly in
-        // JSON numbers.
-        node_fingerprints.push_back(fmt::format("{:016x}", node_fingerprint));
-    }
+    // Fingerprints are serialized as hex strings since 64-bit values don't fit losslessly in
+    // JSON numbers.
+    auto const fingerprints_to_json = [](std::vector<uint64_t> const& fingerprints) {
+        auto fingerprints_json = nlohmann::json::array();
+        for (auto const fingerprint : fingerprints) {
+            fingerprints_json.push_back(fmt::format("{:016x}", fingerprint));
+        }
+        return fingerprints_json;
+    };
+
     auto mpt = nlohmann::json::object({
             {"num_nodes", stats.mpt.num_nodes},
             {"checksum", stats.mpt.checksum},
-            {"node_fingerprints", std::move(node_fingerprints)}
+            {"node_fingerprints", fingerprints_to_json(stats.mpt.node_fingerprints)}
     });
+    auto const set_fingerprint_to_json = [&](SetFingerprint const& set_fingerprint) {
+        return nlohmann::json::object({
+                {"num_entries", set_fingerprint.num_items},
+                {"checksum", set_fingerprint.checksum},
+                {"entry_fingerprints", fingerprints_to_json(set_fingerprint.fingerprints)}
+        });
+    };
 
     return nlohmann::json::object({
             {"path", stats.path},
@@ -482,6 +515,8 @@ auto stats_to_json(ArchiveStats const& stats) -> nlohmann::json {
             {"num_records", stats.num_records},
             {"num_schemas", stats.num_schemas},
             {"mpt", std::move(mpt)},
+            {"log_type_dict", set_fingerprint_to_json(stats.log_type_dict)},
+            {"array_dict", set_fingerprint_to_json(stats.array_dict)},
             {"components", std::move(components)},
             {"columns", std::move(columns)}
     });
