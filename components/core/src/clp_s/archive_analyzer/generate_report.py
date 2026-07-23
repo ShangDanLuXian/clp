@@ -350,12 +350,18 @@ def build_merge_estimate(
     if not packs:
         return None
 
+    num_archives = len(reports)
     overall = {}
     for json_key, fingerprints_key, component_name in MERGE_ESTIMATE_KINDS:
         stats = build_merged_set_stats(reports, json_key, fingerprints_key, component_name)
         if stats is not None:
             overall[json_key] = stats
-    return {"pack_size": pack_size, "packs": packs, "overall": overall}
+    return {
+        "pack_size": pack_size,
+        "num_archives": num_archives,
+        "packs": packs,
+        "overall": overall,
+    }
 
 
 def render_merged_set_stats(name: str, stats: Dict[str, Any], out: TextIO) -> None:
@@ -389,7 +395,10 @@ def render_merge_estimate(estimate: Dict[str, Any], out: TextIO) -> None:
         for name, stats in pack["dictionaries"].items():
             render_merged_set_stats(name, stats, out)
     if estimate["overall"]:
-        out.write("  All archives merged into one:\n")
+        out.write(
+            f"  All {estimate['num_archives']} archives merged into one"
+            " (independent of the pack size):\n"
+        )
         for name, stats in estimate["overall"].items():
             render_merged_set_stats(name, stats, out)
     out.write("\n")
