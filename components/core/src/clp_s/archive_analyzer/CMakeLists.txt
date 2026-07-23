@@ -46,6 +46,7 @@ if(CLP_BUILD_EXECUTABLES)
                 fmt::fmt
                 msgpack-cxx
                 nlohmann_json::nlohmann_json
+                zstd::libzstd_static
         )
         # Put the built executable at the root of the build directory
         set_target_properties(

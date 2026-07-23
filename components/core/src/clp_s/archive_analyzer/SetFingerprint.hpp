@@ -27,6 +27,10 @@ struct SetFingerprint {
     // size-weighted overlap (e.g. projecting the size of a merged dictionary) in addition to
     // count-based overlap.
     std::vector<uint64_t> fingerprint_sizes;
+    // The zstd-compressed byte size of each distinct item compressed individually, aligned with
+    // `fingerprints`. An upper bound on the item's cost in a jointly-compressed stream (joint
+    // compression also exploits redundancy across items).
+    std::vector<uint64_t> fingerprint_compressed_sizes;
 };
 
 /**

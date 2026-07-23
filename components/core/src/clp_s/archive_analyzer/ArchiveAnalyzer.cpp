@@ -504,11 +504,16 @@ auto stats_to_json(ArchiveStats const& stats) -> nlohmann::json {
         for (auto const entry_size : set_fingerprint.fingerprint_sizes) {
             entry_sizes.push_back(entry_size);
         }
+        auto entry_compressed_sizes = nlohmann::json::array();
+        for (auto const compressed_size : set_fingerprint.fingerprint_compressed_sizes) {
+            entry_compressed_sizes.push_back(compressed_size);
+        }
         return nlohmann::json::object({
                 {"num_entries", set_fingerprint.num_items},
                 {"checksum", set_fingerprint.checksum},
                 {"entry_fingerprints", fingerprints_to_json(set_fingerprint.fingerprints)},
-                {"entry_sizes", std::move(entry_sizes)}
+                {"entry_sizes", std::move(entry_sizes)},
+                {"entry_compressed_sizes", std::move(entry_compressed_sizes)}
         });
     };
 

@@ -34,24 +34,33 @@ ENTRY_SIZE_RANGES: List[Tuple[float, str]] = [
 ]
 
 
-def summarize_entry_sizes(entry_sizes: Any) -> Optional[Dict[str, Any]]:
+def summarize_entry_sizes(
+    entry_sizes: Any, entry_compressed_sizes: Any = None
+) -> Optional[Dict[str, Any]]:
     """Builds a size-tier histogram over a dictionary's distinct entries: how many entries, and
     what share of the dictionary's (uncompressed) bytes, fall into each size tier. A large share
     of bytes in the top tiers reveals a heavy-tailed dictionary (e.g. giant single-use
-    logtypes)."""
+    logtypes). When per-entry individually-compressed sizes are available, each tier (keyed by
+    the entry's UNCOMPRESSED size) also reports its compressed bytes and share."""
     if not isinstance(entry_sizes, list) or not entry_sizes:
         return None
     sizes = [int(size) for size in entry_sizes]
     num_entries = len(sizes)
     total_bytes = sum(sizes)
-    counts = {label: [0, 0] for _, label in ENTRY_SIZE_RANGES}
-    for size in sizes:
+    compressed: Optional[List[int]] = None
+    if isinstance(entry_compressed_sizes, list) and len(entry_compressed_sizes) == len(sizes):
+        compressed = [int(size) for size in entry_compressed_sizes]
+    total_compressed = sum(compressed) if compressed is not None else 0
+    counts = {label: [0, 0, 0] for _, label in ENTRY_SIZE_RANGES}
+    for idx, size in enumerate(sizes):
         for upper_bound, label in ENTRY_SIZE_RANGES:
             if size <= upper_bound:
                 counts[label][0] += 1
                 counts[label][1] += size
+                if compressed is not None:
+                    counts[label][2] += compressed[idx]
                 break
-    return {
+    summary: Dict[str, Any] = {
         "num_entries": num_entries,
         "total_bytes": total_bytes,
         "tiers": [
@@ -67,6 +76,14 @@ def summarize_entry_sizes(entry_sizes: Any) -> Optional[Dict[str, Any]]:
             for _, label in ENTRY_SIZE_RANGES
         ],
     }
+    if compressed is not None:
+        summary["total_compressed_bytes"] = total_compressed
+        for tier, (_, label) in zip(summary["tiers"], ENTRY_SIZE_RANGES):
+            tier["compressed_bytes"] = counts[label][2]
+            tier["percent_of_compressed_bytes"] = (
+                100.0 * counts[label][2] / total_compressed if total_compressed > 0 else 0.0
+            )
+    return summary
 
 
 # Upper bounds (exclusive, in percent) and labels of the cardinality ranges. A column's
@@ -218,13 +235,17 @@ def summarize_report(report: Dict[str, Any]) -> Dict[str, Any]:
             "num_entries": log_type_dict.get("num_entries", 0),
             "checksum": str(log_type_dict.get("checksum", "")),
             "on_disk_size": component_sizes.get("log.dict", 0),
-            "entry_size_tiers": summarize_entry_sizes(log_type_dict.get("entry_sizes")),
+            "entry_size_tiers": summarize_entry_sizes(
+                log_type_dict.get("entry_sizes"), log_type_dict.get("entry_compressed_sizes")
+            ),
         },
         "array_dict": {
             "num_entries": array_dict.get("num_entries", 0),
             "checksum": str(array_dict.get("checksum", "")),
             "on_disk_size": component_sizes.get("array.dict", 0),
-            "entry_size_tiers": summarize_entry_sizes(array_dict.get("entry_sizes")),
+            "entry_size_tiers": summarize_entry_sizes(
+                array_dict.get("entry_sizes"), array_dict.get("entry_compressed_sizes")
+            ),
         },
         "components": components,
         "column_summary": summarize_columns(normalize_entries(report.get("columns", []))),
@@ -528,6 +549,29 @@ def render_entry_size_tiers(title: str, block: Optional[Dict[str, Any]], out: Te
     if on_disk_size > 0:
         total_line += f" -> {format_size(on_disk_size)} on disk (compressed)"
     out.write(total_line + "\n")
+
+    if "total_compressed_bytes" in tiers_summary:
+        out.write(
+            f"  {title} entry sizes, zstd-compressed individually (same tiers, keyed by"
+            " uncompressed size):\n"
+        )
+        for tier in tiers_summary["tiers"]:
+            if 0 == tier["num_entries"]:
+                continue
+            out.write(
+                f"    {tier['range']:<12} {tier['num_entries']:>8} entries"
+                f" {format_size(int(tier['compressed_bytes'])):>10}"
+                f" {tier['percent_of_compressed_bytes']:>6.1f}%\n"
+            )
+        compressed_total_line = (
+            f"    total: {format_size(int(tiers_summary['total_compressed_bytes']))}"
+            " individually compressed"
+        )
+        if on_disk_size > 0:
+            compressed_total_line += (
+                f" vs {format_size(on_disk_size)} on disk (jointly compressed)"
+            )
+        out.write(compressed_total_line + "\n")
 
 
 def render_similarity(title: str, similarity: Dict[str, Any], out: TextIO) -> None:
