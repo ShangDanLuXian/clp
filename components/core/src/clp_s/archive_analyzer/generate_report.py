@@ -259,8 +259,10 @@ def build_merged_set_stats(
     have_all_sizes = True
     sum_component_size = 0
     sum_uncompressed_size = 0
+    sum_archive_size = 0
     present = False
     for report in pack:
+        sum_archive_size += int(report.get("total_size", 0))
         fingerprinted_set = coerce_to_dict(report.get(json_key)) or {}
         fingerprints = fingerprinted_set.get(fingerprints_key, [])
         if not isinstance(fingerprints, list) or not fingerprinted_set.get("checksum", ""):
@@ -305,6 +307,11 @@ def build_merged_set_stats(
                 sum_component_size * len(union_entry_sizes) / max(total_entries, 1)
             )
             stats["projection_method"] = "entry-count-scaled"
+        if sum_archive_size > 0:
+            stats["component_percent_of_pack"] = 100.0 * sum_component_size / sum_archive_size
+            stats["merged_percent_of_pack"] = (
+                100.0 * stats["projected_merged_size"] / sum_archive_size
+            )
     return stats
 
 
@@ -362,6 +369,11 @@ def render_merged_set_stats(name: str, stats: Dict[str, Any], out: TextIO) -> No
             f"; on-disk {format_size(int(stats['sum_component_size']))}"
             f" -> ~{format_size(int(stats['projected_merged_size']))}"
             f" ({stats['projection_method']})"
+        )
+    if "merged_percent_of_pack" in stats:
+        line += (
+            f"; {stats['component_percent_of_pack']:.3f}% ->"
+            f" {stats['merged_percent_of_pack']:.3f}% of aggregate archive size"
         )
     out.write(line + "\n")
 
