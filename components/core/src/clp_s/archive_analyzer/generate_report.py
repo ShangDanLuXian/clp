@@ -23,6 +23,52 @@ from typing import Any, Dict, List, Optional, TextIO, Tuple
 
 REPORT_GENERATOR_VERSION = "0.1.0"
 
+# Upper bounds (inclusive, in bytes) and labels of the dictionary-entry size tiers.
+ENTRY_SIZE_RANGES: List[Tuple[float, str]] = [
+    (64, "<=64 B"),
+    (256, "65-256 B"),
+    (1024, "257 B-1 KiB"),
+    (10 * 1024, "1-10 KiB"),
+    (100 * 1024, "10-100 KiB"),
+    (float("inf"), ">100 KiB"),
+]
+
+
+def summarize_entry_sizes(entry_sizes: Any) -> Optional[Dict[str, Any]]:
+    """Builds a size-tier histogram over a dictionary's distinct entries: how many entries, and
+    what share of the dictionary's (uncompressed) bytes, fall into each size tier. A large share
+    of bytes in the top tiers reveals a heavy-tailed dictionary (e.g. giant single-use
+    logtypes)."""
+    if not isinstance(entry_sizes, list) or not entry_sizes:
+        return None
+    sizes = [int(size) for size in entry_sizes]
+    num_entries = len(sizes)
+    total_bytes = sum(sizes)
+    counts = {label: [0, 0] for _, label in ENTRY_SIZE_RANGES}
+    for size in sizes:
+        for upper_bound, label in ENTRY_SIZE_RANGES:
+            if size <= upper_bound:
+                counts[label][0] += 1
+                counts[label][1] += size
+                break
+    return {
+        "num_entries": num_entries,
+        "total_bytes": total_bytes,
+        "tiers": [
+            {
+                "range": label,
+                "num_entries": counts[label][0],
+                "percent_of_entries": 100.0 * counts[label][0] / num_entries,
+                "bytes": counts[label][1],
+                "percent_of_bytes": (
+                    100.0 * counts[label][1] / total_bytes if total_bytes > 0 else 0.0
+                ),
+            }
+            for _, label in ENTRY_SIZE_RANGES
+        ],
+    }
+
+
 # Upper bounds (exclusive, in percent) and labels of the cardinality ranges. A column's
 # cardinality percentage is (num distinct values / num values) * 100.
 CARDINALITY_RANGES: List[Tuple[float, str]] = [
@@ -169,10 +215,12 @@ def summarize_report(report: Dict[str, Any]) -> Dict[str, Any]:
         "log_type_dict": {
             "num_entries": log_type_dict.get("num_entries", 0),
             "checksum": str(log_type_dict.get("checksum", "")),
+            "entry_size_tiers": summarize_entry_sizes(log_type_dict.get("entry_sizes")),
         },
         "array_dict": {
             "num_entries": array_dict.get("num_entries", 0),
             "checksum": str(array_dict.get("checksum", "")),
+            "entry_size_tiers": summarize_entry_sizes(array_dict.get("entry_sizes")),
         },
         "components": normalize_entries(report.get("components", [])),
         "column_summary": summarize_columns(normalize_entries(report.get("columns", []))),
@@ -455,6 +503,22 @@ def render_merge_estimate(estimate: Dict[str, Any], out: TextIO) -> None:
     out.write("\n")
 
 
+def render_entry_size_tiers(title: str, block: Optional[Dict[str, Any]], out: TextIO) -> None:
+    """Renders one dictionary's entry-size tier histogram, if present."""
+    tiers_summary = (block or {}).get("entry_size_tiers")
+    if not tiers_summary:
+        return
+    out.write(f"  {title} entry sizes (distinct entries, share of dictionary bytes):\n")
+    for tier in tiers_summary["tiers"]:
+        if 0 == tier["num_entries"]:
+            continue
+        out.write(
+            f"    {tier['range']:<12} {tier['num_entries']:>8} entries"
+            f" {tier['percent_of_entries']:>6.1f}%  {format_size(int(tier['bytes'])):>10}"
+            f" {tier['percent_of_bytes']:>6.1f}%\n"
+        )
+
+
 def render_similarity(title: str, similarity: Dict[str, Any], out: TextIO) -> None:
     """Renders one cross-archive similarity summary."""
     out.write(f"{title} similarity across archives:\n")
@@ -545,6 +609,8 @@ def render_text(
                 f"  Array types: {array_dict.get('num_entries', 0)} entries,"
                 f" checksum {array_dict['checksum']}\n"
             )
+        render_entry_size_tiers("Log type", log_type_dict, out)
+        render_entry_size_tiers("Array type", array_dict, out)
 
         out.write("\n  Components:\n")
         out.write(f"    {'name':<24} {'size':>12} {'%':>8}\n")
