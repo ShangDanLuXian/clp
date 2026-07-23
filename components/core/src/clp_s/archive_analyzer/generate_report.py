@@ -308,11 +308,50 @@ def build_merged_set_stats(
             )
             stats["projection_method"] = "entry-count-scaled"
         if sum_archive_size > 0:
+            stats["sum_archive_size"] = sum_archive_size
             stats["component_percent_of_pack"] = 100.0 * sum_component_size / sum_archive_size
             stats["merged_percent_of_pack"] = (
                 100.0 * stats["projected_merged_size"] / sum_archive_size
             )
     return stats
+
+
+def build_combined_pack_stats(
+    packs: List[Dict[str, Any]], json_key: str
+) -> Optional[Dict[str, Any]]:
+    """Aggregates one dictionary kind across all packs: the combined cost of keeping one merged
+    dictionary per pack (as opposed to the overall row, which merges everything into a single
+    dictionary). Unlike the overall row, this depends on the pack size."""
+    pack_stats = [
+        pack["dictionaries"][json_key] for pack in packs if json_key in pack["dictionaries"]
+    ]
+    if not pack_stats:
+        return None
+
+    total_entries = sum(stats["total_entries"] for stats in pack_stats)
+    merged_entries = sum(stats["union_entries"] for stats in pack_stats)
+    combined: Dict[str, Any] = {
+        "total_entries": total_entries,
+        "union_entries": merged_entries,
+        "dedup_factor": total_entries / merged_entries if merged_entries > 0 else 1.0,
+    }
+    if all("projected_merged_size" in stats for stats in pack_stats):
+        combined["sum_component_size"] = sum(
+            stats.get("sum_component_size", 0) for stats in pack_stats
+        )
+        combined["projected_merged_size"] = sum(
+            stats["projected_merged_size"] for stats in pack_stats
+        )
+        combined["projection_method"] = pack_stats[0]["projection_method"]
+        sum_archive_size = sum(stats.get("sum_archive_size", 0) for stats in pack_stats)
+        if sum_archive_size > 0:
+            combined["component_percent_of_pack"] = (
+                100.0 * combined["sum_component_size"] / sum_archive_size
+            )
+            combined["merged_percent_of_pack"] = (
+                100.0 * combined["projected_merged_size"] / sum_archive_size
+            )
+    return combined
 
 
 # The dictionary kinds evaluated by the merged-dictionary estimate: (JSON key, fingerprints key,
@@ -351,8 +390,12 @@ def build_merge_estimate(
         return None
 
     num_archives = len(reports)
+    combined = {}
     overall = {}
     for json_key, fingerprints_key, component_name in MERGE_ESTIMATE_KINDS:
+        combined_stats = build_combined_pack_stats(packs, json_key)
+        if combined_stats is not None:
+            combined[json_key] = combined_stats
         stats = build_merged_set_stats(reports, json_key, fingerprints_key, component_name)
         if stats is not None:
             overall[json_key] = stats
@@ -360,6 +403,7 @@ def build_merge_estimate(
         "pack_size": pack_size,
         "num_archives": num_archives,
         "packs": packs,
+        "combined": combined,
         "overall": overall,
     }
 
@@ -393,6 +437,13 @@ def render_merge_estimate(estimate: Dict[str, Any], out: TextIO) -> None:
             f" ({pack['first_archive']} .. {pack['last_archive']})\n"
         )
         for name, stats in pack["dictionaries"].items():
+            render_merged_set_stats(name, stats, out)
+    if estimate["combined"]:
+        out.write(
+            f"  Combined across {len(estimate['packs'])} packs"
+            " (one merged dictionary per pack):\n"
+        )
+        for name, stats in estimate["combined"].items():
             render_merged_set_stats(name, stats, out)
     if estimate["overall"]:
         out.write(
