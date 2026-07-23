@@ -83,6 +83,15 @@ archive-analyzer --json /path/to/archive
 archive-analyzer --version
 ```
 
+To estimate the size of merged (deduplicated) dictionaries across groups of archives, pass
+`--merge-estimate N` to `generate_report.py`. Archives are grouped into packs of N in input
+order, and for each pack (plus one overall row) the report shows the exact merged entry count
+computed from the per-entry fingerprints, and a projected on-disk merged dictionary size:
+
+```bash
+python3 generate_report.py analysis.json --merge-estimate 16 -o report.txt
+```
+
 Every report starts with the analyzer's version and the git description of the source it was
 built from, so you (and we) always know which build produced a given report.
 

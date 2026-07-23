@@ -245,6 +245,144 @@ def build_set_similarity(
     }
 
 
+def build_merged_set_stats(
+    pack: List[Dict[str, Any]], json_key: str, fingerprints_key: str, component_name: Optional[str]
+) -> Optional[Dict[str, Any]]:
+    """Computes the exact merged-set statistics for one dictionary kind over one pack of
+    archives: the total entry count, the exact union entry count (from the per-item
+    fingerprints), and, when a component name is given, the summed on-disk component size and a
+    projected merged size. The projection is byte-exact when per-entry sizes are available
+    (scaled by the pack's measured compression factor), and falls back to entry-count scaling
+    otherwise."""
+    total_entries = 0
+    union_entry_sizes: Dict[str, int] = {}
+    have_all_sizes = True
+    sum_component_size = 0
+    sum_uncompressed_size = 0
+    present = False
+    for report in pack:
+        fingerprinted_set = coerce_to_dict(report.get(json_key)) or {}
+        fingerprints = fingerprinted_set.get(fingerprints_key, [])
+        if not isinstance(fingerprints, list) or not fingerprinted_set.get("checksum", ""):
+            continue
+        present = True
+        count_key = "num_nodes" if "mpt" == json_key else "num_entries"
+        total_entries += int(fingerprinted_set.get(count_key, len(fingerprints)))
+        entry_sizes = fingerprinted_set.get("entry_sizes")
+        if isinstance(entry_sizes, list) and len(entry_sizes) == len(fingerprints):
+            for fingerprint, size in zip(fingerprints, entry_sizes):
+                union_entry_sizes.setdefault(str(fingerprint), int(size))
+            sum_uncompressed_size += sum(int(size) for size in entry_sizes)
+        else:
+            have_all_sizes = False
+            for fingerprint in fingerprints:
+                union_entry_sizes.setdefault(str(fingerprint), 0)
+        if component_name is not None:
+            for component in normalize_entries(report.get("components", [])):
+                if component.get("name") == component_name:
+                    sum_component_size += int(component.get("size", 0))
+
+    if not present or not union_entry_sizes:
+        return None
+
+    stats: Dict[str, Any] = {
+        "total_entries": total_entries,
+        "union_entries": len(union_entry_sizes),
+        "dedup_factor": total_entries / len(union_entry_sizes),
+    }
+    if component_name is not None and sum_component_size > 0:
+        stats["sum_component_size"] = sum_component_size
+        if have_all_sizes and sum_uncompressed_size > 0:
+            # Project the merged on-disk size by applying the pack's measured compression factor
+            # to the union's uncompressed bytes.
+            compression_factor = sum_component_size / sum_uncompressed_size
+            stats["projected_merged_size"] = int(
+                sum(union_entry_sizes.values()) * compression_factor
+            )
+            stats["projection_method"] = "entry-size-weighted"
+        else:
+            stats["projected_merged_size"] = int(
+                sum_component_size * len(union_entry_sizes) / max(total_entries, 1)
+            )
+            stats["projection_method"] = "entry-count-scaled"
+    return stats
+
+
+# The dictionary kinds evaluated by the merged-dictionary estimate: (JSON key, fingerprints key,
+# component name on disk).
+MERGE_ESTIMATE_KINDS: List[Tuple[str, str, Optional[str]]] = [
+    ("log_type_dict", "entry_fingerprints", "log.dict"),
+    ("array_dict", "entry_fingerprints", "array.dict"),
+    ("mpt", "node_fingerprints", None),
+]
+
+
+def build_merge_estimate(
+    reports: List[Dict[str, Any]], pack_size: int
+) -> Optional[Dict[str, Any]]:
+    """Groups the archives into packs of `pack_size` (in input order; the last pack may be
+    partial) and computes the exact merged-dictionary statistics for each pack, plus an overall
+    row merging every archive. Returns None when no report carries fingerprint data."""
+    packs = []
+    for pack_start in range(0, len(reports), pack_size):
+        pack = reports[pack_start : pack_start + pack_size]
+        dictionaries = {}
+        for json_key, fingerprints_key, component_name in MERGE_ESTIMATE_KINDS:
+            stats = build_merged_set_stats(pack, json_key, fingerprints_key, component_name)
+            if stats is not None:
+                dictionaries[json_key] = stats
+        if dictionaries:
+            packs.append(
+                {
+                    "num_archives": len(pack),
+                    "first_archive": str(pack[0].get("path", "")),
+                    "last_archive": str(pack[-1].get("path", "")),
+                    "dictionaries": dictionaries,
+                }
+            )
+    if not packs:
+        return None
+
+    overall = {}
+    for json_key, fingerprints_key, component_name in MERGE_ESTIMATE_KINDS:
+        stats = build_merged_set_stats(reports, json_key, fingerprints_key, component_name)
+        if stats is not None:
+            overall[json_key] = stats
+    return {"pack_size": pack_size, "packs": packs, "overall": overall}
+
+
+def render_merged_set_stats(name: str, stats: Dict[str, Any], out: TextIO) -> None:
+    """Renders one dictionary kind's merged-set statistics as a single line."""
+    line = (
+        f"    {name:<14} {stats['total_entries']} entries -> {stats['union_entries']} merged"
+        f" ({stats['dedup_factor']:.1f}x dedup)"
+    )
+    if "projected_merged_size" in stats:
+        line += (
+            f"; on-disk {format_size(int(stats['sum_component_size']))}"
+            f" -> ~{format_size(int(stats['projected_merged_size']))}"
+            f" ({stats['projection_method']})"
+        )
+    out.write(line + "\n")
+
+
+def render_merge_estimate(estimate: Dict[str, Any], out: TextIO) -> None:
+    """Renders the merged-dictionary estimate."""
+    out.write(f"Merged-dictionary estimate (packs of {estimate['pack_size']}, in input order):\n")
+    for pack_idx, pack in enumerate(estimate["packs"]):
+        out.write(
+            f"  Pack {pack_idx + 1}: {pack['num_archives']} archives"
+            f" ({pack['first_archive']} .. {pack['last_archive']})\n"
+        )
+        for name, stats in pack["dictionaries"].items():
+            render_merged_set_stats(name, stats, out)
+    if estimate["overall"]:
+        out.write("  All archives merged into one:\n")
+        for name, stats in estimate["overall"].items():
+            render_merged_set_stats(name, stats, out)
+    out.write("\n")
+
+
 def render_similarity(title: str, similarity: Dict[str, Any], out: TextIO) -> None:
     """Renders one cross-archive similarity summary."""
     out.write(f"{title} similarity across archives:\n")
@@ -283,6 +421,7 @@ def render_text(
     summaries: List[Dict[str, Any]],
     failures: List[Dict[str, Any]],
     similarities: List[Tuple[str, Optional[Dict[str, Any]]]],
+    merge_estimate: Optional[Dict[str, Any]],
     out: TextIO,
 ) -> None:
     """Renders the sanitized summaries as a human-readable text report."""
@@ -300,6 +439,9 @@ def render_text(
     for title, similarity in similarities:
         if similarity is not None:
             render_similarity(title, similarity, out)
+
+    if merge_estimate is not None:
+        render_merge_estimate(merge_estimate, out)
 
     for summary in summaries:
         out.write(f"Archive: {summary['archive']}\n")
@@ -397,6 +539,15 @@ def main() -> int:
         help="Write the report as JSON instead of text.",
     )
     parser.add_argument(
+        "--merge-estimate",
+        type=int,
+        metavar="N",
+        help=(
+            "Group archives into packs of N (in input order) and report the exact merged"
+            " dictionary sizes per pack, computed from the per-entry fingerprints."
+        ),
+    )
+    parser.add_argument(
         "--mapping",
         help=(
             "Path to write the anonymized-column-ID-to-column-path mapping to. This file is for"
@@ -467,6 +618,18 @@ def main() -> int:
         ("Log type", log_type_similarity),
         ("Array type", array_type_similarity),
     ]
+    merge_estimate = None
+    if args.merge_estimate is not None:
+        if args.merge_estimate < 1:
+            print("--merge-estimate must be at least 1.", file=sys.stderr)
+            return 1
+        merge_estimate = build_merge_estimate(reports, args.merge_estimate)
+        if merge_estimate is None:
+            print(
+                "Warning: no fingerprint data found; the merged-dictionary estimate was"
+                " skipped.",
+                file=sys.stderr,
+            )
 
     if args.mapping:
         with open(args.mapping, "w", encoding="utf-8") as mapping_file:
@@ -488,6 +651,7 @@ def main() -> int:
             "mpt_similarity": mpt_similarity,
             "log_type_similarity": log_type_similarity,
             "array_type_similarity": array_type_similarity,
+            "merge_estimate": merge_estimate,
             "reports": summaries,
         }
         rendered = json.dumps(output_document, indent=2) + "\n"
@@ -498,9 +662,11 @@ def main() -> int:
             sys.stdout.write(rendered)
     elif args.output:
         with open(args.output, "w", encoding="utf-8") as output_file:
-            render_text(analyzer_version, summaries, failures, similarities, output_file)
+            render_text(
+                analyzer_version, summaries, failures, similarities, merge_estimate, output_file
+            )
     else:
-        render_text(analyzer_version, summaries, failures, similarities, sys.stdout)
+        render_text(analyzer_version, summaries, failures, similarities, merge_estimate, sys.stdout)
 
     if args.output:
         print(f"Report written to {args.output}", file=sys.stderr)

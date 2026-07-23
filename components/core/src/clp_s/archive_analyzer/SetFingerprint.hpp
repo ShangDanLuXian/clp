@@ -23,6 +23,10 @@ struct SetFingerprint {
     std::string checksum;
     // The sorted, deduplicated fingerprint of each item.
     std::vector<uint64_t> fingerprints;
+    // The byte size of each distinct item, aligned with `fingerprints`. Lets consumers compute
+    // size-weighted overlap (e.g. projecting the size of a merged dictionary) in addition to
+    // count-based overlap.
+    std::vector<uint64_t> fingerprint_sizes;
 };
 
 /**
@@ -31,6 +35,16 @@ struct SetFingerprint {
  * fingerprints must be stable across platforms, builds, and runs.
  */
 [[nodiscard]] auto fnv1a64(std::string_view data) -> uint64_t;
+
+/**
+ * Computes the order-independent checksum of already-sorted fingerprints with an explicit byte
+ * order.
+ *
+ * @param sorted_fingerprints
+ * @return The checksum, as a 16-character hex string.
+ */
+[[nodiscard]] auto checksum_of_sorted_fingerprints(std::vector<uint64_t> const& sorted_fingerprints
+) -> std::string;
 
 /**
  * Sorts and deduplicates `fingerprints` in place, and computes their order-independent checksum

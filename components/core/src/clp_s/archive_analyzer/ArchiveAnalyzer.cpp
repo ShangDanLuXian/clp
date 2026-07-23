@@ -500,10 +500,15 @@ auto stats_to_json(ArchiveStats const& stats) -> nlohmann::json {
             {"node_fingerprints", fingerprints_to_json(stats.mpt.node_fingerprints)}
     });
     auto const set_fingerprint_to_json = [&](SetFingerprint const& set_fingerprint) {
+        auto entry_sizes = nlohmann::json::array();
+        for (auto const entry_size : set_fingerprint.fingerprint_sizes) {
+            entry_sizes.push_back(entry_size);
+        }
         return nlohmann::json::object({
                 {"num_entries", set_fingerprint.num_items},
                 {"checksum", set_fingerprint.checksum},
-                {"entry_fingerprints", fingerprints_to_json(set_fingerprint.fingerprints)}
+                {"entry_fingerprints", fingerprints_to_json(set_fingerprint.fingerprints)},
+                {"entry_sizes", std::move(entry_sizes)}
         });
     };
 
