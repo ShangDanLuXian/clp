@@ -201,6 +201,8 @@ def summarize_report(report: Dict[str, Any]) -> Dict[str, Any]:
     mpt = coerce_to_dict(report.get("mpt")) or {}
     log_type_dict = coerce_to_dict(report.get("log_type_dict")) or {}
     array_dict = coerce_to_dict(report.get("array_dict")) or {}
+    components = normalize_entries(report.get("components", []))
+    component_sizes = {str(c.get("name", "")): int(c.get("size", 0)) for c in components}
     return {
         "archive": report.get("path", ""),
         "archive_format_version": report.get("archive_format_version", ""),
@@ -215,14 +217,16 @@ def summarize_report(report: Dict[str, Any]) -> Dict[str, Any]:
         "log_type_dict": {
             "num_entries": log_type_dict.get("num_entries", 0),
             "checksum": str(log_type_dict.get("checksum", "")),
+            "on_disk_size": component_sizes.get("log.dict", 0),
             "entry_size_tiers": summarize_entry_sizes(log_type_dict.get("entry_sizes")),
         },
         "array_dict": {
             "num_entries": array_dict.get("num_entries", 0),
             "checksum": str(array_dict.get("checksum", "")),
+            "on_disk_size": component_sizes.get("array.dict", 0),
             "entry_size_tiers": summarize_entry_sizes(array_dict.get("entry_sizes")),
         },
-        "components": normalize_entries(report.get("components", [])),
+        "components": components,
         "column_summary": summarize_columns(normalize_entries(report.get("columns", []))),
     }
 
@@ -504,11 +508,13 @@ def render_merge_estimate(estimate: Dict[str, Any], out: TextIO) -> None:
 
 
 def render_entry_size_tiers(title: str, block: Optional[Dict[str, Any]], out: TextIO) -> None:
-    """Renders one dictionary's entry-size tier histogram, if present."""
+    """Renders one dictionary's entry-size tier histogram, if present. Tier sizes are
+    UNCOMPRESSED template bytes (what the dictionary stores before compression); the trailing
+    line anchors them to the dictionary's compressed on-disk size."""
     tiers_summary = (block or {}).get("entry_size_tiers")
     if not tiers_summary:
         return
-    out.write(f"  {title} entry sizes (distinct entries, share of dictionary bytes):\n")
+    out.write(f"  {title} entry sizes (distinct entries, share of uncompressed dict bytes):\n")
     for tier in tiers_summary["tiers"]:
         if 0 == tier["num_entries"]:
             continue
@@ -517,6 +523,11 @@ def render_entry_size_tiers(title: str, block: Optional[Dict[str, Any]], out: Te
             f" {tier['percent_of_entries']:>6.1f}%  {format_size(int(tier['bytes'])):>10}"
             f" {tier['percent_of_bytes']:>6.1f}%\n"
         )
+    total_line = f"    total: {format_size(int(tiers_summary['total_bytes']))} uncompressed"
+    on_disk_size = int((block or {}).get("on_disk_size", 0))
+    if on_disk_size > 0:
+        total_line += f" -> {format_size(on_disk_size)} on disk (compressed)"
+    out.write(total_line + "\n")
 
 
 def render_similarity(title: str, similarity: Dict[str, Any], out: TextIO) -> None:
