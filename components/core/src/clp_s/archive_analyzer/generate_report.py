@@ -19,9 +19,27 @@ import argparse
 import json
 import os
 import sys
-from typing import Any, Dict, List, Optional, TextIO, Tuple
+from typing import Any, Dict, List, Optional, Set, TextIO, Tuple
 
 REPORT_GENERATOR_VERSION = "0.1.0"
+
+# Sections the report can contain, selectable with --sections.
+REPORT_SECTIONS = {
+    # Archives that couldn't be analyzed.
+    "failures",
+    # Cross-archive MPT / log type / array type similarity.
+    "similarity",
+    # Merged-dictionary estimate (requires --merge-estimate).
+    "merge",
+    # Per-archive sizes, record counts, and compression ratio.
+    "summary",
+    # Per-archive component size breakdown.
+    "components",
+    # Per-archive dictionary checksums and entry-size tiers.
+    "dictionaries",
+    # Per-archive column statistics.
+    "columns",
+}
 
 # Upper bounds (inclusive, in bytes) and labels of the dictionary-entry size tiers.
 ENTRY_SIZE_RANGES: List[Tuple[float, str]] = [
@@ -156,12 +174,19 @@ def get_cardinality_range_label(cardinality_percent: float) -> str:
     return CARDINALITY_RANGES[-1][1]
 
 
-def summarize_columns(columns: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Builds the sanitized (name-free) column summary for one archive's report."""
-    sanitized_columns: List[Dict[str, Any]] = []
+def summarize_columns(
+    columns: List[Dict[str, Any]], show_column_names: bool = False
+) -> Dict[str, Any]:
+    """Builds the column summary for one archive's report. Column names are replaced by
+    anonymized IDs unless `show_column_names` is set. Columns are reported in descending order of
+    value count, so the columns present in the most records - the most interesting ones for
+    indexing - come first."""
+    summarized_columns: List[Dict[str, Any]] = []
     columns_by_type: Dict[str, int] = {}
     histogram: Dict[str, int] = {label: 0 for _, label in CARDINALITY_RANGES}
 
+    # IDs are assigned in path order so that they match `build_column_name_mapping`'s, regardless
+    # of the order the columns are reported in.
     for idx, column in enumerate(sorted(columns, key=lambda c: c.get("path", ""))):
         num_values = int(column.get("num_values", 0))
         num_distinct = int(column.get("num_distinct_values", 0))
@@ -170,22 +195,26 @@ def summarize_columns(columns: List[Dict[str, Any]]) -> Dict[str, Any]:
             (100.0 * num_distinct / num_values) if num_values > 0 else None
         )
 
-        sanitized_columns.append(
-            {
-                "id": f"column_{idx + 1:03d}",
-                "type": column_type,
-                "num_values": num_values,
-                "num_distinct_values": num_distinct,
-                "cardinality_percent": cardinality_percent,
-            }
-        )
+        summarized_column = {
+            "id": f"column_{idx + 1:03d}",
+            "type": column_type,
+            "num_values": num_values,
+            "num_distinct_values": num_distinct,
+            "cardinality_percent": cardinality_percent,
+        }
+        if show_column_names:
+            summarized_column["path"] = str(column.get("path", ""))
+        summarized_columns.append(summarized_column)
         columns_by_type[column_type] = columns_by_type.get(column_type, 0) + 1
         if cardinality_percent is not None:
             histogram[get_cardinality_range_label(cardinality_percent)] += 1
 
+    # Report the columns present in the most records first.
+    summarized_columns.sort(key=lambda c: (-c["num_values"], c["id"]))
+
     num_columns_with_values = sum(histogram.values())
     return {
-        "num_columns": len(sanitized_columns),
+        "num_columns": len(summarized_columns),
         "columns_by_type": dict(sorted(columns_by_type.items())),
         "cardinality_histogram": [
             {
@@ -199,12 +228,13 @@ def summarize_columns(columns: List[Dict[str, Any]]) -> Dict[str, Any]:
             }
             for _, label in CARDINALITY_RANGES
         ],
-        "columns": sanitized_columns,
+        "columns": summarized_columns,
     }
 
 
 def build_column_name_mapping(columns: List[Dict[str, Any]]) -> List[Tuple[str, str]]:
-    """Builds the (anonymized ID, real column path) mapping for one archive's report."""
+    """Builds the (anonymized ID, real column path) mapping for one archive's report. IDs are
+    assigned in path order, matching `summarize_columns`."""
     sorted_columns = sorted(columns, key=lambda c: c.get("path", ""))
     return [
         (f"column_{idx + 1:03d}", str(column.get("path", "")))
@@ -212,8 +242,8 @@ def build_column_name_mapping(columns: List[Dict[str, Any]]) -> List[Tuple[str, 
     ]
 
 
-def summarize_report(report: Dict[str, Any]) -> Dict[str, Any]:
-    """Builds the sanitized summary for one archive's report. The MPT's per-node fingerprints are
+def summarize_report(report: Dict[str, Any], show_column_names: bool = False) -> Dict[str, Any]:
+    """Builds the summary for one archive's report. The MPT's per-node fingerprints are
     intentionally omitted, keeping only the aggregate checksum and node count."""
     mpt = coerce_to_dict(report.get("mpt")) or {}
     log_type_dict = coerce_to_dict(report.get("log_type_dict")) or {}
@@ -248,7 +278,9 @@ def summarize_report(report: Dict[str, Any]) -> Dict[str, Any]:
             ),
         },
         "components": components,
-        "column_summary": summarize_columns(normalize_entries(report.get("columns", []))),
+        "column_summary": summarize_columns(
+            normalize_entries(report.get("columns", [])), show_column_names
+        ),
     }
 
 
@@ -607,106 +639,133 @@ def render_similarity(title: str, similarity: Dict[str, Any], out: TextIO) -> No
     out.write("\n")
 
 
+def render_columns(column_summary: Dict[str, Any], show_column_names: bool, out: TextIO) -> None:
+    """Renders one archive's column statistics, ordered by descending value count."""
+    if 0 == column_summary["num_columns"]:
+        out.write("\n  Columns: (no column statistics collected)\n")
+        return
+
+    out.write(f"\n  Columns: {column_summary['num_columns']} total, by type:\n")
+    for column_type, count in column_summary["columns_by_type"].items():
+        out.write(f"    {column_type:<24} {count:>8}\n")
+
+    out.write("\n  Cardinality distribution (distinct values / values, % of columns):\n")
+    for bucket in column_summary["cardinality_histogram"]:
+        if 0 == bucket["num_columns"]:
+            continue
+        out.write(
+            f"    {bucket['range']:<12} {bucket['num_columns']:>8} columns"
+            f" {bucket['percent_of_columns']:>7.1f}%\n"
+        )
+
+    label = "with column names" if show_column_names else "anonymized"
+    name_column_width = 48
+    out.write(f"\n  Per-column statistics ({label}, most common first):\n")
+    name_header = "column" if show_column_names else "id"
+    name_width = name_column_width if show_column_names else 12
+    out.write(
+        f"    {name_header:<{name_width}} {'type':<20} {'values':>12} {'distinct':>12}"
+        f" {'cardinality':>12}\n"
+    )
+    for column in column_summary["columns"]:
+        cardinality = (
+            f"{column['cardinality_percent']:.2f}%"
+            if column["cardinality_percent"] is not None
+            else "n/a"
+        )
+        name = column.get("path", column["id"]) if show_column_names else column["id"]
+        out.write(
+            f"    {name:<{name_width}} {column['type']:<20} {column['num_values']:>12}"
+            f" {column['num_distinct_values']:>12} {cardinality:>12}\n"
+        )
+
+
 def render_text(
     analyzer_version: str,
     summaries: List[Dict[str, Any]],
     failures: List[Dict[str, Any]],
     similarities: List[Tuple[str, Optional[Dict[str, Any]]]],
     merge_estimate: Optional[Dict[str, Any]],
+    sections: Set[str],
+    show_column_names: bool,
     out: TextIO,
 ) -> None:
-    """Renders the sanitized summaries as a human-readable text report."""
+    """Renders the summaries as a human-readable text report, restricted to `sections`."""
     out.write(f"# archive-analyzer report (analyzer {analyzer_version},")
     out.write(f" report generator {REPORT_GENERATOR_VERSION})\n")
-    out.write("# This report contains no column names.\n\n")
+    if show_column_names:
+        out.write("# WARNING: this report INCLUDES column names. Review before sharing.\n\n")
+    else:
+        out.write("# This report contains no column names.\n\n")
 
-    if failures:
+    if failures and "failures" in sections:
         out.write(f"Archives that FAILED to analyze: {len(failures)}\n")
         for failure in failures:
             out.write(f"  {failure.get('path', '')}\n")
             out.write(f"    {failure.get('error', '')}\n")
         out.write("\n")
 
-    for title, similarity in similarities:
-        if similarity is not None:
-            render_similarity(title, similarity, out)
+    if "similarity" in sections:
+        for title, similarity in similarities:
+            if similarity is not None:
+                render_similarity(title, similarity, out)
 
-    if merge_estimate is not None:
+    if merge_estimate is not None and "merge" in sections:
         render_merge_estimate(merge_estimate, out)
+
+    per_archive_sections = sections & {"summary", "dictionaries", "components", "columns"}
+    if not per_archive_sections:
+        return
 
     for summary in summaries:
         out.write(f"Archive: {summary['archive']}\n")
-        out.write(f"  Format version: {summary['archive_format_version']}\n")
-        total_size = int(summary["total_size"])
-        uncompressed_size = int(summary["uncompressed_size"])
-        out.write(f"  Size: {format_size(total_size)} ({total_size} bytes)\n")
-        if total_size > 0:
-            ratio = uncompressed_size / total_size
+        if "summary" in sections:
+            out.write(f"  Format version: {summary['archive_format_version']}\n")
+            total_size = int(summary["total_size"])
+            uncompressed_size = int(summary["uncompressed_size"])
+            out.write(f"  Size: {format_size(total_size)} ({total_size} bytes)\n")
+            if total_size > 0:
+                ratio = uncompressed_size / total_size
+                out.write(
+                    f"  Uncompressed size: {format_size(uncompressed_size)}"
+                    f" (compression ratio {ratio:.1f}x)\n"
+                )
             out.write(
-                f"  Uncompressed size: {format_size(uncompressed_size)}"
-                f" (compression ratio {ratio:.1f}x)\n"
+                f"  Records: {summary['num_records']} across {summary['num_schemas']} schemas\n"
             )
-        out.write(
-            f"  Records: {summary['num_records']} across {summary['num_schemas']} schemas\n"
-        )
-        mpt = summary.get("mpt") or {}
-        if mpt.get("checksum"):
-            out.write(f"  MPT: {mpt.get('num_nodes', 0)} nodes, checksum {mpt['checksum']}\n")
+
         log_type_dict = summary.get("log_type_dict") or {}
-        if log_type_dict.get("checksum"):
-            out.write(
-                f"  Log types: {log_type_dict.get('num_entries', 0)} entries,"
-                f" checksum {log_type_dict['checksum']}\n"
-            )
         array_dict = summary.get("array_dict") or {}
-        if array_dict.get("checksum"):
-            out.write(
-                f"  Array types: {array_dict.get('num_entries', 0)} entries,"
-                f" checksum {array_dict['checksum']}\n"
-            )
-        render_entry_size_tiers("Log type", log_type_dict, out)
-        render_entry_size_tiers("Array type", array_dict, out)
+        if "dictionaries" in sections:
+            mpt = summary.get("mpt") or {}
+            if mpt.get("checksum"):
+                out.write(
+                    f"  MPT: {mpt.get('num_nodes', 0)} nodes, checksum {mpt['checksum']}\n"
+                )
+            if log_type_dict.get("checksum"):
+                out.write(
+                    f"  Log types: {log_type_dict.get('num_entries', 0)} entries,"
+                    f" checksum {log_type_dict['checksum']}\n"
+                )
+            if array_dict.get("checksum"):
+                out.write(
+                    f"  Array types: {array_dict.get('num_entries', 0)} entries,"
+                    f" checksum {array_dict['checksum']}\n"
+                )
+            render_entry_size_tiers("Log type", log_type_dict, out)
+            render_entry_size_tiers("Array type", array_dict, out)
 
-        out.write("\n  Components:\n")
-        out.write(f"    {'name':<24} {'size':>12} {'%':>8}\n")
-        for component in summary["components"]:
-            out.write(
-                f"    {component['name']:<24} {format_size(int(component['size'])):>12}"
-                f" {component.get('percentage', 0.0):>7.1f}%\n"
-            )
+        if "components" in sections:
+            out.write("\n  Components:\n")
+            out.write(f"    {'name':<24} {'size':>12} {'%':>8}\n")
+            for component in summary["components"]:
+                out.write(
+                    f"    {component['name']:<24} {format_size(int(component['size'])):>12}"
+                    f" {component.get('percentage', 0.0):>7.1f}%\n"
+                )
 
-        column_summary = summary["column_summary"]
-        if 0 == column_summary["num_columns"]:
-            out.write("\n  Columns: (no column statistics collected)\n\n")
-            continue
-
-        out.write(f"\n  Columns: {column_summary['num_columns']} total, by type:\n")
-        for column_type, count in column_summary["columns_by_type"].items():
-            out.write(f"    {column_type:<24} {count:>8}\n")
-
-        out.write("\n  Cardinality distribution (distinct values / values, % of columns):\n")
-        for bucket in column_summary["cardinality_histogram"]:
-            if 0 == bucket["num_columns"]:
-                continue
-            out.write(
-                f"    {bucket['range']:<12} {bucket['num_columns']:>8} columns"
-                f" {bucket['percent_of_columns']:>7.1f}%\n"
-            )
-
-        out.write("\n  Per-column statistics (anonymized):\n")
-        out.write(
-            f"    {'id':<12} {'type':<20} {'values':>12} {'distinct':>12} {'cardinality':>12}\n"
-        )
-        for column in column_summary["columns"]:
-            cardinality = (
-                f"{column['cardinality_percent']:.2f}%"
-                if column["cardinality_percent"] is not None
-                else "n/a"
-            )
-            out.write(
-                f"    {column['id']:<12} {column['type']:<20} {column['num_values']:>12}"
-                f" {column['num_distinct_values']:>12} {cardinality:>12}\n"
-            )
+        if "columns" in sections:
+            render_columns(summary["column_summary"], show_column_names, out)
         out.write("\n")
 
 
@@ -741,6 +800,24 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--sections",
+        default="all",
+        metavar="LIST",
+        help=(
+            "Comma-separated list of sections to include: "
+            + ", ".join(sorted(REPORT_SECTIONS))
+            + ", or 'all' (default)."
+        ),
+    )
+    parser.add_argument(
+        "--show-column-names",
+        action="store_true",
+        help=(
+            "Include real column names in the report instead of anonymized IDs. The report is"
+            " then NOT safe to share; use it for your own analysis."
+        ),
+    )
+    parser.add_argument(
         "--mapping",
         help=(
             "Path to write the anonymized-column-ID-to-column-path mapping to. This file is for"
@@ -748,6 +825,22 @@ def main() -> int:
         ),
     )
     args = parser.parse_args()
+
+    if "all" == args.sections.strip():
+        sections = set(REPORT_SECTIONS)
+    else:
+        sections = {name.strip() for name in args.sections.split(",") if name.strip()}
+        unknown_sections = sections - REPORT_SECTIONS
+        if unknown_sections:
+            print(
+                f"Unknown section(s): {', '.join(sorted(unknown_sections))}."
+                f" Available: {', '.join(sorted(REPORT_SECTIONS))}.",
+                file=sys.stderr,
+            )
+            return 1
+        if not sections:
+            print("No sections selected.", file=sys.stderr)
+            return 1
 
     try:
         if "-" == args.input:
@@ -802,7 +895,7 @@ def main() -> int:
             file=sys.stderr,
         )
 
-    summaries = [summarize_report(report) for report in reports]
+    summaries = [summarize_report(report, args.show_column_names) for report in reports]
     mpt_similarity = build_set_similarity(reports, "mpt", "node_fingerprints")
     log_type_similarity = build_set_similarity(reports, "log_type_dict", "entry_fingerprints")
     array_type_similarity = build_set_similarity(reports, "array_dict", "entry_fingerprints")
@@ -839,7 +932,7 @@ def main() -> int:
         output_document = {
             "analyzer_version": analyzer_version,
             "report_generator_version": REPORT_GENERATOR_VERSION,
-            "contains_column_names": False,
+            "contains_column_names": args.show_column_names,
             "failed_archives": failures,
             "mpt_similarity": mpt_similarity,
             "log_type_similarity": log_type_similarity,
@@ -853,16 +946,29 @@ def main() -> int:
                 output_file.write(rendered)
         else:
             sys.stdout.write(rendered)
-    elif args.output:
-        with open(args.output, "w", encoding="utf-8") as output_file:
-            render_text(
-                analyzer_version, summaries, failures, similarities, merge_estimate, output_file
-            )
     else:
-        render_text(analyzer_version, summaries, failures, similarities, merge_estimate, sys.stdout)
+        render_args = (
+            analyzer_version,
+            summaries,
+            failures,
+            similarities,
+            merge_estimate,
+            sections,
+            args.show_column_names,
+        )
+        if args.output:
+            with open(args.output, "w", encoding="utf-8") as output_file:
+                render_text(*render_args, output_file)
+        else:
+            render_text(*render_args, sys.stdout)
 
     if args.output:
         print(f"Report written to {args.output}", file=sys.stderr)
+        if args.show_column_names:
+            print(
+                "NOTE: the report includes column names; review before sharing it.",
+                file=sys.stderr,
+            )
     if args.mapping:
         print(
             f"Column-name mapping written to {args.mapping} - keep this file local.",

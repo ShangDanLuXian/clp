@@ -50,9 +50,23 @@ Either way, three files land in `out/`:
 | `analysis.json` | Full analysis (contains column names) | keep local |
 | `column_names.local.txt` | Maps anonymized column IDs to real names | keep local |
 
-Useful flags: `--no-columns` (skip the slow per-column pass), `--merge-estimate N` (include
-merged-dictionary size estimates for packs of N archives), `--sample N --seed S` (reproducible
-sampling).
+Useful flags:
+
+| flag | effect |
+|---|---|
+| `--no-columns` | Skip the per-column statistics pass (much faster) |
+| `--sample N --seed S` | Analyze a reproducible random sample of N archives |
+| `--merge-estimate N` | Add merged-dictionary size estimates for packs of N archives |
+| `--sections LIST` | Only include some report sections (see below) |
+| `--show-column-names` | Put real column names in the report instead of anonymized IDs |
+
+`--sections` takes a comma-separated list of `failures`, `similarity`, `merge`, `summary`,
+`components`, `dictionaries`, `columns` (default: all) — e.g. `--sections columns` for just the
+column statistics, or `--sections similarity,merge` for just the cross-archive views.
+
+`--show-column-names` produces a report for **your own** use: it's labelled as containing column
+names and is not the version to share. Without it, columns appear as anonymized IDs and the real
+names go only into the separate local mapping file.
 
 ## What it collects
 
@@ -61,8 +75,9 @@ archive on S3):
 
 * Total size, uncompressed size, compression ratio, format version, and record/schema counts.
 * A per-component size breakdown (dictionaries, encoded record tables, metadata, ...).
-* Per-column statistics: type, number of values, number of distinct values. This pass
-  decompresses every record table; skip it with `--no-columns`.
+* Per-column statistics: type, number of values, number of distinct values, and cardinality
+  (distinct/total), reported most-common-column first. This pass decompresses every record table;
+  skip it with `--no-columns`.
 * An MPT (merged parse tree) fingerprint: a canonical checksum of the archive's schema tree plus
   one-way per-node hashes, letting the report identify archives with identical MPTs and measure
   MPT similarity across archives - without exposing any key names.

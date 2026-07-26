@@ -209,6 +209,22 @@ def main() -> int:
         help="Include a merged-dictionary estimate for packs of N archives in the report.",
     )
     parser.add_argument(
+        "--sections",
+        metavar="LIST",
+        help=(
+            "Comma-separated list of report sections to include (failures, similarity, merge,"
+            " summary, components, dictionaries, columns), or 'all' (default)."
+        ),
+    )
+    parser.add_argument(
+        "--show-column-names",
+        action="store_true",
+        help=(
+            "Include real column names in the report instead of anonymized IDs. The report is"
+            " then NOT safe to share."
+        ),
+    )
+    parser.add_argument(
         "--output-dir",
         default=".",
         help="Directory to write analysis.json, report.txt, and the column-name mapping to.",
@@ -254,10 +270,19 @@ def main() -> int:
     ]
     if args.merge_estimate is not None:
         report_cmd.extend(["--merge-estimate", str(args.merge_estimate)])
+    if args.sections is not None:
+        report_cmd.extend(["--sections", args.sections])
+    if args.show_column_names:
+        report_cmd.append("--show-column-names")
     report_result = subprocess.run(report_cmd, check=False)
 
+    report_label = (
+        "Report (INCLUDES column names):"
+        if args.show_column_names
+        else "Shareable report:            "
+    )
     print(f"\nAnalysis (keep local):        {analysis_path}", file=sys.stderr)
-    print(f"Shareable report:             {report_path}", file=sys.stderr)
+    print(f"{report_label} {report_path}", file=sys.stderr)
     print(f"Column-name mapping (LOCAL):  {mapping_path}", file=sys.stderr)
     if 0 != analyzer_result.returncode:
         print(

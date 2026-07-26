@@ -37,6 +37,10 @@ Options:
   --seed S              Seed for reproducible sampling.
   --no-columns          Skip the per-column statistics pass (much faster).
   --merge-estimate N    Include merged-dictionary estimates for packs of N archives.
+  --sections LIST       Only include these report sections (failures, similarity, merge,
+                        summary, components, dictionaries, columns); default is all.
+  --show-column-names   Put real column names in the report instead of anonymized IDs.
+                        The report is then NOT safe to share.
   --image TAG           Container image to run (default: auto-detected).
   --image-tarball FILE  Load the image from FILE if it isn't present locally.
   -h, --help            Print this message.
@@ -66,7 +70,7 @@ while [[ $# -gt 0 ]]; do
             print_usage
             exit 0
             ;;
-        --output-dir|--image|--image-tarball|--sample|--seed|--merge-estimate)
+        --output-dir|--image|--image-tarball|--sample|--seed|--merge-estimate|--sections)
             if [[ $# -lt 2 ]]; then
                 echo "Error: ${1} requires a value." >&2
                 exit 1
@@ -79,7 +83,7 @@ while [[ $# -gt 0 ]]; do
             esac
             shift 2
             ;;
-        --no-columns)
+        --no-columns|--show-column-names)
             analyzer_args+=("${1}")
             shift
             ;;
