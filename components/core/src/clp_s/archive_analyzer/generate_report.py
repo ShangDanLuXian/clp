@@ -793,11 +793,18 @@ def main() -> int:
     parser.add_argument(
         "--merge-estimate",
         type=int,
+        default=128,
         metavar="N",
         help=(
             "Group archives into packs of N (in input order) and report the exact merged"
-            " dictionary sizes per pack, computed from the per-entry fingerprints."
+            " dictionary sizes per pack, computed from the per-entry fingerprints"
+            " (default: 128)."
         ),
+    )
+    parser.add_argument(
+        "--no-merge-estimate",
+        action="store_true",
+        help="Omit the merged-dictionary estimate.",
     )
     parser.add_argument(
         "--sections",
@@ -905,12 +912,12 @@ def main() -> int:
         ("Array type", array_type_similarity),
     ]
     merge_estimate = None
-    if args.merge_estimate is not None:
+    if False == args.no_merge_estimate:
         if args.merge_estimate < 1:
             print("--merge-estimate must be at least 1.", file=sys.stderr)
             return 1
         merge_estimate = build_merge_estimate(reports, args.merge_estimate)
-        if merge_estimate is None:
+        if merge_estimate is None and "merge" in sections:
             print(
                 "Warning: no fingerprint data found; the merged-dictionary estimate was"
                 " skipped.",

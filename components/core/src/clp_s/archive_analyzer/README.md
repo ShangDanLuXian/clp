@@ -56,9 +56,16 @@ Useful flags:
 |---|---|
 | `--no-columns` | Skip the per-column statistics pass (much faster) |
 | `--sample N --seed S` | Analyze a reproducible random sample of N archives |
-| `--merge-estimate N` | Add merged-dictionary size estimates for packs of N archives |
+| `--max-archives N` | Never consider more than N archives (default: 1024) |
+| `--merge-estimate N` | Pack size for the merged-dictionary estimate (default: 128) |
+| `--no-merge-estimate` | Omit the merged-dictionary estimate |
 | `--sections LIST` | Only include some report sections (see below) |
 | `--show-column-names` | Put real column names in the report instead of anonymized IDs |
+
+`--max-archives` bounds the work (and, for S3, the download cost): listing stops once N objects
+have been found, so a large bucket is never enumerated or fetched in full. Analyzing one archive
+takes roughly a second locally, plus download time for remote archives — so the default of 1024
+is on the order of 20 minutes. Combine with `--sample` for a smaller run.
 
 `--sections` takes a comma-separated list of `failures`, `similarity`, `merge`, `summary`,
 `components`, `dictionaries`, `columns` (default: all) — e.g. `--sections columns` for just the
@@ -139,7 +146,7 @@ them together and adds S3 listing/sampling):
 ```bash
 archive-analyzer --json [--auth s3] <archives...> > analysis.json
 python3 generate_report.py analysis.json -o report.txt \
-    --mapping column_names.local.txt [--merge-estimate N]
+    --mapping column_names.local.txt [--merge-estimate N] [--sections LIST]
 ```
 
 `archive-analyzer --version` prints the build's provenance (version + git description), which is

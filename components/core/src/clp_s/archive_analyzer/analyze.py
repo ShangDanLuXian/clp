@@ -46,9 +46,10 @@ def build_https_url(bucket: str, key: str, region: str) -> str:
     return f"https://{bucket}.s3.{region}.amazonaws.com/{quoted_key}"
 
 
-def list_s3_objects(uri: str) -> List[str]:
+def list_s3_objects(uri: str, limit: Optional[int] = None) -> List[str]:
     """Lists the objects under an s3:// URI (a single object or a prefix) and returns their
-    HTTPS URLs."""
+    HTTPS URLs. Listing stops once `limit` objects have been found, so a huge bucket is never
+    enumerated (or fetched) in full."""
     try:
         import boto3
     except ImportError:
@@ -63,7 +64,7 @@ def list_s3_objects(uri: str) -> List[str]:
     location = client.get_bucket_location(Bucket=bucket).get("LocationConstraint")
     region = location if location else "us-east-1"
 
-    urls = []
+    urls: List[str] = []
     paginator = client.get_paginator("list_objects_v2")
     for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
         for entry in page.get("Contents", []):
@@ -71,6 +72,8 @@ def list_s3_objects(uri: str) -> List[str]:
             if key.endswith("/") or 0 == entry.get("Size", 0):
                 continue
             urls.append(build_https_url(bucket, key, region))
+            if limit is not None and len(urls) >= limit:
+                return urls
     return urls
 
 
@@ -116,24 +119,41 @@ def expand_local_input(path: str) -> List[str]:
 
 
 def resolve_inputs(
-    inputs: List[str], s3_lister: Callable[[str], List[str]] = list_s3_objects
-) -> Tuple[List[str], bool]:
-    """Expands the given inputs into concrete archive paths/URLs. Returns the paths and whether
-    any input came from S3 (implying s3 authentication)."""
+    inputs: List[str],
+    s3_lister: Callable[..., List[str]] = list_s3_objects,
+    max_archives: Optional[int] = None,
+) -> Tuple[List[str], bool, bool]:
+    """Expands the given inputs into concrete archive paths/URLs, considering at most
+    `max_archives` of them. Returns the paths, whether any input came from S3 (implying s3
+    authentication), and whether the inputs were truncated by the cap."""
     resolved: List[str] = []
     any_s3 = False
+    truncated = False
     missing: List[str] = []
     for raw_input in inputs:
+        remaining: Optional[int] = None
+        if max_archives is not None:
+            remaining = max_archives - len(resolved)
+            if remaining <= 0:
+                truncated = True
+                break
+
         if is_s3_uri(raw_input):
             any_s3 = True
-            objects = s3_lister(raw_input)
+            objects = s3_lister(raw_input, remaining)
             if not objects:
                 print(f"Warning: no objects found under {raw_input}", file=sys.stderr)
-            resolved.extend(objects)
+            if remaining is not None and len(objects) >= remaining:
+                truncated = True
+            resolved.extend(objects[:remaining] if remaining is not None else objects)
         elif "://" in raw_input:
             resolved.append(raw_input)
         elif os.path.exists(raw_input):
-            resolved.extend(expand_local_input(raw_input))
+            expanded = expand_local_input(raw_input)
+            if remaining is not None and len(expanded) > remaining:
+                expanded = expanded[:remaining]
+                truncated = True
+            resolved.extend(expanded)
         else:
             missing.append(raw_input)
 
@@ -153,7 +173,7 @@ def resolve_inputs(
             file=sys.stderr,
         )
         raise SystemExit(1)
-    return resolved, any_s3
+    return resolved, any_s3, truncated
 
 
 def sample_archives(paths: List[str], sample_size: Optional[int], seed: Optional[int]) -> List[str]:
@@ -188,6 +208,18 @@ def main() -> int:
     )
     parser.add_argument("--seed", type=int, help="Random seed for reproducible sampling.")
     parser.add_argument(
+        "--max-archives",
+        type=int,
+        default=1024,
+        metavar="N",
+        help=(
+            "Never consider more than N archives (default: 1024). For s3:// inputs, listing"
+            " stops at N objects, so a large bucket is neither enumerated nor downloaded in"
+            " full. Analyzing an archive takes roughly a second locally, plus download time for"
+            " remote archives."
+        ),
+    )
+    parser.add_argument(
         "--auth",
         choices=["auto", "s3", "none"],
         default="auto",
@@ -205,8 +237,14 @@ def main() -> int:
     parser.add_argument(
         "--merge-estimate",
         type=int,
+        default=128,
         metavar="N",
-        help="Include a merged-dictionary estimate for packs of N archives in the report.",
+        help="Pack size for the merged-dictionary estimate in the report (default: 128).",
+    )
+    parser.add_argument(
+        "--no-merge-estimate",
+        action="store_true",
+        help="Omit the merged-dictionary estimate from the report.",
     )
     parser.add_argument(
         "--sections",
@@ -231,10 +269,24 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    paths, any_s3 = resolve_inputs(args.inputs)
+    if args.max_archives < 1:
+        print("Error: --max-archives must be at least 1.", file=sys.stderr)
+        return 1
+
+    paths, any_s3, truncated = resolve_inputs(args.inputs, max_archives=args.max_archives)
     if not paths:
         print("Error: no archives to analyze.", file=sys.stderr)
         return 1
+    if truncated:
+        print(
+            f"Note: stopped at {args.max_archives} archives (--max-archives); there may be more."
+            + (
+                "\nThe sample is drawn from those archives, not from every archive available."
+                if args.sample is not None
+                else ""
+            ),
+            file=sys.stderr,
+        )
     paths = sample_archives(paths, args.sample, args.seed)
     print(f"Analyzing {len(paths)} archive(s)...", file=sys.stderr)
 
@@ -268,7 +320,9 @@ def main() -> int:
         "--mapping",
         mapping_path,
     ]
-    if args.merge_estimate is not None:
+    if args.no_merge_estimate:
+        report_cmd.append("--no-merge-estimate")
+    else:
         report_cmd.extend(["--merge-estimate", str(args.merge_estimate)])
     if args.sections is not None:
         report_cmd.extend(["--sections", args.sections])

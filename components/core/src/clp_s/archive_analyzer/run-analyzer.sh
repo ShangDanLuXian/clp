@@ -35,8 +35,12 @@ Options:
   --output-dir DIR      Where to write the results (default: ./analyzer-output).
   --sample N            Analyze a random sample of N archives.
   --seed S              Seed for reproducible sampling.
+  --max-archives N      Never consider more than N archives (default: 1024). For s3://
+                        locations, listing stops at N so a large bucket isn't downloaded
+                        in full.
   --no-columns          Skip the per-column statistics pass (much faster).
-  --merge-estimate N    Include merged-dictionary estimates for packs of N archives.
+  --merge-estimate N    Pack size for the merged-dictionary estimate (default: 128).
+  --no-merge-estimate   Omit the merged-dictionary estimate.
   --sections LIST       Only include these report sections (failures, similarity, merge,
                         summary, components, dictionaries, columns); default is all.
   --show-column-names   Put real column names in the report instead of anonymized IDs.
@@ -70,7 +74,8 @@ while [[ $# -gt 0 ]]; do
             print_usage
             exit 0
             ;;
-        --output-dir|--image|--image-tarball|--sample|--seed|--merge-estimate|--sections)
+        --output-dir|--image|--image-tarball|--sample|--seed|--merge-estimate|--sections\
+            |--max-archives)
             if [[ $# -lt 2 ]]; then
                 echo "Error: ${1} requires a value." >&2
                 exit 1
@@ -83,7 +88,7 @@ while [[ $# -gt 0 ]]; do
             esac
             shift 2
             ;;
-        --no-columns|--show-column-names)
+        --no-columns|--show-column-names|--no-merge-estimate)
             analyzer_args+=("${1}")
             shift
             ;;
