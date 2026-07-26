@@ -7,17 +7,30 @@ before sharing any of it.
 
 ## Quick start
 
-Load the image you received (requires Docker; no build tooling needed):
+Requires Docker only. Load the image you were given, then run `run-analyzer.sh`:
 
 ```bash
 docker load < archive-analyzer-<version>.tar.gz
+
+# All archives in a directory
+./run-analyzer.sh /path/to/your/archives
+
+# A random sample of 20 archives on S3 (AWS credentials from the environment or ~/.aws)
+./run-analyzer.sh s3://my-bucket/archives/ --sample 20 --seed 1
+
+# Faster pass, plus merged-dictionary estimates for packs of 16
+./run-analyzer.sh /path/to/your/archives --no-columns --merge-estimate 16
 ```
 
-(If you prefer to build the image yourself from this source instead — e.g. for a security
-review — run `./build.sh` from this directory; see "Auditing the source" below.)
+The script mounts your archives read-only, runs the analyzer as your user, and writes the results
+to `./analyzer-output` (override with `--output-dir`).
 
-Analyze local archives — mount the directory holding your archives at `/archives` and pass that
-directory (it expands to the archives inside it):
+Prefer to build the image yourself before running anything? Use `build-from-source.sh` — it
+clones this repository at a pinned version, builds the image, and tells you how to run it. See
+"Auditing the source" below.
+
+<details>
+<summary>Running the container directly, without the scripts</summary>
 
 ```bash
 docker run --rm -v /path/to/your/archives:/archives -v "$PWD/out:/out" archive-analyzer \
@@ -26,16 +39,9 @@ docker run --rm -v /path/to/your/archives:/archives -v "$PWD/out:/out" archive-a
 
 Paths are always as seen **inside** the container, so don't use a shell glob like `/archives/*`
 — your shell would expand it against the host filesystem. Pass `/archives` (or
-`/archives/<archive-id>` for a single archive) instead.
-
-Analyze a random sample of 20 archives stored on S3 (credentials via the standard AWS
-environment variables; only single-file archives are supported over S3):
-
-```bash
-docker run --rm -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_SESSION_TOKEN \
-    -v "$PWD/out:/out" archive-analyzer \
-    s3://my-bucket/archives/ --sample 20 --seed 1 --output-dir /out
-```
+`/archives/<archive-id>` for a single archive) instead. For S3, add `-e AWS_ACCESS_KEY_ID -e
+AWS_SECRET_ACCESS_KEY -e AWS_SESSION_TOKEN` and pass the `s3://` location instead of a mount.
+</details>
 
 Either way, three files land in `out/`:
 
@@ -83,11 +89,22 @@ modified. The complete audit surface is this directory plus one `add_subdirector
 git diff main...archive_analyzer -- components/core/src/clp_s
 ```
 
-You don't have to trust the prebuilt image: `./build.sh` builds the same image from this source
-in a clean `ubuntu:22.04` container, with third-party dependencies downloaded pinned by checksum
-- so the image you run can be one you produced from source you read. (`./build.sh --binary`
-exports just the binary instead, printing its SHA256. Maintainers use `./release.sh` to produce
-the distributable tarball plus its SHA256.)
+You don't have to trust the prebuilt image. `./build-from-source.sh` clones this repository at a
+pinned version, checks it out for you to read, and builds the image in a clean `ubuntu:22.04`
+container with third-party dependencies pinned by checksum:
+
+```bash
+./build-from-source.sh                     # source is left in ./archive-analyzer-src
+./run-analyzer.sh --image archive-analyzer:<commit>-selfbuilt /path/to/your/archives
+```
+
+Container images aren't bit-for-bit reproducible, so a self-built image's digest won't match the
+prebuilt one even from identical source — the assurance is that you can run an image *you* built
+from source you read, not that the two are byte-identical. Reports record which build produced
+them, so a self-built image is identifiable in its own output.
+
+(`./build.sh` builds from an existing checkout; `./build.sh --binary` exports just the binary
+with its SHA256; maintainers use `./release.sh` to produce the distributable tarball.)
 
 ## Running without the container
 
