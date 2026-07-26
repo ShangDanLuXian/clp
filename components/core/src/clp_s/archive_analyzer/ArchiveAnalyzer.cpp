@@ -19,6 +19,7 @@
 #include <clp/ErrorCode.hpp>
 #include <clp/ReaderInterface.hpp>
 #include <clp_s/archive_analyzer/MptFingerprint.hpp>
+#include <clp_s/archive_analyzer/SetFingerprint.hpp>
 #include <clp_s/ArchiveReader.hpp>
 #include <clp_s/archive_constants.hpp>
 #include <clp_s/ColumnReader.hpp>
@@ -40,7 +41,7 @@ public:
 };
 
 // The analyzer's version. Incremented whenever the analyzer's output or behaviour changes.
-constexpr std::string_view cAnalyzerVersion{"0.1.0"};
+constexpr std::string_view cAnalyzerVersion{"0.2.0"};
 
 // The name reported for the header and metadata section of a single-file archive.
 constexpr std::string_view cHeaderAndMetadataComponentName{"header+metadata"};
@@ -166,9 +167,9 @@ public:
             m_buffer.clear();
             column_reader->extract_string_value_into_buffer(cur_message, m_buffer);
             ++accumulator.num_values;
-            accumulator.distinct_value_hashes.insert(
-                    std::hash<std::string_view>{}(std::string_view{m_buffer})
-            );
+            // FNV-1a (rather than `std::hash`) so the same value hashes identically across
+            // platforms, builds, and runs, making value identities comparable across archives.
+            accumulator.distinct_value_hashes.insert(fnv1a64(std::string_view{m_buffer}));
         }
         return false;
     }
@@ -176,18 +177,30 @@ public:
     // Methods
     /**
      * @param schema_tree The schema tree of the archive the statistics were collected from.
+     * @param value_fingerprint_cap Include the sorted per-value fingerprints of every column with
+     * at most this many distinct values; 0 includes none.
      * @return The accumulated per-column statistics, ordered by column path.
      */
-    [[nodiscard]] auto get_column_stats(SchemaTree const& schema_tree) const
+    [[nodiscard]] auto
+    get_column_stats(SchemaTree const& schema_tree, size_t value_fingerprint_cap) const
             -> std::vector<ColumnStats> {
         std::vector<ColumnStats> columns;
         columns.reserve(m_column_accumulators.size());
         for (auto const& [column_id, accumulator] : m_column_accumulators) {
+            std::vector<uint64_t> value_fingerprints;
+            if (accumulator.distinct_value_hashes.size() <= value_fingerprint_cap) {
+                value_fingerprints.assign(
+                        accumulator.distinct_value_hashes.begin(),
+                        accumulator.distinct_value_hashes.end()
+                );
+                std::ranges::sort(value_fingerprints);
+            }
             columns.emplace_back(ColumnStats{
                     build_column_path(schema_tree, column_id),
                     accumulator.type,
                     accumulator.num_values,
-                    accumulator.distinct_value_hashes.size()
+                    accumulator.distinct_value_hashes.size(),
+                    std::move(value_fingerprints)
             });
         }
         std::ranges::sort(columns, [](auto const& lhs, auto const& rhs) {
@@ -358,7 +371,8 @@ auto get_analyzer_version() -> std::string {
 auto analyze_archive(
         std::string const& archive_path,
         NetworkAuthOption const& network_auth,
-        bool collect_column_stats
+        bool collect_column_stats,
+        size_t value_fingerprint_cap
 ) -> ArchiveStats {
     ArchiveStats stats;
     stats.path = archive_path;
@@ -439,7 +453,10 @@ auto analyze_archive(
             schema_reader.initialize_filter(collector);
             while (schema_reader.get_next_message(unused_message, collector)) {}
         }
-        stats.columns = collector.get_column_stats(*archive_reader.get_schema_tree());
+        stats.columns = collector.get_column_stats(
+                *archive_reader.get_schema_tree(),
+                value_fingerprint_cap
+        );
     }
     archive_reader.close();
 
@@ -520,16 +537,6 @@ auto stats_to_json(ArchiveStats const& stats) -> nlohmann::json {
         }));
     }
 
-    auto columns = nlohmann::json::array();
-    for (auto const& column : stats.columns) {
-        columns.push_back(nlohmann::json::object({
-                {"path", column.path},
-                {"type", node_type_to_string(column.type)},
-                {"num_values", column.num_values},
-                {"num_distinct_values", column.num_distinct_values}
-        }));
-    }
-
     // Fingerprints are serialized as hex strings since 64-bit values don't fit losslessly in
     // JSON numbers.
     auto const fingerprints_to_json = [](std::vector<uint64_t> const& fingerprints) {
@@ -539,6 +546,22 @@ auto stats_to_json(ArchiveStats const& stats) -> nlohmann::json {
         }
         return fingerprints_json;
     };
+
+    auto columns = nlohmann::json::array();
+    for (auto const& column : stats.columns) {
+        auto column_json = nlohmann::json::object({
+                {"path", column.path},
+                {"type", node_type_to_string(column.type)},
+                {"num_values", column.num_values},
+                {"num_distinct_values", column.num_distinct_values}
+        });
+        // Omitted (rather than empty) when the column's cardinality exceeded the recording cap,
+        // so consumers can distinguish "no fingerprints recorded" from "no values".
+        if (false == column.value_fingerprints.empty()) {
+            column_json["value_fingerprints"] = fingerprints_to_json(column.value_fingerprints);
+        }
+        columns.push_back(std::move(column_json));
+    }
 
     auto mpt = nlohmann::json::object({
             {"num_nodes", stats.mpt.num_nodes},

@@ -120,7 +120,8 @@ auto main(int argc, char const* argv[]) -> int {
             auto const stats{clp_s::archive_analyzer::analyze_archive(
                     archive_path,
                     command_line_arguments.get_network_auth(),
-                    command_line_arguments.get_collect_column_stats()
+                    command_line_arguments.get_collect_column_stats(),
+                    command_line_arguments.get_value_fingerprint_cap()
             )};
             if (output_json) {
                 if (wrote_first_report) {

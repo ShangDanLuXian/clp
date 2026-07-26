@@ -39,6 +39,9 @@ Options:
                         locations, listing stops at N so a large bucket isn't downloaded
                         in full.
   --no-columns          Skip the per-column statistics pass (much faster).
+  --value-fingerprints CAP
+                        Record per-value fingerprints for columns with at most CAP
+                        distinct values (default: 1024; 0 disables).
   --merge-estimate N    Pack size for the merged-dictionary estimate (default: 128).
   --no-merge-estimate   Omit the merged-dictionary estimate.
   --sections LIST       Only include these report sections (failures, similarity, merge,
@@ -75,7 +78,7 @@ while [[ $# -gt 0 ]]; do
             exit 0
             ;;
         --output-dir|--image|--image-tarball|--sample|--seed|--merge-estimate|--sections\
-            |--max-archives)
+            |--max-archives|--value-fingerprints)
             if [[ $# -lt 2 ]]; then
                 echo "Error: ${1} requires a value." >&2
                 exit 1

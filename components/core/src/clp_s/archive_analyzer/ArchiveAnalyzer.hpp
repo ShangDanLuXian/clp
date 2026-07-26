@@ -30,6 +30,11 @@ struct ColumnStats {
     NodeType type{NodeType::Unknown};
     uint64_t num_values{};
     uint64_t num_distinct_values{};
+    // The sorted FNV-1a fingerprints of the column's distinct values. Only populated for
+    // low-cardinality columns (those with at most `value_fingerprint_cap` distinct values - see
+    // `analyze_archive`); empty otherwise. Since the fingerprints are stable one-way hashes, they
+    // identify which archives share which values without exposing the values themselves.
+    std::vector<uint64_t> value_fingerprints;
 };
 
 /**
@@ -67,6 +72,9 @@ struct ArchiveStats {
  * @param network_auth Authentication used when reading the archive over the network.
  * @param collect_column_stats Whether to run the per-column statistics pass. The pass decompresses
  * every record table in the archive, so it can take a while for large archives.
+ * @param value_fingerprint_cap Record the per-value fingerprints of every column with at most this
+ * many distinct values (see `ColumnStats::value_fingerprints`); 0 disables the recording. Only
+ * meaningful when `collect_column_stats` is set.
  * @return The collected statistics.
  * @throws clp_s::TraceableException (or its derived classes) if the archive cannot be read.
  * @throws std::filesystem::filesystem_error if the archive's size cannot be determined.
@@ -74,7 +82,8 @@ struct ArchiveStats {
 [[nodiscard]] auto analyze_archive(
         std::string const& archive_path,
         NetworkAuthOption const& network_auth,
-        bool collect_column_stats
+        bool collect_column_stats,
+        size_t value_fingerprint_cap
 ) -> ArchiveStats;
 
 /**

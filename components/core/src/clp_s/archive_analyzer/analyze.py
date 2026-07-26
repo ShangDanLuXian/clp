@@ -235,6 +235,17 @@ def main() -> int:
         help="Skip the per-column statistics pass (much faster).",
     )
     parser.add_argument(
+        "--value-fingerprints",
+        type=int,
+        default=1024,
+        metavar="CAP",
+        help=(
+            "For every column with at most CAP distinct values, record the one-way fingerprint"
+            " of each distinct value in analysis.json (default: 1024; 0 disables). Enables"
+            " value-level cross-archive analysis such as the repacking simulation."
+        ),
+    )
+    parser.add_argument(
         "--merge-estimate",
         type=int,
         default=128,
@@ -303,6 +314,8 @@ def main() -> int:
     analyzer_cmd = [analyzer, "--json", "--auth", auth]
     if args.no_columns:
         analyzer_cmd.append("--no-columns")
+    else:
+        analyzer_cmd.extend(["--value-fingerprints", str(args.value_fingerprints)])
     analyzer_cmd.extend(paths)
     with open(analysis_path, "w", encoding="utf-8") as analysis_file:
         analyzer_result = subprocess.run(analyzer_cmd, stdout=analysis_file, check=False)

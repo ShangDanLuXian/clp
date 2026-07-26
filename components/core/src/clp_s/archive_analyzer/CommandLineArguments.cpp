@@ -1,5 +1,6 @@
 #include "CommandLineArguments.hpp"
 
+#include <cstddef>
 #include <exception>
 #include <iostream>
 
@@ -21,6 +22,14 @@ auto CommandLineArguments::parse_arguments(int argc, char const* argv[]) -> Pars
                     po::bool_switch(),
                     "Skip the per-column statistics pass. The pass decompresses every record"
                     " table in the archive, so skipping it makes analysis much faster."
+            )
+            (
+                    "value-fingerprints",
+                    po::value<size_t>()->value_name("CAP")->default_value(1024),
+                    "For every column with at most CAP distinct values, record the one-way"
+                    " fingerprint of each distinct value (in the JSON output only). This shows"
+                    " which archives share which values for low-cardinality columns without"
+                    " exposing the values themselves. 0 disables the recording."
             )
             ("json", po::bool_switch(), "Print the analysis as JSON instead of text.")
             (
@@ -77,6 +86,7 @@ auto CommandLineArguments::parse_arguments(int argc, char const* argv[]) -> Pars
         }
 
         m_collect_column_stats = false == parsed_options["no-columns"].as<bool>();
+        m_value_fingerprint_cap = parsed_options["value-fingerprints"].as<size_t>();
         m_output_json = parsed_options["json"].as<bool>();
 
         auto const auth{parsed_options["auth"].as<std::string>()};

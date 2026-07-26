@@ -1,6 +1,7 @@
 #ifndef CLP_S_ARCHIVE_ANALYZER_COMMAND_LINE_ARGUMENTS_HPP
 #define CLP_S_ARCHIVE_ANALYZER_COMMAND_LINE_ARGUMENTS_HPP
 
+#include <cstddef>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -31,6 +32,10 @@ public:
         return m_collect_column_stats;
     }
 
+    [[nodiscard]] auto get_value_fingerprint_cap() const -> size_t {
+        return m_value_fingerprint_cap;
+    }
+
     [[nodiscard]] auto get_output_json() const -> bool { return m_output_json; }
 
     [[nodiscard]] auto get_network_auth() const -> NetworkAuthOption const& {
@@ -43,6 +48,7 @@ private:
     std::vector<std::string> m_archive_paths;
     NetworkAuthOption m_network_auth{};
     bool m_collect_column_stats{true};
+    size_t m_value_fingerprint_cap{1024};
     bool m_output_json{false};
 };
 }  // namespace clp_s::archive_analyzer

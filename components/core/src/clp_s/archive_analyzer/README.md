@@ -55,6 +55,7 @@ Useful flags:
 | flag | effect |
 |---|---|
 | `--no-columns` | Skip the per-column statistics pass (much faster) |
+| `--value-fingerprints CAP` | Cap for per-value fingerprints (default: 1024; 0 disables) |
 | `--sample N --seed S` | Analyze a reproducible random sample of N archives |
 | `--max-archives N` | Never consider more than N archives (default: 1024) |
 | `--merge-estimate N` | Pack size for the merged-dictionary estimate (default: 128) |
@@ -84,7 +85,10 @@ archive on S3):
 * A per-component size breakdown (dictionaries, encoded record tables, metadata, ...).
 * Per-column statistics: type, number of values, number of distinct values, and cardinality
   (distinct/total), reported most-common-column first. This pass decompresses every record table;
-  skip it with `--no-columns`.
+  skip it with `--no-columns`. For low-cardinality columns (at most `--value-fingerprints` CAP
+  distinct values), the one-way FNV-1a fingerprint of each distinct value is also recorded in
+  `analysis.json` (the local file - not the shareable report), which shows which archives share
+  which values without exposing the values themselves.
 * An MPT (merged parse tree) fingerprint: a canonical checksum of the archive's schema tree plus
   one-way per-node hashes, letting the report identify archives with identical MPTs and measure
   MPT similarity across archives - without exposing any key names.
