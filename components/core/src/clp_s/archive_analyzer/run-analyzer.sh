@@ -16,7 +16,9 @@ set -o pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 
-image="${ARCHIVE_ANALYZER_IMAGE:-archive-analyzer:v0.1}"
+# Empty means "auto-detect": use an analyzer image that's already loaded, otherwise load one from
+# a tarball shipped alongside this script and use whatever tag it provides.
+image="${ARCHIVE_ANALYZER_IMAGE:-}"
 image_tarball="${ARCHIVE_ANALYZER_TARBALL:-}"
 output_dir="${PWD}/analyzer-output"
 archive_location=""
@@ -35,7 +37,7 @@ Options:
   --seed S              Seed for reproducible sampling.
   --no-columns          Skip the per-column statistics pass (much faster).
   --merge-estimate N    Include merged-dictionary estimates for packs of N archives.
-  --image TAG           Container image to run (default: ${image}).
+  --image TAG           Container image to run (default: auto-detected).
   --image-tarball FILE  Load the image from FILE if it isn't present locally.
   -h, --help            Print this message.
 
@@ -110,10 +112,19 @@ if ! command -v docker >/dev/null 2>&1; then
     exit 1
 fi
 
-# Load the image if it isn't already available.
-if ! docker image inspect "${image}" >/dev/null 2>&1; then
+# Resolve which image to run: an explicitly requested one, an already-loaded analyzer image, or
+# one loaded from a tarball shipped alongside this script.
+if [[ -z "${image}" ]]; then
+    for candidate in "archive-analyzer:latest" "archive-analyzer"; do
+        if docker image inspect "${candidate}" >/dev/null 2>&1; then
+            image="${candidate}"
+            break
+        fi
+    done
+fi
+
+if [[ -z "${image}" ]] || ! docker image inspect "${image}" >/dev/null 2>&1; then
     if [[ -z "${image_tarball}" ]]; then
-        # Fall back to an image tarball shipped alongside this script.
         for candidate in \
             "${script_dir}"/archive-analyzer-*.tar.gz \
             "${script_dir}"/archive-analyzer-*.tar
@@ -125,13 +136,42 @@ if ! docker image inspect "${image}" >/dev/null 2>&1; then
         done
     fi
     if [[ -z "${image_tarball}" ]]; then
-        echo "Error: image \"${image}\" isn't available locally and no image tarball was found." >&2
-        echo "Load it first (docker load < archive-analyzer-<version>.tar.gz), pass" >&2
-        echo "--image-tarball FILE, or build it from source with build-from-source.sh." >&2
+        echo "Error: no analyzer image is available locally and no image tarball was found." >&2
+        echo "Load one (docker load < archive-analyzer-<version>.tar.gz), pass --image-tarball" >&2
+        echo "FILE, or build one from source with build-from-source.sh." >&2
         exit 1
     fi
+
+    # A tarball named archive-analyzer-<version>.tar[.gz] is expected to provide
+    # archive-analyzer:<version>; if that image is already loaded, skip loading it again.
+    if [[ -z "${image}" ]]; then
+        tarball_name="$(basename "${image_tarball}")"
+        tarball_name="${tarball_name%.gz}"
+        tarball_name="${tarball_name%.tar}"
+        expected_image="archive-analyzer:${tarball_name#archive-analyzer-}"
+        if docker image inspect "${expected_image}" >/dev/null 2>&1; then
+            image="${expected_image}"
+        fi
+    fi
+fi
+
+if [[ -z "${image}" ]] || ! docker image inspect "${image}" >/dev/null 2>&1; then
     echo "Loading image from ${image_tarball} ..."
-    docker load --input "${image_tarball}"
+    load_output="$(docker load --input "${image_tarball}")"
+    echo "${load_output}"
+    loaded_image="$(printf '%s\n' "${load_output}" | sed -n 's/^Loaded image: //p' | head -n 1)"
+    if [[ -z "${image}" ]]; then
+        if [[ -z "${loaded_image}" ]]; then
+            echo "Error: couldn't determine which image the tarball provides; pass --image TAG." >&2
+            exit 1
+        fi
+        image="${loaded_image}"
+    elif ! docker image inspect "${image}" >/dev/null 2>&1; then
+        echo "Error: the tarball provides \"${loaded_image}\", not the requested" \
+             "\"${image}\"." >&2
+        echo "Re-run with --image ${loaded_image} (or omit --image to use it automatically)." >&2
+        exit 1
+    fi
 fi
 
 mkdir -p "${output_dir}"

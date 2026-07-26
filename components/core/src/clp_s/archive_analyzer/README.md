@@ -7,11 +7,10 @@ before sharing any of it.
 
 ## Quick start
 
-Requires Docker only. Load the image you were given, then run `run-analyzer.sh`:
+Requires Docker only. Keep the image tarball you were given next to `run-analyzer.sh` — the
+script loads it on first use — and run:
 
 ```bash
-docker load < archive-analyzer-<version>.tar.gz
-
 # All archives in a directory
 ./run-analyzer.sh /path/to/your/archives
 
