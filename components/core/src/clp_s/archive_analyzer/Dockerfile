@@ -45,15 +45,19 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /clp
+
+# Download and build CLP's third-party dependencies (checksum-pinned in taskfiles/deps/main.yaml).
+# Only the files this step needs are copied first, so the layer (which takes tens of minutes)
+# stays cached when the sources change.
+COPY taskfile.yaml ./
+COPY taskfiles ./taskfiles
+COPY tools ./tools
+RUN task deps:core
+
+# Copy the sources, generate the KQL/SQL parsers, and build only the archive-analyzer target.
 COPY . .
-
-# Download and build CLP's third-party dependencies (checksum-pinned in taskfiles/deps/main.yaml),
-# and generate the KQL/SQL parsers.
-RUN task deps:core \
-    && task codegen:clp-s-generate-parsers
-
-# Configure and build only the archive-analyzer target.
-RUN cmake -S components/core -B build/core \
+RUN task codegen:clp-s-generate-parsers \
+    && cmake -S components/core -B build/core \
         -C build/deps/cpp/cmake-settings/all-core.cmake \
         -DCMAKE_BUILD_TYPE=Release \
         -DCLP_BUILD_TESTING=OFF \
