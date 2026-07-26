@@ -9,6 +9,7 @@
 
 #include <clp_s/archive_analyzer/MptFingerprint.hpp>
 #include <clp_s/archive_analyzer/SetFingerprint.hpp>
+#include <clp_s/InputConfig.hpp>
 #include <clp_s/SchemaTree.hpp>
 
 namespace clp_s::archive_analyzer {
@@ -61,16 +62,20 @@ struct ArchiveStats {
  * Analyzes an archive, collecting its total size, the size of each of its components, and
  * (optionally) per-column statistics.
  *
- * @param archive_path Path to a clp-s archive: either a single-file archive or an archive
- * directory.
+ * @param archive_path Path to a clp-s archive: a local archive directory, a local single-file
+ * archive, or the URL of a single-file archive (e.g. on S3).
+ * @param network_auth Authentication used when reading the archive over the network.
  * @param collect_column_stats Whether to run the per-column statistics pass. The pass decompresses
  * every record table in the archive, so it can take a while for large archives.
  * @return The collected statistics.
  * @throws clp_s::TraceableException (or its derived classes) if the archive cannot be read.
  * @throws std::filesystem::filesystem_error if the archive's size cannot be determined.
  */
-[[nodiscard]] auto analyze_archive(std::string const& archive_path, bool collect_column_stats)
-        -> ArchiveStats;
+[[nodiscard]] auto analyze_archive(
+        std::string const& archive_path,
+        NetworkAuthOption const& network_auth,
+        bool collect_column_stats
+) -> ArchiveStats;
 
 /**
  * Prints an analysis as a human-readable report to stdout.

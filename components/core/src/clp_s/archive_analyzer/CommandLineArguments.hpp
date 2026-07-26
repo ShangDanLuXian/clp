@@ -5,6 +5,8 @@
 #include <string_view>
 #include <vector>
 
+#include <clp_s/InputConfig.hpp>
+
 namespace clp_s::archive_analyzer {
 class CommandLineArguments {
 public:
@@ -31,10 +33,15 @@ public:
 
     [[nodiscard]] auto get_output_json() const -> bool { return m_output_json; }
 
+    [[nodiscard]] auto get_network_auth() const -> NetworkAuthOption const& {
+        return m_network_auth;
+    }
+
 private:
     // Variables
     std::string m_program_name;
     std::vector<std::string> m_archive_paths;
+    NetworkAuthOption m_network_auth{};
     bool m_collect_column_stats{true};
     bool m_output_json{false};
 };

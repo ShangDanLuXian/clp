@@ -1,116 +1,115 @@
 # archive-analyzer
 
 A standalone, read-only diagnostic tool that inspects [CLP](https://github.com/y-scope/clp)
-(clp-s) archives and prints statistics about them. It is meant to be built and run by you, on your
-own machines, so you can review exactly what information it collects before sharing any of it.
+(clp-s) archives and prints statistics about them. It ships as a container image built from this
+source, so you can review exactly what it does before running it and exactly what it collected
+before sharing any of it.
 
-## What it collects
+## Quick start
 
-For each archive path you give it (a single-file archive or an archive directory):
-
-* The archive's total size, uncompressed size, compression ratio, format version, and the number
-  of records and schemas it contains.
-* A per-component size breakdown (dictionaries, encoded record tables, metadata, ...) with each
-  component's percentage of the archive.
-* Per-column statistics: each column's path, type, number of values, and number of distinct
-  values. This pass decompresses every record table, so it can take a while for large archives;
-  skip it with `--no-columns`.
-* An MPT (merged parse tree) fingerprint: a canonical checksum of the archive's schema tree plus
-  one-way per-node hashes, letting `generate_report.py` identify archives with identical MPTs and
-  measure MPT similarity across archives - without exposing any key names.
-* Log type and array dictionary fingerprints: the same checksum-plus-one-way-hash scheme applied
-  to each dictionary's entries, measuring how much archives share log message templates - without
-  exposing the templates themselves.
-
-## What it does NOT do
-
-* **No network access.** The recommended build disables CLP's optional libcurl support, so no
-  networking library is linked into the binary at all. You can verify this with
-  `ldd archive-analyzer`.
-* **No writes.** The tool only reads the archive paths passed on the command line and prints to
-  stdout. It never modifies archives and never creates files.
-* **No automatic reporting.** Nothing leaves your machine. You review the output and decide what
-  (if anything) to share with us.
-
-## Auditing the source
-
-This tool is a small addition on top of the open-source CLP codebase; no existing CLP code is
-modified. The complete audit surface is this directory plus one `add_subdirectory` line, which you
-can verify with:
-
-```bash
-git diff main...archive_analyzer -- components/core/src/clp_s
-```
-
-## Building
-
-Requires Docker. From this directory:
+Build the image (requires Docker; from this directory):
 
 ```bash
 ./build.sh
 ```
 
-This builds the binary from source in a clean `ubuntu:22.04` container (third-party dependencies
-are downloaded pinned by checksum) and writes it to `out/archive-analyzer`, printing its SHA256.
-The resulting binary runs on the machine that built it (or inside the same container image).
+Analyze local archives:
 
-Alternatively, build natively with the standard CLP core setup: install the dependencies for your
-platform from `components/core/tools/scripts/lib_install/`, then from the repository root:
+```bash
+docker run --rm -v /data/archives:/archives -v "$PWD/out:/out" archive-analyzer \
+    /archives/<archive-id> --output-dir /out
+```
+
+Analyze a random sample of 20 archives stored on S3 (credentials via the standard AWS
+environment variables; only single-file archives are supported over S3):
+
+```bash
+docker run --rm -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_SESSION_TOKEN \
+    -v "$PWD/out:/out" archive-analyzer \
+    s3://my-bucket/archives/ --sample 20 --seed 1 --output-dir /out
+```
+
+Either way, three files land in `out/`:
+
+| file | what it is | share? |
+|---|---|---|
+| `report.txt` | Shareable report - **no column names, no log content** | review, then yes |
+| `analysis.json` | Full analysis (contains column names) | keep local |
+| `column_names.local.txt` | Maps anonymized column IDs to real names | keep local |
+
+Useful flags: `--no-columns` (skip the slow per-column pass), `--merge-estimate N` (include
+merged-dictionary size estimates for packs of N archives), `--sample N --seed S` (reproducible
+sampling).
+
+## What it collects
+
+For each archive (a local archive directory, a local single-file archive, or a single-file
+archive on S3):
+
+* Total size, uncompressed size, compression ratio, format version, and record/schema counts.
+* A per-component size breakdown (dictionaries, encoded record tables, metadata, ...).
+* Per-column statistics: type, number of values, number of distinct values. This pass
+  decompresses every record table; skip it with `--no-columns`.
+* An MPT (merged parse tree) fingerprint: a canonical checksum of the archive's schema tree plus
+  one-way per-node hashes, letting the report identify archives with identical MPTs and measure
+  MPT similarity across archives - without exposing any key names.
+* Log type and array dictionary fingerprints (checksums, one-way per-entry hashes, and per-entry
+  sizes): dictionary similarity across archives and entry-size tier histograms - without exposing
+  the templates themselves.
+
+## What it does NOT do
+
+* **No network access beyond the archives you name.** The analyzer connects only to the archive
+  locations passed on the command line (e.g. your S3 bucket, using your credentials). There is no
+  telemetry and no other endpoint in the code - auditable below.
+* **No writes to your data.** Archives are only read; outputs go to the directory you choose.
+* **No automatic reporting.** Nothing leaves your machine. You review `report.txt` and decide
+  what (if anything) to share with us.
+
+## Auditing the source
+
+The tool is a small addition on top of the open-source CLP codebase; no existing CLP code is
+modified. The complete audit surface is this directory plus one `add_subdirectory` line:
+
+```bash
+git diff main...archive_analyzer -- components/core/src/clp_s
+```
+
+`build.sh` builds the image from this source in a clean `ubuntu:22.04` container, with
+third-party dependencies downloaded pinned by checksum - so the image you run is one you produced
+from source you can read. (`./build.sh --binary` exports just the binary instead, printing its
+SHA256.)
+
+## Running without the container
+
+Build natively with the standard CLP core setup (dependencies per
+`components/core/tools/scripts/lib_install/`), then from the repository root:
 
 ```bash
 task deps:core codegen:clp-s-generate-parsers
 cmake -S components/core -B build/core \
     -C build/deps/cpp/cmake-settings/all-core.cmake \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DCLP_BUILD_CLP_S_ENABLE_CURL=OFF \
-    -DCLP_BUILD_TESTING=OFF
+    -DCMAKE_BUILD_TYPE=Release -DCLP_BUILD_TESTING=OFF
 cmake --build build/core --target archive-analyzer --parallel
 ```
 
-## Usage
+The underlying tools compose like this (the container's entrypoint, `analyze.py`, just wires
+them together and adds S3 listing/sampling):
 
 ```bash
-# Analyze one or more archives
-archive-analyzer /path/to/archive1 /path/to/archive2
-
-# Fast pass: skip the per-column statistics
-archive-analyzer --no-columns /path/to/archive
-
-# Machine-readable output
-archive-analyzer --json /path/to/archive
-
-# Version / provenance
-archive-analyzer --version
+archive-analyzer --json [--auth s3] <archives...> > analysis.json
+python3 generate_report.py analysis.json -o report.txt \
+    --mapping column_names.local.txt [--merge-estimate N]
 ```
 
-To estimate the size of merged (deduplicated) dictionaries across groups of archives, pass
-`--merge-estimate N` to `generate_report.py`. Archives are grouped into packs of N in input
-order, and for each pack (plus one overall row) the report shows the exact merged entry count
-computed from the per-entry fingerprints, and a projected on-disk merged dictionary size:
+`archive-analyzer --version` prints the build's provenance (version + git description), which is
+also stamped into every report.
 
-```bash
-python3 generate_report.py analysis.json --merge-estimate 16 -o report.txt
-```
+## The shareable report
 
-Every report starts with the analyzer's version and the git description of the source it was
-built from, so you (and we) always know which build produced a given report.
-
-## Preparing a shareable report
-
-The analyzer's own output includes column names, which may be sensitive. To produce a report that
-is safe to share, run the analyzer with `--json` and pass the result through
-`generate_report.py` (Python 3, standard library only):
-
-```bash
-archive-analyzer --json /path/to/archive > analysis.json
-python3 generate_report.py analysis.json -o report.txt --mapping column_names.local.txt
-```
-
-`report.txt` contains **no column names**: columns appear only as anonymized IDs (`column_001`,
-...) with their type and cardinality statistics, plus aggregated views (columns by type, and the
-distribution of columns across cardinality ranges). Review it, then share it if you're
-comfortable with its contents.
-
-`column_names.local.txt` maps the anonymized IDs back to real column paths. It is for your own
-reference (e.g. if we ask about a specific column on a call) and should **not** be shared.
-
+`report.txt` contains **no column names and no log content**: columns appear only as anonymized
+IDs (`column_001`, ...) with type and cardinality statistics; dictionaries appear only as
+checksums, counts, size tiers, and cross-archive similarity percentages. Review it, then share it
+if you're comfortable with its contents. `column_names.local.txt` maps anonymized IDs back to
+real column paths for your own reference (e.g. if we ask about a specific column on a call) and
+should **not** be shared.

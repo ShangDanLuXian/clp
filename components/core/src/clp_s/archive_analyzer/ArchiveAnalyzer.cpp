@@ -16,12 +16,13 @@
 #include <msgpack.hpp>
 #include <nlohmann/json.hpp>
 
+#include <clp/ErrorCode.hpp>
+#include <clp/ReaderInterface.hpp>
 #include <clp_s/archive_analyzer/MptFingerprint.hpp>
 #include <clp_s/ArchiveReader.hpp>
 #include <clp_s/archive_constants.hpp>
 #include <clp_s/ColumnReader.hpp>
 #include <clp_s/ErrorCode.hpp>
-#include <clp_s/FileReader.hpp>
 #include <clp_s/InputConfig.hpp>
 #include <clp_s/SchemaReader.hpp>
 #include <clp_s/SchemaTree.hpp>
@@ -236,29 +237,36 @@ private:
 }
 
 /**
- * Collects the components of a single-file archive by reading the archive's header and the
- * `ArchiveFileInfo` packet from its metadata section.
+ * The header and file-info layout of a single-file archive, read from its header and metadata
+ * section.
+ */
+struct SingleFileArchiveLayout {
+    ArchiveHeader header{};
+    ArchiveFileInfoPacket file_info;
+};
+
+/**
+ * Reads a single-file archive's layout from a reader positioned at the start of the archive. Works
+ * for both local files and network (e.g. S3) objects.
  *
- * @param archive_path
- * @param file_size The total size of the single-file archive.
- * @return The components, ordered by descending size.
+ * @param reader
+ * @return The layout.
  * @throws OperationFailed if the header or metadata section cannot be read.
  */
-[[nodiscard]] auto
-collect_single_file_components(std::string const& archive_path, uint64_t file_size)
-        -> std::vector<ComponentStats> {
-    FileReader reader;
-    reader.open(archive_path);
-
-    ArchiveHeader header{};
-    if (ErrorCodeSuccess
-        != reader.try_read_exact_length(reinterpret_cast<char*>(&header), sizeof(header)))
+[[nodiscard]] auto read_single_file_archive_layout(clp::ReaderInterface& reader)
+        -> SingleFileArchiveLayout {
+    SingleFileArchiveLayout layout;
+    if (clp::ErrorCode::ErrorCode_Success
+        != reader.try_read_exact_length(
+                reinterpret_cast<char*>(&layout.header),
+                sizeof(layout.header)
+        ))
     {
         throw OperationFailed(ErrorCodeErrno, __FILENAME__, __LINE__);
     }
     if (0
         != std::memcmp(
-                header.magic_number,
+                layout.header.magic_number,
                 cStructuredSFAMagicNumber.data(),
                 cStructuredSFAMagicNumber.size()
         ))
@@ -269,7 +277,6 @@ collect_single_file_components(std::string const& archive_path, uint64_t file_si
     ZstdDecompressor decompressor;
     decompressor.open(reader, cDecompressorReadBufferCapacity);
 
-    ArchiveFileInfoPacket file_info_packet;
     uint8_t num_packets{};
     if (ErrorCodeSuccess != decompressor.try_read_numeric_value(num_packets)) {
         throw OperationFailed(ErrorCodeMetadataCorrupted, __FILENAME__, __LINE__);
@@ -288,16 +295,30 @@ collect_single_file_components(std::string const& archive_path, uint64_t file_si
         }
         if (static_cast<uint8_t>(ArchiveMetadataPacketType::ArchiveFileInfo) == packet_type) {
             auto const handle{msgpack::unpack(packet_buffer.data(), packet_buffer.size())};
-            file_info_packet = handle.get().as<ArchiveFileInfoPacket>();
+            layout.file_info = handle.get().as<ArchiveFileInfoPacket>();
             break;
         }
     }
     decompressor.close();
-    reader.close();
 
-    if (file_info_packet.files.empty()) {
+    if (layout.file_info.files.empty()) {
         throw OperationFailed(ErrorCodeMetadataCorrupted, __FILENAME__, __LINE__);
     }
+    return layout;
+}
+
+/**
+ * Builds the component breakdown of a single-file archive from its layout.
+ *
+ * @param layout
+ * @param file_size The total size of the single-file archive.
+ * @return The components, ordered by descending size.
+ */
+[[nodiscard]] auto
+build_single_file_components(SingleFileArchiveLayout const& layout, uint64_t file_size)
+        -> std::vector<ComponentStats> {
+    auto const& header{layout.header};
+    auto const& file_info_packet{layout.file_info};
 
     // Each file's offset is relative to the start of the files region, which begins immediately
     // after the header and the metadata section. A file's size is the distance to the next file's
@@ -334,26 +355,44 @@ auto get_analyzer_version() -> std::string {
 #endif
 }
 
-auto analyze_archive(std::string const& archive_path, bool collect_column_stats) -> ArchiveStats {
+auto analyze_archive(
+        std::string const& archive_path,
+        NetworkAuthOption const& network_auth,
+        bool collect_column_stats
+) -> ArchiveStats {
     ArchiveStats stats;
     stats.path = archive_path;
 
-    std::filesystem::path const fs_path{archive_path};
-    if (std::filesystem::is_directory(fs_path)) {
-        stats.components = collect_directory_components(fs_path);
+    auto const path_object{get_path_object_for_raw_path(archive_path)};
+    if (InputSource::Filesystem == path_object.source
+        && std::filesystem::is_directory(std::filesystem::path{archive_path}))
+    {
+        stats.components = collect_directory_components(std::filesystem::path{archive_path});
         for (auto const& component : stats.components) {
             stats.total_size += component.size;
         }
     } else {
-        stats.total_size = std::filesystem::file_size(fs_path);
-        stats.components = collect_single_file_components(archive_path, stats.total_size);
+        // A single-file archive: a local file or a network (e.g. S3) object.
+        auto reader{try_create_reader(path_object, network_auth)};
+        if (nullptr == reader) {
+            throw OperationFailed(ErrorCodeFileNotFound, __FILENAME__, __LINE__);
+        }
+        auto const layout{read_single_file_archive_layout(*reader)};
+        if (InputSource::Filesystem == path_object.source) {
+            stats.total_size = std::filesystem::file_size(std::filesystem::path{archive_path});
+        } else {
+            // For network archives the total size comes from the header; it is zero in archives
+            // written before the field existed, which we can't size without a filesystem stat.
+            stats.total_size = layout.header.compressed_size;
+            if (0 == stats.total_size) {
+                throw OperationFailed(ErrorCodeUnsupported, __FILENAME__, __LINE__);
+            }
+        }
+        stats.components = build_single_file_components(layout, stats.total_size);
     }
 
     ArchiveReader archive_reader;
-    archive_reader.open(
-            Path{.source{InputSource::Filesystem}, .path{archive_path}},
-            NetworkAuthOption{}
-    );
+    archive_reader.open(path_object, network_auth);
     archive_reader.read_dictionaries_and_metadata();
 
     auto const& header{archive_reader.get_header()};

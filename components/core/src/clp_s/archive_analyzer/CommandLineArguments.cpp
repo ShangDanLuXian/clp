@@ -22,7 +22,15 @@ auto CommandLineArguments::parse_arguments(int argc, char const* argv[]) -> Pars
                     "Skip the per-column statistics pass. The pass decompresses every record"
                     " table in the archive, so skipping it makes analysis much faster."
             )
-            ("json", po::bool_switch(), "Print the analysis as JSON instead of text.");
+            ("json", po::bool_switch(), "Print the analysis as JSON instead of text.")
+            (
+                    "auth",
+                    po::value<std::string>()->value_name("AUTH_METHOD")->default_value("none"),
+                    "Type of authentication required for network requests (s3 | none)."
+                    " Authentication with s3 requires the AWS_ACCESS_KEY_ID and"
+                    " AWS_SECRET_ACCESS_KEY environment variables, and optionally the"
+                    " AWS_SESSION_TOKEN environment variable."
+            );
     // clang-format on
 
     po::options_description hidden_options;
@@ -70,6 +78,14 @@ auto CommandLineArguments::parse_arguments(int argc, char const* argv[]) -> Pars
 
         m_collect_column_stats = false == parsed_options["no-columns"].as<bool>();
         m_output_json = parsed_options["json"].as<bool>();
+
+        auto const auth{parsed_options["auth"].as<std::string>()};
+        if ("s3" == auth) {
+            m_network_auth.method = AuthMethod::S3PresignedUrlV4;
+        } else if ("none" != auth) {
+            std::cerr << "Error: unknown authentication method \"" << auth << "\"." << "\n";
+            return ParsingResult::Failure;
+        }
     } catch (std::exception const& e) {
         std::cerr << "Error: " << e.what() << "\n";
         return ParsingResult::Failure;
