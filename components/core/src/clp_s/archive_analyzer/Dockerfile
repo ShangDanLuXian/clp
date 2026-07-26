@@ -52,6 +52,8 @@ WORKDIR /clp
 COPY taskfile.yaml ./
 COPY taskfiles ./taskfiles
 COPY tools ./tools
+# The root taskfile computes its build parallelism with a script under components/core/tools.
+COPY components/core/tools ./components/core/tools
 RUN task deps:core
 
 # Copy the sources, generate the KQL/SQL parsers, and build only the archive-analyzer target.
