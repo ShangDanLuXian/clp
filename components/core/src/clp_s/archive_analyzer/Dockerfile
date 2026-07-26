@@ -27,6 +27,11 @@ FROM ubuntu:22.04 AS build
 
 ARG DEBIAN_FRONTEND=noninteractive
 
+# Direct pipx-installed tools (cmake, go-task, uv - installed by the scripts below) into global
+# locations that are on PATH, mirroring the repository's own env-base images.
+ENV PIPX_BIN_DIR=/usr/local/bin
+ENV PIPX_HOME=/opt/pipx
+
 # Install basic tooling, Java (required by the ANTLR parser generation step), and CLP's build
 # dependencies using the repository's own install scripts.
 COPY components/core/tools/scripts/lib_install /tmp/lib_install
@@ -38,9 +43,6 @@ RUN apt-get update \
         git \
     && /tmp/lib_install/ubuntu-jammy/install-all.sh \
     && rm -rf /var/lib/apt/lists/*
-
-# Install Go Task (the build orchestrator used by CLP).
-RUN sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b /usr/local/bin
 
 WORKDIR /clp
 COPY . .
