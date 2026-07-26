@@ -364,6 +364,13 @@ auto analyze_archive(
     stats.path = archive_path;
 
     auto const path_object{get_path_object_for_raw_path(archive_path)};
+    if (InputSource::Network == path_object.source
+        && std::string::npos == archive_path.find("://"))
+    {
+        // The path isn't a URL and doesn't exist on the filesystem.
+        throw OperationFailed(ErrorCodeFileNotFound, __FILENAME__, __LINE__);
+    }
+
     if (InputSource::Filesystem == path_object.source
         && std::filesystem::is_directory(std::filesystem::path{archive_path}))
     {

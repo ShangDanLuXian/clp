@@ -74,6 +74,47 @@ def list_s3_objects(uri: str) -> List[str]:
     return urls
 
 
+# Files that make up a multi-file (directory) archive; a directory containing only these (and
+# numbered segment files) is an archive itself rather than a directory of archives.
+ARCHIVE_COMPONENT_FILES = {
+    "header",
+    "schema_tree",
+    "schema_ids",
+    "table_metadata",
+    "var.dict",
+    "log.dict",
+    "array.dict",
+}
+
+
+def is_archive_directory(path: str) -> bool:
+    """Returns whether `path` is a multi-file archive (as opposed to a directory containing
+    archives), mirroring clp-s's own detection."""
+    try:
+        entries = list(os.scandir(path))
+    except OSError:
+        return False
+    if not entries:
+        return False
+    for entry in entries:
+        if entry.is_dir():
+            return False
+        if entry.name in ARCHIVE_COMPONENT_FILES or entry.name.isdigit():
+            continue
+        return False
+    return True
+
+
+def expand_local_input(path: str) -> List[str]:
+    """Expands a local input into concrete archive paths: a directory containing archives expands
+    to those archives; an archive (or a regular file) resolves to itself."""
+    if not os.path.isdir(path):
+        return [path]
+    if is_archive_directory(path):
+        return [path]
+    return sorted(entry.path for entry in os.scandir(path))
+
+
 def resolve_inputs(
     inputs: List[str], s3_lister: Callable[[str], List[str]] = list_s3_objects
 ) -> Tuple[List[str], bool]:
@@ -81,6 +122,7 @@ def resolve_inputs(
     any input came from S3 (implying s3 authentication)."""
     resolved: List[str] = []
     any_s3 = False
+    missing: List[str] = []
     for raw_input in inputs:
         if is_s3_uri(raw_input):
             any_s3 = True
@@ -88,8 +130,29 @@ def resolve_inputs(
             if not objects:
                 print(f"Warning: no objects found under {raw_input}", file=sys.stderr)
             resolved.extend(objects)
-        else:
+        elif "://" in raw_input:
             resolved.append(raw_input)
+        elif os.path.exists(raw_input):
+            resolved.extend(expand_local_input(raw_input))
+        else:
+            missing.append(raw_input)
+
+    if missing:
+        print(f"Error: {len(missing)} input path(s) do not exist:", file=sys.stderr)
+        for path in missing[:5]:
+            print(f"  {path}", file=sys.stderr)
+        if len(missing) > 5:
+            print(f"  ... and {len(missing) - 5} more", file=sys.stderr)
+        print(
+            "\nIf you're running in a container, pass paths as seen INSIDE the container and"
+            "\nmount the archives, e.g.:"
+            "\n  docker run --rm -v <host-archive-dir>:/archives -v \"$PWD/out:/out\" \\"
+            "\n      archive-analyzer /archives --output-dir /out"
+            "\nNote that shell globs (/archives/*) are expanded on the host, so pass the"
+            "\ncontaining directory instead - it expands to its archives automatically.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
     return resolved, any_s3
 
 

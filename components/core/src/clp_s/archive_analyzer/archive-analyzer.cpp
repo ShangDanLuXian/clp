@@ -5,9 +5,12 @@
 
 #include <nlohmann/json.hpp>
 
+#include <vector>
+
 #include <clp_s/archive_analyzer/ArchiveAnalyzer.hpp>
 #include <clp_s/archive_analyzer/CommandLineArguments.hpp>
 #include <clp_s/ErrorCode.hpp>
+#include <clp_s/InputConfig.hpp>
 #include <clp_s/TraceableException.hpp>
 
 using clp_s::archive_analyzer::CommandLineArguments;
@@ -92,8 +95,27 @@ auto main(int argc, char const* argv[]) -> int {
                   << "\n\n";
     }
 
+    // Expand each input into concrete archives: a directory containing archives expands to those
+    // archives, while an archive (or a URL) resolves to itself.
+    std::vector<std::string> archive_paths;
+    for (auto const& raw_path : command_line_arguments.get_archive_paths()) {
+        std::vector<clp_s::Path> resolved_paths;
+        if (false
+            == clp_s::get_input_archives_for_path(
+                    clp_s::get_path_object_for_raw_path(raw_path),
+                    resolved_paths
+            ))
+        {
+            record_failure(raw_path, "failed to resolve archive path");
+            continue;
+        }
+        for (auto& resolved_path : resolved_paths) {
+            archive_paths.push_back(std::move(resolved_path.path));
+        }
+    }
+
     bool wrote_first_report{false};
-    for (auto const& archive_path : command_line_arguments.get_archive_paths()) {
+    for (auto const& archive_path : archive_paths) {
         try {
             auto const stats{clp_s::archive_analyzer::analyze_archive(
                     archive_path,
@@ -116,6 +138,14 @@ auto main(int argc, char const* argv[]) -> int {
             error_message += error_code_to_string(e.get_error_code());
             error_message += " (error code " + std::to_string(e.get_error_code()) + ")";
             record_failure(archive_path, error_message);
+            if (clp_s::ErrorCodeFileNotFound == e.get_error_code()) {
+                std::cerr << "Hint: no such archive. If you're running the analyzer in a"
+                             " container, pass the path as seen *inside* the container (e.g."
+                             " /archives/...) and make sure the archives are mounted with"
+                             " `-v <host-dir>:/archives`. Note that shell globs like"
+                             " /archives/* are expanded on the host, so pass the containing"
+                             " directory instead.\n";
+            }
             if (clp_s::ErrorCodeUnsupported == e.get_error_code()) {
                 std::cerr << "Hint: this archive's format is not supported by this build of the"
                              " analyzer. It may have been created by a different clp-s version;"

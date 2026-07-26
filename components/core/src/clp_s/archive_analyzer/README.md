@@ -16,12 +16,17 @@ docker load < archive-analyzer-<version>.tar.gz
 (If you prefer to build the image yourself from this source instead — e.g. for a security
 review — run `./build.sh` from this directory; see "Auditing the source" below.)
 
-Analyze local archives:
+Analyze local archives — mount the directory holding your archives at `/archives` and pass that
+directory (it expands to the archives inside it):
 
 ```bash
-docker run --rm -v /data/archives:/archives -v "$PWD/out:/out" archive-analyzer \
-    /archives/<archive-id> --output-dir /out
+docker run --rm -v /path/to/your/archives:/archives -v "$PWD/out:/out" archive-analyzer \
+    /archives --output-dir /out
 ```
+
+Paths are always as seen **inside** the container, so don't use a shell glob like `/archives/*`
+— your shell would expand it against the host filesystem. Pass `/archives` (or
+`/archives/<archive-id>` for a single archive) instead.
 
 Analyze a random sample of 20 archives stored on S3 (credentials via the standard AWS
 environment variables; only single-file archives are supported over S3):
