@@ -7,11 +7,14 @@ before sharing any of it.
 
 ## Quick start
 
-Build the image (requires Docker; from this directory):
+Load the image you received (requires Docker; no build tooling needed):
 
 ```bash
-./build.sh
+docker load < archive-analyzer-<version>.tar.gz
 ```
+
+(If you prefer to build the image yourself from this source instead — e.g. for a security
+review — run `./build.sh` from this directory; see "Auditing the source" below.)
 
 Analyze local archives:
 
@@ -75,10 +78,11 @@ modified. The complete audit surface is this directory plus one `add_subdirector
 git diff main...archive_analyzer -- components/core/src/clp_s
 ```
 
-`build.sh` builds the image from this source in a clean `ubuntu:22.04` container, with
-third-party dependencies downloaded pinned by checksum - so the image you run is one you produced
-from source you can read. (`./build.sh --binary` exports just the binary instead, printing its
-SHA256.)
+You don't have to trust the prebuilt image: `./build.sh` builds the same image from this source
+in a clean `ubuntu:22.04` container, with third-party dependencies downloaded pinned by checksum
+- so the image you run can be one you produced from source you read. (`./build.sh --binary`
+exports just the binary instead, printing its SHA256. Maintainers use `./release.sh` to produce
+the distributable tarball plus its SHA256.)
 
 ## Running without the container
 
