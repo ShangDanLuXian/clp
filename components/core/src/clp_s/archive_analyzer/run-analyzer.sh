@@ -114,7 +114,10 @@ fi
 if ! docker image inspect "${image}" >/dev/null 2>&1; then
     if [[ -z "${image_tarball}" ]]; then
         # Fall back to an image tarball shipped alongside this script.
-        for candidate in "${script_dir}"/archive-analyzer-*.tar.gz "${script_dir}"/archive-analyzer-*.tar; do
+        for candidate in \
+            "${script_dir}"/archive-analyzer-*.tar.gz \
+            "${script_dir}"/archive-analyzer-*.tar
+        do
             if [[ -f "${candidate}" ]]; then
                 image_tarball="${candidate}"
                 break
