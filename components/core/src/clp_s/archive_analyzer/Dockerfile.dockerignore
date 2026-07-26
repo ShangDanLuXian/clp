@@ -1,0 +1,11 @@
+# Keeps the docker build context small: the build needs the repository sources (and .git for
+# version stamping), but not local build output, datasets, or previously exported artifacts.
+build
+out
+demo
+**/out
+**/*.tar.gz
+analysis.json
+report.txt
+column_names.local.txt
+.task
