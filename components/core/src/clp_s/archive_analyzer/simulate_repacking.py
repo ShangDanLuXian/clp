@@ -105,15 +105,28 @@ def value_archive_counts(column: ColumnData) -> "collections.Counter":
     return counts
 
 
-def archive_pruning(column: ColumnData, num_archives: int) -> float:
-    """Average, over the column's value universe, of the fraction of archives an archive-level
-    index prunes for `col = v`. Archives with unknown membership count as unprunable."""
+def value_prunings(column: ColumnData, num_archives: int) -> List[float]:
+    """The archive-level pruning of each value in the column's universe, ascending: for `col = v`,
+    the fraction of archives an archive-level index skips. Archives whose membership wasn't
+    recorded count as unprunable."""
     counts = value_archive_counts(column)
-    if not counts:
-        return 0.0
     unknown = len(column.unknown_archives)
-    total = sum(1.0 - (count + unknown) / num_archives for count in counts.values())
-    return total / len(counts)
+    return sorted(1.0 - (count + unknown) / num_archives for count in counts.values())
+
+
+def archive_pruning(column: ColumnData, num_archives: int) -> float:
+    """The mean of `value_prunings` - the expected pruning over a workload that queries each
+    distinct value equally often.
+
+    NOTE: This mean is frequently unrepresentative of any individual value. Columns tend to hold
+    a mix of values present in nearly every archive (pruning ~0) and values present in a handful
+    (pruning ~1), so the mean lands in a gap where no value actually sits. Report it alongside the
+    median and the per-value selectivity breakdown, never on its own.
+    """
+    prunings = value_prunings(column, num_archives)
+    if not prunings:
+        return 0.0
+    return sum(prunings) / len(prunings)
 
 
 def select_index_columns(
@@ -186,7 +199,15 @@ def order_greedy_union(
 ) -> List[int]:
     """Builds packs greedily, always adding the unassigned archive whose values grow the current
     pack's per-column unions the least. Union growth is normalized by each column's universe size
-    so no single column dominates. Ties fall back to input order, keeping temporal affinity."""
+    so no single column dominates.
+
+    Growth alone is not enough to separate candidates: once a value is in the pack's union, every
+    archive containing it grows the union by zero, so growth cannot distinguish an archive that
+    *uses* the committed value from one that merely avoids adding new ones. Since the objective is
+    the number of packs each value lands in, an archive holding an already-committed value is
+    nearly free here and would cost a whole extra pack elsewhere - so ties on growth are broken by
+    preferring the candidate that overlaps the union most, and only then by input order (which
+    keeps temporal affinity)."""
     universe_sizes = [max(1, len(column.value_universe())) for column in index_columns]
     unassigned = list(range(num_archives))
     order: List[int] = []
@@ -199,20 +220,21 @@ def order_greedy_union(
         members = 1
         while members < pack_size and unassigned:
             best_idx = 0
-            best_cost = None
+            best_key = None
             for position, candidate in enumerate(unassigned):
-                cost = 0.0
+                growth = 0.0
+                overlap = 0.0
                 for column_idx, column in enumerate(index_columns):
                     values = column.values_by_archive.get(candidate)
                     if values is None:
                         continue
-                    added = len(values - unions[column_idx])
-                    cost += added / universe_sizes[column_idx]
-                if best_cost is None or cost < best_cost:
-                    best_cost = cost
+                    union = unions[column_idx]
+                    growth += len(values - union) / universe_sizes[column_idx]
+                    overlap += len(values & union) / universe_sizes[column_idx]
+                key = (growth, -overlap, position)
+                if best_key is None or key < best_key:
+                    best_key = key
                     best_idx = position
-                    if 0.0 == cost:
-                        break  # No growth at all; nothing can beat this.
             chosen = unassigned.pop(best_idx)
             order.append(chosen)
             for column_idx, column in enumerate(index_columns):
@@ -407,28 +429,38 @@ def render_report(
     lines.append("")
     lines.append("Index columns (most discriminating first):")
     lines.append(
-        f"  {'column':<40} {'coverage':>9} {'distinct':>9} {'union':>7} {'arch-prune':>11}"
+        f"  {'column':<38} {'cover':>6} {'per-arch':>9} {'union':>6}"
+        f" {'mean':>7} {'median':>7} {'dead':>6}"
     )
     archive_pruning_by_path = {}
     for column in index_columns:
+        prunings = value_prunings(column, num_archives)
         pruning = archive_pruning(column, num_archives)
         archive_pruning_by_path[column.path] = pruning
+        median = prunings[len(prunings) // 2] if prunings else 0.0
+        # Values present in more than half the archives can never be pruned meaningfully, at any
+        # granularity; counting them shows how much of the column is dead weight.
+        dead = sum(1 for value_pruning in prunings if value_pruning < 0.5)
         avg_distinct = sum(
             len(values) for values in column.values_by_archive.values()
         ) / max(1, len(column.values_by_archive))
         lines.append(
-            f"  {column.path:<40} {column.num_present / num_archives:>8.0%}"
-            f" {avg_distinct:>9.1f} {len(column.value_universe()):>7}"
-            f" {pruning:>10.1%}"
+            f"  {column.path:<38} {column.num_present / num_archives:>5.0%}"
+            f" {avg_distinct:>9.1f} {len(column.value_universe()):>6}"
+            f" {pruning:>7.1%} {median:>7.1%} {dead:>3}/{len(prunings):<2}"
         )
     lines.append("")
-    lines.append(
-        "arch-prune: fraction of archives an archive-level index prunes, averaged over one"
-    )
-    lines.append(
-        "equality query per distinct value. distinct: average per archive. union: across all"
-    )
-    lines.append("archives.")
+    lines.append("Archive-level pruning: the fraction of archives an archive-level index skips,")
+    lines.append("per distinct value. mean/median are taken over the column's values; 'dead' is")
+    lines.append("how many of them sit in over half the archives (unprunable at any granularity).")
+    lines.append("per-arch: distinct values in a typical archive. union: distinct values across")
+    lines.append("all archives. Note that mean = 1 - per-arch/union, so a column is selective")
+    lines.append("exactly when its value universe grows with the corpus - low cardinality alone")
+    lines.append("does not make a column prunable.")
+    lines.append("")
+    lines.append("WARNING: where mean and median diverge sharply the column is bimodal - some")
+    lines.append("values in nearly every archive, others in a handful - and the mean describes no")
+    lines.append("actual value. Read the per-value selectivity breakdown under each pack size.")
     lines.append("")
 
     for pack_size in pack_sizes:
@@ -440,7 +472,9 @@ def render_report(
         lines.append(
             "Pack-level pruning (fraction of packs skipped; higher is better; 'floor' is the"
         )
-        lines.append(f"best any packing could reach; random averaged over {trials} trials):")
+        lines.append(f"best any packing could reach; random averaged over {trials} trials).")
+        lines.append("Per-column figures are means over that column's values, so see the")
+        lines.append("per-value breakdown below before drawing conclusions from them:")
         header = f"  {'column':<38} {'arch':>7}"
         for strategy in STRATEGY_ORDER:
             header += f" {strategy:>9}"
