@@ -84,12 +84,22 @@ The `hits` column is the correctness check: every variant must report the same n
 matching archives. A lower count means the encoding lost data and the filter is silently
 returning false negatives.
 
-Running both engines on one machine: install MariaDB normally, then extract MySQL's server
-binaries to a private prefix so the two coexist rather than conflict —
-`apt-get download mysql-server-core-8.0 mysql-client-core-8.0 && dpkg -x <deb> /opt/mysql8`,
-then initialize a separate datadir on port 3307 (`mysqld --initialize-insecure`,
-`--datadir=/var/lib/mysql8`). Give both the same `innodb_buffer_pool_size` or the comparison
-is meaningless.
+### Running both engines on one machine
+
+`apt install mysql-server` **removes MariaDB** — the packages conflict — so install MySQL
+either in a container or from extracted binaries in a private prefix:
+
+```bash
+docker run -d --name mysql8-bench -p 3307:3306 -e MYSQL_ALLOW_EMPTY_PASSWORD=1 \
+  mysql:8.0 --innodb-buffer-pool-size=4G --local-infile=1     # simplest, if docker is available
+sudo ./setup_mysql8.sh                                        # otherwise: native, port 3307
+```
+
+`setup_mysql8.sh` downloads the MySQL packages without installing them, apt-installs only
+their shared-library dependencies, extracts the binaries to `/opt/mysql8`, and initializes a
+separate datadir on port 3307. It leaves the existing MariaDB untouched and prints the
+`--engine` flags to use. Give both engines the same `innodb_buffer_pool_size` or the
+comparison is meaningless.
 
 ## Running
 
