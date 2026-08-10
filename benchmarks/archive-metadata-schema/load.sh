@@ -3,9 +3,17 @@
 # Requires: a running MariaDB with local_infile enabled, and ~20 GB free disk.
 set -eu
 
-python3 gen.py 30000000 1 logs.tsv
-python3 gen.py 5000000 2 metrics.tsv
-python3 gen.py 5000000 3 traces.tsv
+# Generation is the slow step (~15 min); reuse existing TSVs so the script is re-runnable.
+gen_if_missing() {
+    if [ -s "$3" ]; then
+        echo "reusing $3"
+    else
+        python3 gen.py "$1" "$2" "$3"
+    fi
+}
+gen_if_missing 30000000 1 logs.tsv
+gen_if_missing 5000000 2 metrics.tsv
+gen_if_missing 5000000 3 traces.tsv
 
 mysql < schema.sql
 

@@ -8,6 +8,10 @@ like the proposal's DDL.
 ## Environment
 
 - MariaDB 10.11 (InnoDB), `innodb_buffer_pool_size = 4G`, `local_infile = 1`.
+- The scripts connect over the unix socket with no credentials. On a stock Ubuntu install only
+  `root` is socket-authenticated, so give your OS user an account first:
+  `sudo mysql -e "CREATE USER IF NOT EXISTS '$USER'@'localhost' IDENTIFIED VIA unix_socket;
+  GRANT ALL PRIVILEGES ON bench.* TO '$USER'@'localhost';"`
 - ~20 GB free disk for the corpus plus one full-table-copy rebuild (E7).
 - All reported latencies are warm: each query runs twice and the second timing is kept.
   Rows examined = `Handler_read_next` after `FLUSH STATUS`.
