@@ -1,0 +1,10 @@
+--------------
+ALTER TABLE archives_logs ADD COLUMN lc_varchar_f02 VARCHAR(256) NULL, ALGORITHM=INPLACE
+--------------
+
+ERROR 1114 (HY000) at line 1: The table 'archives_logs' is full
+
+real	1m34.537s
+user	0m0.009s
+sys	0m0.005s
+inplace exit: 1

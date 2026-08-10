@@ -1,0 +1,9 @@
+generated 30000000
+generated 5000000
+generated 5000000
+loaded archives_logs
+loaded archives_logs_nopart
+loaded archives_metrics
+loaded archives_traces
+ALL_LOADED
+load exit: 0
