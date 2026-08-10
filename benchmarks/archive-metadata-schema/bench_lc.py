@@ -35,9 +35,13 @@ PROFILES = {
 VARIANTS = ["varchar_delim", "text_delim", "text_hash", "json", "json_mvi", "side_table"]
 
 DEFAULT_ENGINES = [
-    "mariadb=mysql",
-    "mysql=/opt/mysql8/usr/bin/mysql --defaults-file=/etc/my8.cnf -u root",
-    "mysql=mysql -u root -h 127.0.0.1 -P 3307 --protocol=TCP",
+    # Portable candidates. "auto" labels are replaced by the detected flavour. Anything not
+    # reachable here is reported, not skipped silently -- pass --engine for custom setups.
+    "auto=mysql",  # whatever the default socket serves
+    "auto=mariadb",  # MariaDB 11+ ships the client under this name
+    "auto=mysql -h 127.0.0.1 -P 3306 --protocol=TCP",
+    "auto=mysql -h 127.0.0.1 -P 3307 --protocol=TCP",  # second engine, per README setup
+    "auto=/opt/mysql8/usr/bin/mysql --defaults-file=/etc/my8.cnf -u root",  # README's prefix
 ]
 
 
@@ -54,23 +58,31 @@ def sh(cmd, sql, db=None, local_infile=False, timeout=1800):
 
 
 def detect(specs):
-    """Probes each label=command spec, keeping the ones that answer SELECT VERSION()."""
-    found, seen_flavours = [], set()
+    """Probes each label=command spec. Returns (usable engines, [(command, why it failed)])."""
+    found, failed, seen_flavours = [], [], set()
     for spec in specs:
         label, _, cmdline = spec.partition("=")
         cmd = shlex.split(cmdline)
         try:
-            rc, out, _ = sh(cmd, "SELECT VERSION();", timeout=15)
-        except (OSError, subprocess.SubprocessError):
+            rc, out, err = sh(cmd, "SELECT VERSION();", timeout=15)
+        except FileNotFoundError:
+            failed.append((cmdline, "client program not found"))
+            continue
+        except (OSError, subprocess.SubprocessError) as exc:
+            failed.append((cmdline, str(exc)[:70]))
             continue
         if rc != 0 or not out.strip():
+            why = err.strip().splitlines()[-1] if err.strip() else "no response"
+            failed.append((cmdline, why[:70]))
             continue
         version = out.strip().splitlines()[0]
         flavour = "mariadb" if "mariadb" in version.lower() else "mysql"
         if flavour in seen_flavours:
+            failed.append((cmdline, f"duplicate: another command already serves {flavour}"))
             continue  # first working command per flavour wins
         seen_flavours.add(flavour)
-        e = {"label": label, "cmd": cmd, "version": version, "flavour": flavour}
+        e = {"label": flavour if label == "auto" else label,
+             "cmd": cmd, "version": version, "flavour": flavour}
         # Probe every privilege the run needs BEFORE generating hundreds of MB of data.
         # FLUSH STATUS needs the global RELOAD privilege, which a database-scoped grant
         # does not cover, so check it explicitly rather than failing per-variant later.
@@ -80,7 +92,7 @@ def detect(specs):
                                  "DROP TABLE __probe;", DB)
         e["error"] = err.strip().splitlines()[-1] if rc != 0 else None
         found.append(e)
-    return found
+    return found, failed
 
 
 def digest(value):
@@ -302,8 +314,10 @@ def main():
                     help="where to stage generated data (default: system temp)")
     a = ap.parse_args()
 
-    engines = detect(a.engine or DEFAULT_ENGINES)
+    engines, unreachable = detect(a.engine or DEFAULT_ENGINES)
     if not engines:
+        for cmdline, why in unreachable:
+            sys.stderr.write(f"  tried: {cmdline}\n         -> {why}\n")
         sys.exit("No reachable server. Pass --engine LABEL='mysql -u root ...'")
     broken = [e for e in engines if e["error"]]
     engines = [e for e in engines if not e["error"]]
@@ -325,6 +339,17 @@ def main():
     line(" " + time.strftime("%Y-%m-%d %H:%M:%S"))
     for e in engines:
         line(f"   {e['label']:<9} {e['version']}")
+    # Say why an engine is absent. Silence here reads as "MySQL has no results" rather than
+    # "MySQL was never reached", which is the more useful thing to know.
+    for cmdline, why in unreachable:
+        if not why.startswith("duplicate"):
+            line(f"   {'(none)':<9} not reached via `{cmdline}`: {why}")
+    missing = {"mariadb", "mysql"} - {e["flavour"] for e in engines}
+    for m in sorted(missing):
+        line(f"   NOTE: no {m} server was reached, so these results cover only "
+             f"{'/'.join(sorted(e['flavour'] for e in engines))}.")
+        line("         The two engines diverge sharply on this workload -- see README for")
+        line("         running both side by side, or pass --engine to point at yours.")
     line("=" * 104)
 
     for prof in profiles:
