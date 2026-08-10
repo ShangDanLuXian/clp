@@ -52,6 +52,15 @@ MariaDB and MySQL because the two engines diverge sharply here. One archive row 
 set of distinct values a column takes anywhere in that archive, so the planner can ask "does
 this archive contain value v?"; this compares the candidate encodings for that set.
 
+This harness uses its own database (`lcbench`) and needs the global RELOAD privilege, because
+it counts rows scanned via `FLUSH STATUS`. A database-scoped grant alone fails with
+`ERROR 1227`:
+
+```bash
+sudo mysql -e "GRANT ALL PRIVILEGES ON lcbench.* TO '$USER'@'localhost';
+               GRANT RELOAD ON *.* TO '$USER'@'localhost';"
+```
+
 ```bash
 python3 bench_lc.py                       # auto-detects local servers, writes lc_bench_results.txt
 python3 bench_lc.py --profile id-like     # one profile only

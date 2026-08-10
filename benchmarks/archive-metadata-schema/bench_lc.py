@@ -70,7 +70,16 @@ def detect(specs):
         if flavour in seen_flavours:
             continue  # first working command per flavour wins
         seen_flavours.add(flavour)
-        found.append({"label": label, "cmd": cmd, "version": version, "flavour": flavour})
+        e = {"label": label, "cmd": cmd, "version": version, "flavour": flavour}
+        # Probe every privilege the run needs BEFORE generating hundreds of MB of data.
+        # FLUSH STATUS needs the global RELOAD privilege, which a database-scoped grant
+        # does not cover, so check it explicitly rather than failing per-variant later.
+        rc, _, err = sh(cmd, f"CREATE DATABASE IF NOT EXISTS {DB};")
+        if rc == 0:
+            rc, _, err = sh(cmd, "CREATE TABLE __probe (i INT); FLUSH STATUS; "
+                                 "DROP TABLE __probe;", DB)
+        e["error"] = err.strip().splitlines()[-1] if rc != 0 else None
+        found.append(e)
     return found
 
 
@@ -296,6 +305,17 @@ def main():
     engines = detect(a.engine or DEFAULT_ENGINES)
     if not engines:
         sys.exit("No reachable server. Pass --engine LABEL='mysql -u root ...'")
+    broken = [e for e in engines if e["error"]]
+    engines = [e for e in engines if not e["error"]]
+    for e in broken:
+        sys.stderr.write(f"SKIPPING {e['label']} ({e['version']}): {e['error']}\n")
+    if broken and not engines:
+        user = os.environ.get("USER", "<you>")
+        sys.exit(
+            "\nNo usable server, so nothing was run. The benchmark needs both a\n"
+            f"database-scoped grant and the global RELOAD privilege (for FLUSH STATUS):\n\n"
+            f"  sudo mysql -e \"GRANT ALL PRIVILEGES ON {DB}.* TO '{user}'@'localhost';\n"
+            f"                 GRANT RELOAD ON *.* TO '{user}'@'localhost';\"\n")
     profiles = a.profile or list(PROFILES)
 
     out = open(a.out, "w")
