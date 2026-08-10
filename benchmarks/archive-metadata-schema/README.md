@@ -75,12 +75,25 @@ chosen, and status. Both engines are optional — it benchmarks whichever it can
 
 Variants: `varchar_delim` (VARCHAR(1024), the proposal as written), `text_delim` (TEXT),
 `text_hash` (TEXT of fixed-width digests, delimiter-safe by construction), `json`,
-`json_mvi` (JSON + MySQL multi-valued index), and `side_table` (normalized
-`(val_hash, archive_id)`, the indexed baseline). Two profiles, both taken from the real
+`json_mvi` (JSON + MySQL multi-valued index), `side_table` (normalized
+`(val_hash, archive_id)`) and `side_table_raw` (normalized `(value, archive_id)`, keeping
+the value so the B-tree can serve prefix ranges). Two profiles, both taken from the real
 per-archive distinct-value counts measured on the mongodb dataset: `id-like` (125 values x
 7 chars = 1,001 B, grazing the VARCHAR limit) and `msg-like` (115 x 60 = ~7 KB, far over it).
 
-The `hits` column is the correctness check: every variant must report the same number of
+Three measurements, because they pull in different directions:
+
+- **Storage**, absolute and per archive.
+- **Query latency** for an exact value and for a **prefix wildcard** (`service: web-*`).
+  Hash-based encodings report `n/a` for the wildcard: hashing is not order-preserving, so
+  they cannot express the query at all. This is the discriminating case between keeping raw
+  values and digesting them.
+- **Sustained per-archive INSERT throughput** (`insert_arch/s`), one transaction per archive,
+  which is the shape the ingest path actually writes. Bulk `LOAD DATA` (`bulk_s`) is also
+  reported but is the friendliest possible write pattern and hides the cost of random key
+  order, so it should not be used to compare designs.
+
+The `hits` columns are the correctness check: every variant must report the same number of
 matching archives. A lower count means the encoding lost data and the filter is silently
 returning false negatives.
 

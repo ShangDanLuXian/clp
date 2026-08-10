@@ -5,6 +5,14 @@ One archive row stores the SET of distinct values a filter column takes anywhere
 archive, so the planner can ask "does this archive contain value v?". This script compares
 the candidate encodings for that set, on MariaDB and MySQL, and prints a numbers summary.
 
+Three things are measured, because they pull in different directions:
+  * storage, both absolute and per archive;
+  * query latency for an exact value AND for a prefix wildcard (`service: web-*`), which
+    hash-based encodings cannot answer at all;
+  * sustained per-archive INSERT throughput, which is how the ingest path actually writes.
+    Bulk LOAD DATA is the friendliest possible write pattern and hides the cost of random
+    key order, so it is reported but is not the write metric that matters.
+
 Run with no arguments to auto-detect local servers:
     python3 bench_lc.py
 Point it at specific servers (repeatable; the label is free-form):
@@ -26,13 +34,14 @@ SEP = chr(31)  # ASCII unit separator
 
 # (values per archive, value width, default row count). Both profiles come from the real
 # per-archive distinct-value counts measured on the mongodb dataset (1,037 archives).
+# Row counts default to the ~100K candidate set a time-filtered query hands to this filter.
 PROFILES = {
-    # Row counts default to the ~100K candidate set a time-filtered query hands to this filter.
     "id-like": (125, 7, 100_000),  # 125 x 7 chars -> 1,001 B payload: grazes VARCHAR(1024)
     "msg-like": (115, 60, 25_000),  # 115 x 60 chars -> ~7 KB payload: far over VARCHAR(1024)
 }
 
-VARIANTS = ["varchar_delim", "text_delim", "text_hash", "json", "json_mvi", "side_table"]
+VARIANTS = ["varchar_delim", "text_delim", "text_hash", "json", "json_mvi",
+            "side_table", "side_table_raw"]
 
 DEFAULT_ENGINES = [
     # Portable candidates. "auto" labels are replaced by the detected flavour. Anything not
@@ -45,7 +54,7 @@ DEFAULT_ENGINES = [
 ]
 
 
-def sh(cmd, sql, db=None, local_infile=False, timeout=1800):
+def sh(cmd, sql, db=None, local_infile=False, timeout=3600):
     """Runs SQL through a mysql-family client, returning (returncode, stdout, stderr)."""
     argv = list(cmd)
     if local_infile:
@@ -100,38 +109,59 @@ def digest(value):
     return f"{zlib.crc32(value.encode()) & 0xFFFFFFFF:08x}"
 
 
-def generate(profile, rows, seed, outdir):
-    """Writes one TSV per storage shape. Returns (paths, needles, payload_bytes)."""
+def u32(value):
+    return zlib.crc32(value.encode()) & 0xFFFFFFFF
+
+
+def generate(profile, rows, seed, outdir, insert_batch):
+    """Writes one TSV per storage shape. Returns (paths, needles, payload_bytes, batch)."""
     import random
 
     n_vals, width, _ = PROFILES[profile]
     rng = random.Random(seed)
     pool_size = max(n_vals * 100, 1000)
-    pool = [f"{i:0{width}d}"[-width:] if width <= 12 else f"{i:0{width}d}" for i in range(pool_size)]
     pool = [(str(i) + "x" * width)[:width] for i in range(pool_size)]  # fixed-width, distinct
     hot = pool[0]  # injected into ~20% of archives to give a "common value" probe
     rare = pool[pool_size // 2]
+    # Most selective prefix that still spans several distinct values, so the wildcard probe
+    # exercises a real index range rather than degenerating into a single point lookup.
+    prefix = rare[:1]
+    for k in range(width, 0, -1):
+        if sum(1 for v in pool if v.startswith(rare[:k])) >= 5:
+            prefix = rare[:k]
+            break
 
-    paths = {k: os.path.join(outdir, f"{k}.tsv") for k in ("delim", "hash", "json", "side")}
+    def row_values(i):
+        vals = rng.sample(pool, n_vals)
+        if rng.random() < 0.20 and hot not in vals:
+            vals[0] = hot
+        if rare in vals and rng.random() < 0.5:
+            vals[vals.index(rare)] = pool[1]  # thin the rare value toward ~1%
+        return vals
+
+    paths = {k: os.path.join(outdir, f"{k}.tsv")
+             for k in ("delim", "hash", "json", "side", "side_raw")}
     payload = 0
     with open(paths["delim"], "w") as fd, open(paths["hash"], "w") as fh, \
-         open(paths["json"], "w") as fj, open(paths["side"], "w") as fs:
+         open(paths["json"], "w") as fj, open(paths["side"], "w") as fs, \
+         open(paths["side_raw"], "w") as fr:
         for i in range(rows):
-            vals = rng.sample(pool, n_vals)
-            if rng.random() < 0.20 and hot not in vals:
-                vals[0] = hot
-            if rare in vals and rng.random() < 0.5:
-                vals[vals.index(rare)] = pool[1]  # thin the rare value toward ~1%
+            vals = row_values(i)
             line = SEP + SEP.join(vals) + SEP
             payload = max(payload, len(line))
             fd.write(f"{i}\t{line}\n")
             fh.write(f"{i}\t" + SEP + SEP.join(digest(v) for v in vals) + SEP + "\n")
             fj.write(f"{i}\t[" + ",".join(f'"{v}"' for v in vals) + "]\n")
             for v in vals:
-                fs.write(f"{i}\t{zlib.crc32(v.encode()) & 0xFFFFFFFF}\n")
-    return paths, {"rare": rare, "common": hot}, payload
+                fs.write(f"{i}\t{u32(v)}\n")
+                fr.write(f"{i}\t{v}\n")
+    # Archives appended afterwards to measure sustained per-archive insert throughput.
+    batch = [(rows + j, row_values(rows + j)) for j in range(insert_batch)]
+    return paths, {"rare": rare, "common": hot, "prefix": prefix}, payload, batch
 
 
+# VARCHAR(255) on the raw side table stands in for the prefix index a production deployment
+# would need: InnoDB caps index keys at 3072 bytes, so unbounded values cannot be keyed whole.
 DDL = {
     "varchar_delim": "CREATE TABLE t (id INT PRIMARY KEY, v VARCHAR(1024) NULL) "
                      "ENGINE=InnoDB DEFAULT CHARSET=ascii",
@@ -141,31 +171,67 @@ DDL = {
                  "ENGINE=InnoDB DEFAULT CHARSET=ascii",
     "json": "CREATE TABLE t (id INT PRIMARY KEY, v JSON NULL) ENGINE=InnoDB",
     "json_mvi": "CREATE TABLE t (id INT PRIMARY KEY, v JSON NULL) ENGINE=InnoDB",
-    "side_table": "CREATE TABLE t (archive_id INT NOT NULL, val_hash INT UNSIGNED NOT NULL, "
-                  "PRIMARY KEY (val_hash, archive_id)) ENGINE=InnoDB",
+    "side_table": "CREATE TABLE t (archive_id INT UNSIGNED NOT NULL, "
+                  "val_hash INT UNSIGNED NOT NULL, PRIMARY KEY (val_hash, archive_id)) "
+                  "ENGINE=InnoDB",
+    "side_table_raw": "CREATE TABLE t (archive_id INT UNSIGNED NOT NULL, "
+                      "value VARCHAR(255) NOT NULL, PRIMARY KEY (value, archive_id)) "
+                      "ENGINE=InnoDB DEFAULT CHARSET=ascii",
 }
 SOURCE = {"varchar_delim": "delim", "text_delim": "delim", "text_hash": "hash",
-          "json": "json", "json_mvi": "json", "side_table": "side"}
+          "json": "json", "json_mvi": "json", "side_table": "side",
+          "side_table_raw": "side_raw"}
+COLUMNS = {"side_table": "(archive_id,val_hash)", "side_table_raw": "(archive_id,value)"}
+IS_SIDE = ("side_table", "side_table_raw")
+IS_HASHED = ("text_hash", "side_table")  # cannot express a prefix wildcard, by construction
 
 
-def predicate(variant, value):
-    """The filter the planner would generate for 'archive contains value'."""
-    hexd, u32 = digest(value), zlib.crc32(value.encode()) & 0xFFFFFFFF
+def predicate(variant, literal, kind):
+    """SQL for 'which archives contain this value' (kind='exact') or 'contain a value with
+    this prefix' (kind='prefix'). Returns None where the encoding cannot express the query."""
+    sep = "CHAR(31 USING ascii)"
+    if kind == "prefix":
+        if variant in IS_HASHED:
+            return None  # hashing is not order- or prefix-preserving
+        if variant in ("varchar_delim", "text_delim"):
+            return f"SELECT COUNT(*) FROM t WHERE v LIKE CONCAT('%',{sep},'{literal}','%')"
+        if variant in ("json", "json_mvi"):
+            # JSON_SEARCH takes LIKE patterns; a multi-valued index cannot serve it.
+            return f"SELECT COUNT(*) FROM t WHERE JSON_SEARCH(v,'one','{literal}%') IS NOT NULL"
+        return f"SELECT COUNT(DISTINCT archive_id) FROM t WHERE value LIKE '{literal}%'"
     if variant in ("varchar_delim", "text_delim"):
-        return f"SELECT COUNT(*) FROM t WHERE v LIKE CONCAT('%',CHAR(31 USING ascii)," \
-               f"'{value}',CHAR(31 USING ascii),'%')"
+        return (f"SELECT COUNT(*) FROM t WHERE v LIKE CONCAT('%',{sep},'{literal}',{sep},'%')")
     if variant == "text_hash":
-        return f"SELECT COUNT(*) FROM t WHERE v LIKE CONCAT('%',CHAR(31 USING ascii)," \
-               f"'{hexd}',CHAR(31 USING ascii),'%')"
+        return (f"SELECT COUNT(*) FROM t WHERE v LIKE "
+                f"CONCAT('%',{sep},'{digest(literal)}',{sep},'%')")
     if variant == "json":
-        return f"SELECT COUNT(*) FROM t WHERE JSON_CONTAINS(v, '\"{value}\"')"
+        return f"SELECT COUNT(*) FROM t WHERE JSON_CONTAINS(v, '\"{literal}\"')"
     if variant == "json_mvi":
-        return f"SELECT COUNT(*) FROM t WHERE '{value}' MEMBER OF (v)"
-    return f"SELECT COUNT(DISTINCT archive_id) FROM t WHERE val_hash = {u32}"
+        return f"SELECT COUNT(*) FROM t WHERE '{literal}' MEMBER OF (v)"
+    if variant == "side_table":
+        return f"SELECT COUNT(DISTINCT archive_id) FROM t WHERE val_hash = {u32(literal)}"
+    return f"SELECT COUNT(DISTINCT archive_id) FROM t WHERE value = '{literal}'"
+
+
+def insert_sql(variant, aid, vals):
+    """One archive's worth of rows, as the ingest path would write it."""
+    if variant in ("varchar_delim", "text_delim"):
+        return f"INSERT INTO t (id,v) VALUES ({aid},'{SEP}{SEP.join(vals)}{SEP}');"
+    if variant == "text_hash":
+        body = SEP + SEP.join(digest(v) for v in vals) + SEP
+        return f"INSERT INTO t (id,v) VALUES ({aid},'{body}');"
+    if variant in ("json", "json_mvi"):
+        return f"INSERT INTO t (id,v) VALUES ({aid},'[" + ",".join(f'\"{v}\"' for v in vals) \
+               + "]');"
+    if variant == "side_table":
+        return "INSERT INTO t (archive_id,val_hash) VALUES " \
+               + ",".join(f"({aid},{u32(v)})" for v in vals) + ";"
+    return "INSERT INTO t (archive_id,value) VALUES " \
+           + ",".join(f"({aid},'{v}')" for v in vals) + ";"
 
 
 def timed(engine, sql):
-    """Runs sql twice; returns (warm_ms, rows_scanned, matched) using server-side timing."""
+    """Runs sql twice; returns (warm_ms, rows_scanned, matched, error) with server-side timing."""
     script = (
         sql + ";\n"                      # warm-up pass, not counted
         "FLUSH STATUS;\n"
@@ -190,6 +256,22 @@ def timed(engine, sql):
     return ms, scanned, matched, None
 
 
+def insert_rate(engine, variant, batch):
+    """Archives inserted per second, one transaction per archive (the real ingest shape)."""
+    parts = ["SET @t=NOW(6);"]
+    for aid, vals in batch:
+        parts += ["BEGIN;", insert_sql(variant, aid, vals), "COMMIT;"]
+    parts.append("SELECT CONCAT('MS=',TIMESTAMPDIFF(MICROSECOND,@t,NOW(6))/1000);")
+    rc, out, _ = sh(engine["cmd"], "\n".join(parts), DB)
+    if rc != 0:
+        return None
+    for line in out.splitlines():
+        if line.startswith("MS="):
+            ms = float(line[3:])
+            return round(len(batch) / (ms / 1000.0), 1) if ms > 0 else None
+    return None
+
+
 def index_used(engine, sql):
     """Reads the chosen index out of EXPLAIN FORMAT=JSON (portable across both engines)."""
     rc, out, _ = sh(engine["cmd"], f"EXPLAIN FORMAT=JSON {sql};", DB)
@@ -202,7 +284,7 @@ def index_used(engine, sql):
     return "-"
 
 
-def bench(engine, variant, paths, needles, rows):
+def bench(engine, variant, paths, needles, rows, batch):
     r = {"engine": engine["label"], "variant": variant, "status": "ok"}
     sh(engine["cmd"], f"DROP TABLE IF EXISTS t; {DDL[variant]};", DB)
     if variant == "json_mvi":
@@ -214,7 +296,7 @@ def bench(engine, variant, paths, needles, rows):
             sh(engine["cmd"], "DROP TABLE IF EXISTS t;", DB)
             return r
     src = paths[SOURCE[variant]]
-    cols = "(archive_id,val_hash)" if variant == "side_table" else "(id,v)"
+    cols = COLUMNS.get(variant, "(id,v)")
     t0 = time.time()
     rc, _, err = sh(engine["cmd"],
                     f"LOAD DATA LOCAL INFILE '{src}' INTO TABLE t {cols};", DB,
@@ -234,8 +316,7 @@ def bench(engine, variant, paths, needles, rows):
                    "data_length+index_length FROM information_schema.tables "
                    f"WHERE table_schema='{DB}' AND table_name='t';", DB)
     try:
-        mb, total = out.split()[0], int(out.split()[1])
-        r["store_mb"], r["b_row"] = float(mb), round(total / rows)
+        r["store_mb"], r["b_row"] = float(out.split()[0]), round(int(out.split()[1]) / rows)
     except (ValueError, IndexError):
         r["store_mb"], r["b_row"] = 0.0, 0
     # Truncation check: VARCHAR(1024) silently clips oversized payloads on non-strict loads.
@@ -244,62 +325,112 @@ def bench(engine, variant, paths, needles, rows):
         clipped = int(out.strip() or 0)
         if clipped:
             r["status"] = f"TRUNCATED({clipped})"
-    for label, key in (("rare", "rare"), ("common", "common")):
-        sql = predicate(variant, needles[key])
+    for label, key, kind in (("rare", "rare", "exact"), ("common", "common", "exact"),
+                             ("pfx", "prefix", "prefix")):
+        sql = predicate(variant, needles[key], kind)
+        if sql is None:
+            r[f"{label}_ms"] = r[f"{label}_scan"] = r[f"{label}_hits"] = None
+            r[f"{label}_na"] = True
+            continue
         ms, scanned, matched, err = timed(engine, sql)
         r[f"{label}_ms"], r[f"{label}_scan"], r[f"{label}_hits"] = ms, scanned, matched
         if err:
             r["status"], r["note"] = "QUERY FAILED", err[:60]
-    r["index"] = index_used(engine, predicate(variant, needles["rare"]))
+    exact = predicate(variant, needles["rare"], "exact")
+    r["index"] = index_used(engine, exact)
+    pfx = predicate(variant, needles["prefix"], "prefix")
+    r["pfx_index"] = index_used(engine, pfx) if pfx else "n/a"
+    r["ins_arch_s"] = insert_rate(engine, variant, batch)
     sh(engine["cmd"], "DROP TABLE IF EXISTS t;", DB)
     return r
 
 
-def fmt(rows_out, profile, rows, n_vals, width, payload, out):
-    p = lambda s: (print(s), out.write(s + "\n"))
+def fmt(rows_out, profile, rows, n_vals, width, payload, needles, batch_n, out):
+    def p(s):
+        print(s)
+        out.write(s + "\n")
+
+    def num(r, k):
+        v = r.get(k)
+        if r.get(k.split("_")[0] + "_na"):
+            return "n/a"
+        if isinstance(v, float):
+            return f"{v:,.1f}"
+        if isinstance(v, int):
+            return f"{v:,}"
+        return "-"
+
     p("")
     p(f"PROFILE {profile}: archives={rows:,}  values/archive={n_vals}  value_width={width}"
       f"  delimited_payload={payload}B")
-    p("-" * 116)
-    p(f"{'engine':<9}{'variant':<15}{'store_MB':>9}{'B/row':>8}{'load_s':>8}"
-      f"{'rare_ms':>9}{'common_ms':>10}{'scanned':>10}{'hits':>8}{'index':>8}  {'status':<12}")
-    p("-" * 116)
+    p(f"  probes: exact rare='{needles['rare']}'  exact common='{needles['common']}'"
+      f"  prefix='{needles['prefix']}*'   insert batch={batch_n:,} archives")
+
+    p("")
+    p("  STORAGE AND WRITE")
+    p("  " + "-" * 84)
+    p(f"  {'engine':<9}{'variant':<16}{'store_MB':>10}{'B/archive':>11}{'bulk_s':>9}"
+      f"{'insert_arch/s':>15}  {'status':<12}")
+    p("  " + "-" * 84)
     for r in rows_out:
-        if r["variant"] != "" and r.get("store_mb") is None:
+        if r.get("store_mb") is None:
             continue
-        num = lambda k, d="-": (f"{r[k]:,.1f}" if isinstance(r.get(k), float)
-                                else f"{r[k]:,}" if isinstance(r.get(k), int) else d)
-        p(f"{r['engine']:<9}{r['variant']:<15}{num('store_mb'):>9}{num('b_row'):>8}"
-          f"{num('load_s'):>8}{num('rare_ms'):>9}{num('common_ms'):>10}"
-          f"{num('rare_scan'):>10}{num('rare_hits'):>8}{str(r.get('index','-'))[:7]:>8}"
-          f"  {r['status']:<12}")
-    # 'hits' must agree across variants: a low count means the encoding lost data and the
-    # filter is returning false negatives, which is a correctness bug, not a slow query.
-    truth = max((r.get("rare_hits") or 0) for r in rows_out) if rows_out else 0
-    wrong = [r for r in rows_out if isinstance(r.get("rare_hits"), int)
-             and r["rare_hits"] != truth]
-    if wrong:
-        p("")
-        p(f"  *** FALSE NEGATIVES: expected {truth} matching archives; these returned fewer:")
-        for r in wrong:
-            p(f"      {r['engine']:<9}{r['variant']:<15}{r['rare_hits']:>8} "
-              f"({truth - r['rare_hits']} archives missed)")
+        p(f"  {r['engine']:<9}{r['variant']:<16}{num(r,'store_mb'):>10}{num(r,'b_row'):>11}"
+          f"{num(r,'load_s'):>9}{num(r,'ins_arch_s'):>15}  {r['status']:<12}")
+
+    p("")
+    p("  QUERY (warm ms; hits = matching archives, which must agree across variants)")
+    p("  " + "-" * 112)
+    p(f"  {'engine':<9}{'variant':<16}{'exact_ms':>10}{'hits':>8}{'scanned':>10}{'idx':>9}"
+      f"{'common_ms':>11}{'prefix_ms':>10}{'hits':>8}{'scanned':>10}{'idx':>9}")
+    p("  " + "-" * 112)
+    for r in rows_out:
+        if r.get("store_mb") is None:
+            continue
+        p(f"  {r['engine']:<9}{r['variant']:<16}{num(r,'rare_ms'):>10}{num(r,'rare_hits'):>8}"
+          f"{num(r,'rare_scan'):>10}{str(r.get('index','-'))[:8]:>9}"
+          f"{num(r,'common_ms'):>11}{num(r,'pfx_ms'):>10}{num(r,'pfx_hits'):>8}"
+          f"{num(r,'pfx_scan'):>10}{str(r.get('pfx_index','-'))[:8]:>9}")
+
     notes = [r for r in rows_out if r.get("note")]
     if notes:
         p("")
         for r in notes:
             p(f"  ! {r['engine']}/{r['variant']}: {r['note']}")
-    base = {}
-    for r in rows_out:
-        if r["variant"] == "text_delim" and isinstance(r.get("rare_ms"), float):
-            base[r["engine"]] = r["rare_ms"]
-    if base:
+    na = [r for r in rows_out if r.get("pfx_na")]
+    if na:
         p("")
-        p("  rare-value lookup, relative to text_delim on the same engine (lower is better):")
+        p("  n/a = encoding cannot express a prefix wildcard (hashing is not "
+          "order-preserving):")
+        p("      " + ", ".join(f"{r['engine']}/{r['variant']}" for r in na))
+
+    # Every variant must agree on hit counts. A lower count means the encoding lost data and
+    # the filter is silently returning false negatives, which is a correctness bug.
+    for label, what in (("rare", "exact"), ("pfx", "prefix")):
+        vals = [r for r in rows_out if isinstance(r.get(f"{label}_hits"), int)]
+        if not vals:
+            continue
+        truth = max(r[f"{label}_hits"] for r in vals)
+        wrong = [r for r in vals if r[f"{label}_hits"] != truth]
+        if wrong:
+            p("")
+            p(f"  *** FALSE NEGATIVES ({what}): expected {truth} matching archives;"
+              f" these returned fewer:")
+            for r in wrong:
+                p(f"      {r['engine']:<9}{r['variant']:<16}{r[f'{label}_hits']:>8} "
+                  f"({truth - r[f'{label}_hits']} missed)")
+
+    for label, what in (("rare", "exact"), ("pfx", "prefix")):
+        base = {r["engine"]: r[f"{label}_ms"] for r in rows_out
+                if r["variant"] == "text_delim" and isinstance(r.get(f"{label}_ms"), float)}
+        if not base:
+            continue
+        p("")
+        p(f"  {what} lookup, relative to text_delim on the same engine (lower is better):")
         for r in rows_out:
-            if isinstance(r.get("rare_ms"), float) and r["engine"] in base:
-                p(f"    {r['engine']:<9}{r['variant']:<15}"
-                  f"{r['rare_ms']/base[r['engine']]:>8.2f}x")
+            if isinstance(r.get(f"{label}_ms"), float) and r["engine"] in base:
+                p(f"    {r['engine']:<9}{r['variant']:<16}"
+                  f"{r[f'{label}_ms']/base[r['engine']]:>8.2f}x")
 
 
 def main():
@@ -307,6 +438,8 @@ def main():
     ap.add_argument("--engine", action="append", default=[], metavar="LABEL=COMMAND")
     ap.add_argument("--profile", action="append", default=[], choices=list(PROFILES))
     ap.add_argument("--rows", type=int, default=0, help="override row count for all profiles")
+    ap.add_argument("--insert-batch", type=int, default=500,
+                    help="archives inserted one-transaction-each to measure write throughput")
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--out", default="lc_bench_results.txt")
     # Generated TSVs are large (hundreds of MB); keep them out of the working tree.
@@ -333,7 +466,11 @@ def main():
     profiles = a.profile or list(PROFILES)
 
     out = open(a.out, "w")
-    line = lambda s: (print(s), out.write(s + "\n"))
+
+    def line(s):
+        print(s)
+        out.write(s + "\n")
+
     line("=" * 104)
     line(" LOW-CARDINALITY FILTER COLUMN - ENCODING BENCHMARK")
     line(" " + time.strftime("%Y-%m-%d %H:%M:%S"))
@@ -356,7 +493,7 @@ def main():
         n_vals, width, default_rows = PROFILES[prof]
         rows = a.rows or default_rows
         with tempfile.TemporaryDirectory(dir=a.tmpdir) as td:
-            paths, needles, payload = generate(prof, rows, a.seed, td)
+            paths, needles, payload, batch = generate(prof, rows, a.seed, td, a.insert_batch)
             os.chmod(td, 0o755)
             for p in paths.values():
                 os.chmod(p, 0o644)
@@ -365,8 +502,8 @@ def main():
                 sh(e["cmd"], f"CREATE DATABASE IF NOT EXISTS {DB};")
                 for v in VARIANTS:
                     sys.stderr.write(f"  [{prof}] {e['label']}/{v} ...\n")
-                    results.append(bench(e, v, paths, needles, rows))
-            fmt(results, prof, rows, n_vals, width, payload, out)
+                    results.append(bench(e, v, paths, needles, rows, batch))
+            fmt(results, prof, rows, n_vals, width, payload, needles, len(batch), out)
 
     for e in engines:
         sh(e["cmd"], f"DROP DATABASE IF EXISTS {DB};")
