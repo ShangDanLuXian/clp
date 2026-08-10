@@ -1,0 +1,73 @@
+========================================================================================================
+ LOW-CARDINALITY FILTER COLUMN - ENCODING BENCHMARK
+ 2026-08-10 18:51:20
+   mariadb   10.11.14-MariaDB-0ubuntu0.24.04.1
+   mysql     8.0.46-0ubuntu0.24.04.3
+========================================================================================================
+
+PROFILE id-like: archives=100,000  values/archive=125  value_width=7  delimited_payload=1001B
+--------------------------------------------------------------------------------------------------------------------
+engine   variant         store_MB   B/row  load_s  rare_ms common_ms   scanned    hits   index  status      
+--------------------------------------------------------------------------------------------------------------------
+mariadb  varchar_delim      112.6   1,181     1.6    174.2     137.9   100,001     475       -  ok          
+mariadb  text_delim         112.6   1,181     1.5    181.8     156.3   100,001     475       -  ok          
+mariadb  text_hash          120.6   1,265     1.5    133.3     115.6   100,001     475       -  ok          
+mariadb  json               142.7   1,496     1.7    494.0     437.0   100,001     475       -  ok          
+mariadb  side_table         454.0   4,761    43.1      0.5       6.3       475     475 PRIMARY  ok          
+mysql    varchar_delim      112.6   1,181     4.9    166.7     126.6   100,001     475       -  ok          
+mysql    text_delim         112.6   1,181     3.5    171.3     121.4   100,001     475       -  ok          
+mysql    text_hash          120.6   1,265     4.2    174.1     147.4   100,001     475       -  ok          
+mysql    json               156.7   1,643     5.3  6,229.2   6,049.8   100,001     475       -  ok          
+mysql    json_mvi           729.7   7,651    54.2     42.7   1,384.4       475     475     mvi  ok          
+mysql    side_table         514.0   5,390    64.0      1.0       6.1       475     475 PRIMARY  ok          
+
+  ! mariadb/json_mvi: ERROR 1064 (42000) at line 1: You have an error in your SQL 
+
+  rare-value lookup, relative to text_delim on the same engine (lower is better):
+    mariadb  varchar_delim      0.96x
+    mariadb  text_delim         1.00x
+    mariadb  text_hash          0.73x
+    mariadb  json               2.72x
+    mariadb  side_table         0.00x
+    mysql    varchar_delim      0.97x
+    mysql    text_delim         1.00x
+    mysql    text_hash          1.02x
+    mysql    json              36.36x
+    mysql    json_mvi           0.25x
+    mysql    side_table         0.01x
+
+PROFILE msg-like: archives=25,000  values/archive=115  value_width=60  delimited_payload=7016B
+--------------------------------------------------------------------------------------------------------------------
+engine   variant         store_MB   B/row  load_s  rare_ms common_ms   scanned    hits   index  status      
+--------------------------------------------------------------------------------------------------------------------
+mariadb  varchar_delim       28.6   1,198     1.2     22.4      18.3    25,001      17       -  TRUNCATED(25000)
+mariadb  text_delim         195.7   8,208     2.8    173.7     143.0    25,001     117       -  ok          
+mariadb  text_hash           28.6   1,198     0.4     34.3      28.8    25,001     117       -  ok          
+mariadb  json               195.7   8,208     1.8    449.1     446.7    25,001     117       -  ok          
+mariadb  side_table         144.8   6,072     8.3      0.4       1.6       117     117 PRIMARY  ok          
+mysql    varchar_delim       28.6   1,198     1.3     28.6      24.8    25,001      17       -  TRUNCATED(25000)
+mysql    text_delim         195.7   8,208     4.5    166.5     129.6    25,001     117       -  ok          
+mysql    text_hash           28.6   1,198     0.6     38.7      34.4    25,001     117       -  ok          
+mysql    json               195.7   8,208     6.0  1,394.3   1,398.5    25,001     117       -  ok          
+mysql    side_table         160.8   6,743    13.2      0.4       1.9       117     117 PRIMARY  ok          
+
+  *** FALSE NEGATIVES: expected 117 matching archives; these returned fewer:
+      mariadb  varchar_delim        17 (100 archives missed)
+      mysql    varchar_delim        17 (100 archives missed)
+
+  ! mariadb/json_mvi: ERROR 1064 (42000) at line 1: You have an error in your SQL 
+  ! mysql/json_mvi: ERROR 3906 (HY000) at line 1: Exceeded max total length of v
+
+  rare-value lookup, relative to text_delim on the same engine (lower is better):
+    mariadb  varchar_delim      0.13x
+    mariadb  text_delim         1.00x
+    mariadb  text_hash          0.20x
+    mariadb  json               2.59x
+    mariadb  side_table         0.00x
+    mysql    varchar_delim      0.17x
+    mysql    text_delim         1.00x
+    mysql    text_hash          0.23x
+    mysql    json               8.38x
+    mysql    side_table         0.00x
+
+written to /home/user/bench/lc_bench_results.txt

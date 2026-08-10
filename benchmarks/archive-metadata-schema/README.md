@@ -45,10 +45,42 @@ one `packs_logs` row per assigned `pack_id` (229,688 Packs).
 | `e7_ddl.sql` | E7: `ALGORITHM=INSTANT` ADD COLUMN vs the indexed VIRTUAL `is_long_span`, with controls (unindexed VIRTUAL, indexed VIRTUAL, indexed STORED) | INSTANT refused on the proposed table; STORED variant restores 5 ms INSTANT; forced INPLACE = full-table-copy rebuild, 2m01s idle with table-sized peak disk |
 | `e_retention.sql` | retention: drop one day (~82K rows) via `DROP PARTITION` vs row-wise `DELETE` (destructive -- run last) | 6 ms vs 1.77 s |
 
-E8 (sizing of `lc_multi_val VARCHAR(1024)`) is not part of this harness: it is an offline
-analysis of real per-archive distinct-value counts from the mongodb dataset (see the
-archive-analyzer output on the `simulate_repacking` branch), where a 7-char numeric column
-with 125 distinct values per archive already needs ~1,001 bytes delimited.
+## Low-cardinality column encodings (`bench_lc.py`)
+
+A second, self-contained harness for the multi-value filter column, run across **both**
+MariaDB and MySQL because the two engines diverge sharply here. One archive row stores the
+set of distinct values a column takes anywhere in that archive, so the planner can ask "does
+this archive contain value v?"; this compares the candidate encodings for that set.
+
+```bash
+python3 bench_lc.py                       # auto-detects local servers, writes lc_bench_results.txt
+python3 bench_lc.py --profile id-like     # one profile only
+python3 bench_lc.py --rows 50000          # smaller/faster
+python3 bench_lc.py --engine mariadb="mysql -u root" \
+                    --engine mysql="mysql -u root -h 127.0.0.1 -P 3307 --protocol=TCP"
+```
+
+Output is a plain-text numbers table (not a document): storage, bytes/row, load time, warm
+latency for a rare (~1%) and a common (~20%) value, rows scanned, matching archives, index
+chosen, and status. Both engines are optional — it benchmarks whichever it can reach.
+
+Variants: `varchar_delim` (VARCHAR(1024), the proposal as written), `text_delim` (TEXT),
+`text_hash` (TEXT of fixed-width digests, delimiter-safe by construction), `json`,
+`json_mvi` (JSON + MySQL multi-valued index), and `side_table` (normalized
+`(val_hash, archive_id)`, the indexed baseline). Two profiles, both taken from the real
+per-archive distinct-value counts measured on the mongodb dataset: `id-like` (125 values x
+7 chars = 1,001 B, grazing the VARCHAR limit) and `msg-like` (115 x 60 = ~7 KB, far over it).
+
+The `hits` column is the correctness check: every variant must report the same number of
+matching archives. A lower count means the encoding lost data and the filter is silently
+returning false negatives.
+
+Running both engines on one machine: install MariaDB normally, then extract MySQL's server
+binaries to a private prefix so the two coexist rather than conflict —
+`apt-get download mysql-server-core-8.0 mysql-client-core-8.0 && dpkg -x <deb> /opt/mysql8`,
+then initialize a separate datadir on port 3307 (`mysqld --initialize-insecure`,
+`--datadir=/var/lib/mysql8`). Give both the same `innodb_buffer_pool_size` or the comparison
+is meaningless.
 
 ## Running
 

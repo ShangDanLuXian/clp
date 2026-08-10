@@ -1,0 +1,4 @@
+# Generated benchmark data and local run artifacts (hundreds of MB).
+*.tsv
+tmp*/
+lc_bench_results.txt
