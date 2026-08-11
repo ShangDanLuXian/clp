@@ -5,6 +5,20 @@ schema. It validates the load-bearing claims of the design (pushdown predicate, 
 join and repack costs, online DDL, column sizing) against a synthetic one-year corpus shaped
 like the proposal's DDL.
 
+## Setup
+
+On a machine with no database installed (including WSL, where systemd may be absent):
+
+```bash
+sudo ./setup_db.sh        # installs MariaDB if needed, configures it, starts it, grants you access
+sudo ./setup_mysql8.sh    # optional: adds MySQL 8 on port 3307 for the cross-engine comparison
+```
+
+`setup_db.sh` sizes the buffer pool to half of RAM (capped at 4 GB), enables `local_infile`,
+starts the server via systemd/`service`/`mariadbd-safe` depending on what the box has, and
+grants your user socket authentication plus the global `RELOAD` privilege that `FLUSH STATUS`
+needs. After it prints `Ready.` no further sudo is required.
+
 ## Environment
 
 - MariaDB 10.11 (InnoDB), `innodb_buffer_pool_size = 4G`, `local_infile = 1`.
