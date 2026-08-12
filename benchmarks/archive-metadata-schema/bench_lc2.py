@@ -483,7 +483,9 @@ def main():
                     os.chmod(p, 0o644)
                 results = []
                 for e in engines:
-                    sh(e["cmd"], f"CREATE DATABASE IF NOT EXISTS {DB};")
+                    # Start from a clean slate so nothing from an earlier (possibly aborted)
+                    # run can contaminate sizes or timings.
+                    sh(e["cmd"], f"DROP DATABASE IF EXISTS {DB}; CREATE DATABASE {DB};")
                     sys.stderr.write(f"  {e['label']}: loading base table ...\n")
                     sh(e["cmd"], "DROP TABLE IF EXISTS t_base; " + DDL["base"] + ";", DB)
                     sh(e["cmd"], f"LOAD DATA LOCAL INFILE '{paths['base']}' "
