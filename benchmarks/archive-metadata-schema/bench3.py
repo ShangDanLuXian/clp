@@ -202,12 +202,17 @@ def make_probes():
         "Q1_d8":        [eq("d8")],                 # ~20%
         "Q1_d20":       [eq("d20")],                # ~6.7%
         "Q1_d64":       [eq("d64")],                # ~1.3%
-        "Q2_pfx_d20":   [pfx("d20")],
-        "Q2_pfx_d64":   [pfx("d64", 3)],
+        # Prefix selectivity is bounded by the value universe: with only `pool` distinct
+        # values fleet-wide and `distinct` of them per archive, a prefix matching k pool
+        # values hits ~1-(1-k/pool)^distinct of archives. On a small pool that is ~everything,
+        # so both a narrow and a broad prefix are probed and prune% tells them apart.
+        "Q2_pfxn_d20":  [pfx("d20", 5)],
+        "Q2_pfxb_d20":  [pfx("d20", 4)],
+        "Q2_pfxn_d64":  [pfx("d64", 5)],
         "Q3_sel_sel":   [eq("d1"), eq("d20")],
         "Q3_sel_hot":   [eq("d20"), eq("d3")],
         "Q3_hot_hot":   [eq("d3"), second("d3")],
-        "Q4_hot_pfx":   [eq("d3"), pfx("d20")],
+        "Q4_hot_pfx":   [eq("d3"), pfx("d20", 5)],
     }
     return {q: p for q, p in candidates.items() if all(x is not None for x in p)}
 
@@ -609,7 +614,11 @@ def write_tests(engine, design, days, batch, seed, log):
 def interference(engine, design, days, wins, probes, seed, log):
     """Query latency while the ingest path runs, plus concurrent insert rate."""
     w1, w2 = wins["1d"]
-    sql = build_query(design, probes["Q1_entity"], w1, w2) + ";"
+    # Pick a mid-selectivity single-predicate probe that exists in this config: probe names
+    # depend on which archetypes are configured, so nothing may be hardcoded here.
+    name = next((q for q in ("Q1_d20", "Q1_d8", "Q1_d64", "Q1_d3", "Q1_d1") if q in probes),
+                next(iter(probes)))
+    sql = build_query(design, probes[name], w1, w2) + ";"
     solo = []
     for _ in range(5):
         t0 = time.time()
@@ -722,6 +731,11 @@ def do_build(a, engines, out):
                 bres["b_arch"] = round((d_b + i_b) / archives)
                 comp = archives * RAW_BYTES_PER_ARCHIVE / COMPRESSION
                 bres["pct_comp"] = round(100 * (d_b + i_b) / comp, 3)
+                # The admission check is computed on payload, but what a deployment actually
+                # spends is stored bytes. The gap is the design's storage amplification, and
+                # it differs by an order of magnitude between designs -- so report both.
+                bres["amp"] = round((d_b + i_b) / archives / max(payload, 1), 1)
+                bres["over_budget"] = bres["pct_comp"] > a.budget_pct
                 # config-change cost: add a 9th filter column, per design semantics
                 t0 = time.time()
                 if design == "inline":
@@ -757,11 +771,12 @@ def do_build(a, engines, out):
                             (err.strip().splitlines() or ["failed"])[-1][:60]
                     bres["mvi"] = mvi
                 manifest["build"][f"{e['label']}/{design}"] = bres
+                flag = "  ** OVER BUDGET **" if bres["over_budget"] else ""
                 line(f"  {design:<12} create {bres['create_s']:>7.1f}s  "
                      f"load {bres['load_s']:>8.1f}s  data {bres['data_mb']:>10,.1f}M  "
                      f"index {bres['index_mb']:>10,.1f}M  {bres['b_arch']:>8,}B/arch  "
-                     f"{bres['pct_comp']:>6.3f}% of compressed  "
-                     f"addcol {bres['addcol_s']}s")
+                     f"{bres['pct_comp']:>6.3f}% of compressed "
+                     f"({bres['amp']}x payload){flag}  addcol {bres['addcol_s']}s")
                 if bres.get("gc_drop_ms") is not None:
                     line(f"  {'':<12} GC: drop partition {bres['gc_drop_ms']} ms vs "
                          f"row-wise delete {bres['gc_del_ms']} ms")
@@ -845,7 +860,7 @@ def do_query(a, engines, manifest, out):
             for design in designs:
                 try:
                     r = interference(e, design, days, wins, probes, seed, sys.stderr)
-                except Exception as exc:
+                except Exception as exc:  # noqa: E722 - keep one failure contained
                     line(f"  {design:<12} ! {str(exc)[:80]}")
                     continue
                 note = "" if r.get("ok") else "  (ingest script reported an error)"
