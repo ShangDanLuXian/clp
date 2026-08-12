@@ -406,12 +406,14 @@ def fmt(rows_out, profile, rows, n_vals, width, payload, needles, batch_n, out):
 
     # Every variant must agree on hit counts. A lower count means the encoding lost data and
     # the filter is silently returning false negatives, which is a correctness bug.
+    lossy = {}
     for label, what in (("rare", "exact"), ("pfx", "prefix")):
         vals = [r for r in rows_out if isinstance(r.get(f"{label}_hits"), int)]
         if not vals:
             continue
         truth = max(r[f"{label}_hits"] for r in vals)
         wrong = [r for r in vals if r[f"{label}_hits"] != truth]
+        lossy[label] = {(r["engine"], r["variant"]) for r in wrong}
         if wrong:
             p("")
             p(f"  *** FALSE NEGATIVES ({what}): expected {truth} matching archives;"
@@ -428,9 +430,14 @@ def fmt(rows_out, profile, rows, n_vals, width, payload, needles, batch_n, out):
         p("")
         p(f"  {what} lookup, relative to text_delim on the same engine (lower is better):")
         for r in rows_out:
-            if isinstance(r.get(f"{label}_ms"), float) and r["engine"] in base:
-                p(f"    {r['engine']:<9}{r['variant']:<16}"
-                  f"{r[f'{label}_ms']/base[r['engine']]:>8.2f}x")
+            if not isinstance(r.get(f"{label}_ms"), float) or r["engine"] not in base:
+                continue
+            ratio = f"{r[f'{label}_ms']/base[r['engine']]:>8.2f}x"
+            # A variant that lost data is not "fast" -- it is answering a smaller question.
+            # Listing its ratio unqualified reads as a win, so say what it actually is.
+            if (r["engine"], r["variant"]) in lossy.get(label, ()):
+                ratio += "   <- INVALID: incomplete results, not a speedup"
+            p(f"    {r['engine']:<9}{r['variant']:<16}{ratio}")
 
 
 def main():
