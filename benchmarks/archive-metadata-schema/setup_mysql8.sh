@@ -50,6 +50,11 @@ innodb_buffer_pool_size=$BUFFER_POOL
 innodb_flush_log_at_trx_commit=2
 local_infile=1
 secure_file_priv=
+# MySQL 8 enables the binary log by default (sync_binlog=1): every commit then pays a binlog
+# fsync, which caps single-row transaction rates at the disk's fsync rate and makes write
+# benchmarks measure that policy instead of the schema. MariaDB ships with binlog off, so
+# disabling it here is the apples-to-apples configuration.
+skip-log-bin
 [mysql]
 socket=$SOCKET
 port=$PORT

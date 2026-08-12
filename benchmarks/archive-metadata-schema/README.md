@@ -111,6 +111,35 @@ The `hits` columns are the correctness check: every variant must report the same
 matching archives. A lower count means the encoding lost data and the filter is silently
 returning false negatives.
 
+## Round 2: inline vs side table at scale (`bench_lc2.py`)
+
+Round 1 eliminated the alternatives (VARCHAR loses data, hashes cannot express wildcards,
+JSON is slow everywhere, MVI cannot serve prefix queries). Round 2 stress-tests the real
+decision -- inline `text_delim` vs the raw-value side table -- under production conditions:
+
+```bash
+python3 bench_lc2.py                          # both profiles, 100K then 1M archives
+python3 bench_lc2.py --scale 100000           # quick pass only
+python3 bench_lc2.py --scale 5000000          # if you have ~60 GB free disk
+```
+
+What it measures, per engine and scale: combined **time-window AND value** queries at
+1h/1d/7d windows (the shape production actually runs); the side table **partitioned daily on
+begin_timestamp vs unpartitioned** (the write-amplification hypothesis -- partition-local
+B-trees keep the hot write set one-day-sized, so any benefit appears only once the
+unpartitioned tree outgrows the buffer pool, i.e. at the 1M+ scales); **denormalized
+timestamp vs join-back** (`side_nots`); table size **before and after OPTIMIZE TABLE**
+(how much of the side table's overhead is recoverable page waste); insert rates at **1 and
+10 archives per transaction**; and **DROP PARTITION vs row-wise DELETE** GC on the side
+table itself.
+
+The header prints each engine's binlog and flush settings and warns if the binary log is on:
+MySQL 8 enables it by default with `sync_binlog=1`, which caps single-transaction write rates
+at the disk's fsync rate and invalidates cross-engine write comparisons. `setup_mysql8.sh`
+now disables it (`skip-log-bin`); if you set MySQL up before this change, add that line under
+`[mysqld]` in `/etc/my8.cnf` and restart. The 1M-archive step loads 125M side rows and takes
+tens of minutes per engine; the toy scales are for validation only.
+
 ### Running both engines on one machine
 
 `apt install mysql-server` **removes MariaDB** — the packages conflict — so install MySQL
