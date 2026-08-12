@@ -44,9 +44,9 @@ MANIFEST = "lc3_manifest.json"
 RAW_BYTES_PER_ARCHIVE = 256 * 1024 * 1024
 COMPRESSION = 50
 
-# (name, tag, width, distinct/archive, pool size) -- shape from the mongodb report:
-# constants, 2-8s, 9-64s, 65-512s, 513-4K per-archive distinct classes.
-COLUMNS = [
+# (name, tag, width, distinct/archive, pool size) -- shape from the mongodb report's
+# per-archive distinct classes: constants, 2-8, 9-64, 65-512, 513-4K.
+ALL_COLUMNS = [
     ("host",     "h1", 12, 1,    1000),
     ("flag1",    "f1", 6,  3,    8),
     ("flag2",    "f2", 6,  3,    8),
@@ -56,7 +56,22 @@ COLUMNS = [
     ("entity2",  "e2", 20, 326,  30000),
     ("session1", "s1", 30, 1800, 500000),
 ]
+# How permissive the index configuration is. Storage is dominated by the highest-distinct
+# column configured -- session1 alone is ~77% of the "full" tier's bytes -- so the tier is a
+# parameter, not a constant: the point is the cost curve, not any single configuration.
+TIERS = {
+    "lean":     ["host", "flag1", "flag2", "module1", "module2"],
+    "standard": ["host", "flag1", "flag2", "module1", "module2", "entity1", "entity2"],
+    "full":     [c[0] for c in ALL_COLUMNS],
+}
+COLUMNS = [c for c in ALL_COLUMNS if c[0] in TIERS["standard"]]
 DESIGNS = ["inline", "side_shared", "side_percol", "inline_json"]
+
+
+def set_tier(tier):
+    global COLUMNS
+    COLUMNS = [c for c in ALL_COLUMNS if c[0] in TIERS[tier]]
+    return COLUMNS
 
 
 def val(tag, width, i):
@@ -66,30 +81,47 @@ def val(tag, width, i):
     return (tag + format(i, f"0{digits}d") + "x" * width)[:width]
 
 
-for _c in COLUMNS:
+for _c in ALL_COLUMNS:
     assert _c[4] <= 10 ** min(6, _c[2] - len(_c[1])), f"pool too large for width: {_c[0]}"
 
 
 def make_probes():
-    """The query matrix. Selectivities span hot (~37%) to rare (~0.1%)."""
+    """The query matrix, restricted to columns the active tier configures as filters.
+    Selectivities span hot (a flag value, ~37% of archives) to rare (a session value)."""
+    active = {c[0] for c in COLUMNS}
     eq = {c[0]: val(c[1], c[2], 7 % c[4]) for c in COLUMNS}
-    eq["entity1"] = val("e1", 20, 500)
-    eq["session1"] = val("s1", 30, 123456)
-    narrow = "e1" + "00001"          # entity1 values 10..19 -> 10 pool values
-    broad = "s1" + "1234"            # session1 values 123400..123499 -> 100 pool values
-    return {
-        "Q1_host":    [("host", "eq", eq["host"])],
-        "Q1_flag":    [("flag1", "eq", eq["flag1"])],
-        "Q1_module":  [("module1", "eq", eq["module1"])],
-        "Q1_entity":  [("entity1", "eq", eq["entity1"])],
-        "Q1_session": [("session1", "eq", eq["session1"])],
+    eq.setdefault("entity1", val("e1", 20, 500))
+    if "entity1" in active:
+        eq["entity1"] = val("e1", 20, 500)
+    if "session1" in active:
+        eq["session1"] = val("s1", 30, 123456)
+    narrow = "e100001"              # entity1 values 10..19 -> 10 pool values
+    broad = "s11234"                # session1 values 123400..123499 -> 100 pool values
+    candidates = {
+        "Q1_host":    [("host", "eq", eq.get("host"))],
+        "Q1_flag":    [("flag1", "eq", eq.get("flag1"))],
+        "Q1_module":  [("module1", "eq", eq.get("module1"))],
+        "Q1_entity":  [("entity1", "eq", eq.get("entity1"))],
+        "Q1_session": [("session1", "eq", eq.get("session1"))],
         "Q2_narrow":  [("entity1", "pfx", narrow)],
         "Q2_broad":   [("session1", "pfx", broad)],
-        "Q3_sel_sel": [("entity1", "eq", eq["entity1"]), ("session1", "eq", eq["session1"])],
-        "Q3_sel_hot": [("entity1", "eq", eq["entity1"]), ("flag1", "eq", eq["flag1"])],
-        "Q3_hot_hot": [("flag1", "eq", eq["flag1"]), ("flag2", "eq", val("f2", 6, 3))],
-        "Q4_hot_pfx": [("flag1", "eq", eq["flag1"]), ("entity1", "pfx", narrow)],
+        "Q3_sel_sel": [("entity1", "eq", eq.get("entity1")),
+                       ("session1", "eq", eq.get("session1"))],
+        "Q3_sel_hot": [("entity1", "eq", eq.get("entity1")),
+                       ("flag1", "eq", eq.get("flag1"))],
+        "Q3_hot_hot": [("flag1", "eq", eq.get("flag1")),
+                       ("flag2", "eq", val("f2", 6, 3))],
+        "Q4_hot_pfx": [("flag1", "eq", eq.get("flag1")), ("entity1", "pfx", narrow)],
     }
+    # A lean tier has no entity/session columns, so those probes simply do not exist.
+    return {q: p for q, p in candidates.items() if all(c in active for c, _, _ in p)}
+
+
+def tier_cost(columns):
+    """Payload bytes and value count per archive, before storage overhead."""
+    rows = sum(c[3] for c in columns)
+    payload = sum(c[3] * (c[2] + 1) for c in columns) + len(columns)
+    return rows, payload
 
 
 def windows(days):
@@ -513,11 +545,19 @@ def do_build(a, engines, out):
     wins = windows(a.days)
     want_gt = archives <= 200_000
     designs = a.design or DESIGNS
-    line(f"archives={archives:,} (rate {a.rate}/s x {a.days}d)  "
-         f"side rows/archive~{sum(c[3] for c in COLUMNS):,}  "
+    rows_per, payload = tier_cost(COLUMNS)
+    comp_arch = RAW_BYTES_PER_ARCHIVE / COMPRESSION
+    line(f"archives={archives:,} (rate {a.rate}/s x {a.days}d)  tier={a.columns}  "
+         f"side rows/archive={rows_per:,}  "
          f"ground truth={'yes' if want_gt else 'no (too large; cross-design check only)'}")
+    line(f"filter payload {payload:,} B/archive = {100*payload/comp_arch:.3f}% of a "
+         f"compressed archive ({comp_arch/1048576:.2f} MB at {COMPRESSION}x); by column:")
+    for c in sorted(COLUMNS, key=lambda x: -x[3] * (x[2] + 1)):
+        b = c[3] * (c[2] + 1)
+        line(f"    {c[0]:<10}{c[3]:>6,} distinct x {c[2]:>3}B = {b:>8,} B "
+             f"({100*b/payload:>5.1f}% of filter payload)")
     manifest = {"created": time.strftime("%Y-%m-%d %H:%M:%S"), "seed": a.seed,
-                "rate": a.rate, "days": a.days, "archives": archives,
+                "rate": a.rate, "days": a.days, "archives": archives, "columns": a.columns,
                 "designs": designs, "engines": [], "gt": None, "build": {}}
     with tempfile.TemporaryDirectory(dir=a.tmpdir) as td:
         line("generating corpus ...")
@@ -716,9 +756,11 @@ def main():
     ap.add_argument("--rate", type=float, default=0.05,
                     help="archives/second of simulated history (default 0.05; full=0.5)")
     ap.add_argument("--days", type=int, default=28)
+    ap.add_argument("--columns", choices=list(TIERS), default="standard",
+                    help="how permissive the index configuration is; storage is dominated "
+                         "by the highest-distinct column included (default: standard)")
     ap.add_argument("--design", action="append", choices=DESIGNS, default=[])
-    ap.add_argument("--query", action="append", default=[],
-                    choices=list(make_probes()))
+    ap.add_argument("--query", action="append", default=[])
     ap.add_argument("--window", action="append", default=[], choices=["1h", "1d", "7d"])
     ap.add_argument("--join-form", choices=["join", "exists"], default="join")
     ap.add_argument("--insert-batch", type=int, default=200)
@@ -729,6 +771,7 @@ def main():
     ap.add_argument("--out", default="")
     ap.add_argument("--tmpdir", default=tempfile.gettempdir())
     a = ap.parse_args()
+    set_tier(a.columns)
 
     engines, failed = detect(a.engine or DEFAULT_ENGINES)
     if not engines:
@@ -760,6 +803,15 @@ def main():
         if not os.path.exists(MANIFEST):
             sys.exit(f"{MANIFEST} not found -- run build first")
         manifest = json.load(open(MANIFEST))
+        # The tier defines which tables exist, so query runs must use the built one.
+        built = manifest.get("columns", "full")
+        if built != a.columns:
+            line(f"  (using tier '{built}' from the manifest, not '{a.columns}')")
+            set_tier(built)
+        bad = [q for q in a.query if q not in make_probes()]
+        if bad:
+            sys.exit(f"query {bad} not available in tier '{built}'; "
+                     f"choose from {list(make_probes())}")
         do_query(a, engines, manifest, out)
     line(f"\nwritten to {outpath}")
     out.close()

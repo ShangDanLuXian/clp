@@ -166,12 +166,26 @@ scope.
 
 ## Round 3: full-shape benchmark at 31 archives/s (`bench3.py`)
 
-The corpus models the mongodb archive-analyzer report: 8 filter columns whose per-archive
-distinct counts follow the measured shape classes (~2,500 side rows per archive, 20x round
-2's single column), arrival-rate timestamps, hourly side-table partitions. Designs under
-test: `inline` (8 delimited TEXT columns), `side_shared` (one side table, column_id in the
-key), `side_percol` (one table per column), `inline_json` (one JSON document per archive,
-plus per-path multi-valued-index attempts on MySQL with failures recorded as results).
+The corpus models the mongodb archive-analyzer report: filter columns whose per-archive
+distinct counts follow the measured shape classes, arrival-rate timestamps, hourly
+side-table partitions. Designs under test: `inline` (delimited TEXT columns), `side_shared`
+(one side table, column_id in the key), `side_percol` (one table per column), `inline_json`
+(one JSON document per archive, plus per-path multi-valued-index attempts on MySQL with
+failures recorded as results).
+
+**Filter storage is dominated by the highest-distinct column configured**, so how permissive
+the index configuration is (`--columns`) is a parameter, not a constant. Per archive, against
+a 5.12 MB compressed archive (256 MB raw at 50x):
+
+| tier | columns | values/archive | filter payload | % of compressed |
+|---|---|---:|---:|---:|
+| `lean` | host, 2 flags, 2 modules (<=20 distinct) | 47 | 580 B | 0.011% |
+| `standard` (default) | + 2 entity columns (326 each) | 699 | 14.3 KB | 0.266% |
+| `full` | + a session column (1,800 distinct) | 2,499 | 70.1 KB | 1.305% |
+
+One session-shaped column is ~77% of the `full` tier's bytes. Run more than one tier to get
+the cost curve; the build prints the per-column breakdown, and the manifest records the tier
+so query runs match what was built (probes referencing absent columns are dropped).
 
 Three entry points, so the database persists and query experiments can iterate on it:
 
