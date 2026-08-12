@@ -133,6 +133,13 @@ timestamp vs join-back** (`side_nots`); table size **before and after OPTIMIZE T
 10 archives per transaction**; and **DROP PARTITION vs row-wise DELETE** GC on the side
 table itself.
 
+Index-configuration changes apply only to archives sealed after the change; existing archives
+are never backfilled. So the per-archive insert rates are the *only* production write numbers,
+and the bulk load exists purely to construct a realistic-size table for the query and GC
+measurements. A query window that starts before a filter column's config point cannot use that
+filter for the older span -- that fallback is planner behaviour, outside this benchmark's
+scope.
+
 The header prints each engine's binlog and flush settings and warns if the binary log is on:
 MySQL 8 enables it by default with `sync_binlog=1`, which caps single-transaction write rates
 at the disk's fsync rate and invalidates cross-engine write comparisons. `setup_mysql8.sh`

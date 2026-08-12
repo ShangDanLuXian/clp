@@ -23,6 +23,10 @@ Variants:
 
 Write rates are one transaction per archive (ins1/s) and ten per transaction (ins10/s); for
 side variants each transaction also writes the base archives row, so rates are end-to-end.
+These are THE production write numbers: index-configuration changes apply only to archives
+sealed after the change -- existing archives are never backfilled -- so the filter structure
+only ever grows by per-archive inserts. The bulk load (bulk_s) is benchmark scaffolding to
+construct a realistic-size table quickly; no production operation corresponds to it.
 The header prints each engine's binlog/flush settings: with log_bin=ON every commit pays a
 binlog fsync (MySQL 8 default; MariaDB default is OFF) and write rates measure that policy,
 not the schema. setup_mysql8.sh disables it; the header warns if it is on.
@@ -300,7 +304,6 @@ def bench_variant(engine, variant, paths, needles, batch_vals, archives, n_vals,
         r["status"] = "LOAD FAILED"
         r["note"] = (err.strip().splitlines()[-1] if err.strip() else "error")[:70]
         return r
-    r["bulk_arch_s"] = round(archives / r["bulk_s"], 1) if r["bulk_s"] else None
     r["store_mb"], r["b_arch"] = table_mb(engine, tbl, archives)
     if do_optimize and variant in ("side_unpart", "side_part"):
         t0 = time.time()
@@ -362,14 +365,14 @@ def fmt(rows_out, profile, archives, n_vals, needles, out):
     p("  BUILD AND WRITE")
     p("  " + "-" * 100)
     p(f"  {'engine':<9}{'variant':<13}{'store_MB':>10}{'B/arch':>8}{'opt_s':>8}"
-      f"{'opt_MB':>9}{'bulk_s':>8}{'bulk_a/s':>10}{'ins1/s':>9}{'ins10/s':>9}"
-      f"  {'status':<10}")
+      f"{'opt_MB':>9}{'bulk_s':>8}{'ins1/s':>9}{'ins10/s':>9}  {'status':<10}")
     p("  " + "-" * 100)
     for r in rows_out:
         p(f"  {r['engine']:<9}{r['variant']:<13}{num(r,'store_mb'):>10}{num(r,'b_arch'):>8}"
           f"{num(r,'opt_s'):>8}{num(r,'opt_mb'):>9}{num(r,'bulk_s'):>8}"
-          f"{num(r,'bulk_arch_s'):>10}{num(r,'ins1_s'):>9}{num(r,'ins10_s'):>9}"
-          f"  {r['status']:<10}")
+          f"{num(r,'ins1_s'):>9}{num(r,'ins10_s'):>9}  {r['status']:<10}")
+    p("  (ins1/s and ins10/s are the production write path -- configs are never backfilled,")
+    p("   so the filter grows only by per-archive inserts; bulk_s is benchmark scaffolding.)")
     p("")
     p("  QUERY: time-window AND value predicate (warm ms / matching archives)")
     p("  " + "-" * 104)
