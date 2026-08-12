@@ -100,16 +100,22 @@ def detect(specs):
                                  "DROP TABLE __probe;", DB)
         e["error"] = err.strip().splitlines()[-1] if rc != 0 else None
         if not e["error"]:
+            # Redo capacity is the usual cause of a stalled bulk insert: when it fills,
+            # InnoDB throttles user threads until the checkpointer catches up. MySQL 8
+            # defaults to 100M, which is far too small for a 125M-row random-key load.
+            redo = ("@@innodb_redo_log_capacity" if flavour == "mysql"
+                    else "@@innodb_log_file_size")
             _, out, _ = sh(cmd, "SELECT @@log_bin, @@sync_binlog, "
                                 "@@innodb_flush_log_at_trx_commit, "
-                                "ROUND(@@innodb_buffer_pool_size/1048576);")
+                                f"ROUND(@@innodb_buffer_pool_size/1048576), "
+                                f"ROUND({redo}/1048576);")
             try:
-                lb, sb, fl, bp = out.split()
+                lb, sb, fl, bp, rd = out.split()
                 e["cfg"] = (f"log_bin={'ON' if lb == '1' else 'OFF'} sync_binlog={sb} "
-                            f"flush_log_at_trx_commit={fl} buffer_pool={bp}M")
-                e["binlog"] = lb == "1"
+                            f"flush_log_at_trx_commit={fl} buffer_pool={bp}M redo={rd}M")
+                e["binlog"], e["redo_mb"] = lb == "1", int(rd)
             except ValueError:
-                e["cfg"], e["binlog"] = "(settings unavailable)", False
+                e["cfg"], e["binlog"], e["redo_mb"] = "(settings unavailable)", False, None
         found.append(e)
     return found, failed
 
@@ -357,7 +363,8 @@ def fmt(rows_out, profile, archives, n_vals, needles, out):
         return "-"
 
     p("")
-    p(f"PROFILE {profile} @ {archives:,} archives ({n_vals} values/archive; "
+    eng = rows_out[0]["engine"] if rows_out else "?"
+    p(f"PROFILE {profile} @ {archives:,} archives on {eng} ({n_vals} values/archive; "
       f"side rows = {archives * n_vals:,})")
     p(f"  probes: exact='{needles['rare']}'  prefix='{needles['prefix']}*'  "
       f"windows anchored at day 180 of 366")
@@ -461,6 +468,12 @@ def main():
                  f"fsync, so write rates")
             line(f"   {'':<9} measure that policy, not the schema. Add skip-log-bin "
                  f"(see setup_mysql8.sh) and restart.")
+        if e.get("redo_mb") and e["redo_mb"] < 1024:
+            line(f"   {'':<9} WARNING: redo capacity is only {e['redo_mb']}M. Large "
+                 f"random-key loads stall waiting")
+            line(f"   {'':<9} for checkpointing. Set innodb_redo_log_capacity=4G "
+                 f"(MySQL) / innodb_log_file_size=4G")
+            line(f"   {'':<9} (MariaDB) and restart, or this run may take hours.")
     missing = {"mariadb", "mysql"} - {e["flavour"] for e in engines}
     for m in sorted(missing):
         line(f"   MISSING: no {m} server reached; results cover only "
@@ -481,7 +494,6 @@ def main():
                 os.chmod(td, 0o755)
                 for p in paths.values():
                     os.chmod(p, 0o644)
-                results = []
                 for e in engines:
                     # Start from a clean slate so nothing from an earlier (possibly aborted)
                     # run can contaminate sizes or timings.
@@ -491,13 +503,19 @@ def main():
                     sh(e["cmd"], f"LOAD DATA LOCAL INFILE '{paths['base']}' "
                                  f"INTO TABLE t_base (id,begin_timestamp);",
                        DB, local_infile=True)
+                    results = []
                     for v in VARIANTS:
                         sys.stderr.write(f"  [{prof} @ {archives:,}] {e['label']}/{v} ...\n")
+                        t_v = time.time()
                         results.append(bench_variant(
                             e, v, paths, needles, batch_vals, archives, n_vals,
                             not a.skip_optimize, sys.stderr))
+                        sys.stderr.write(f"      ... {time.time() - t_v:,.0f}s\n")
                     sh(e["cmd"], "DROP TABLE IF EXISTS t_base;", DB)
-                fmt(results, prof, archives, n_vals, needles, out)
+                    # Emit and flush per engine: a slow or hung engine must not cost you
+                    # the results another engine already finished.
+                    fmt(results, prof, archives, n_vals, needles, out)
+                    out.flush()
     for e in engines:
         sh(e["cmd"], f"DROP DATABASE IF EXISTS {DB};")
     line("")

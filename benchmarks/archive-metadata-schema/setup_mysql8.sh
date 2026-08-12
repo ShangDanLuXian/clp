@@ -55,6 +55,10 @@ secure_file_priv=
 # benchmarks measure that policy instead of the schema. MariaDB ships with binlog off, so
 # disabling it here is the apples-to-apples configuration.
 skip-log-bin
+# Default redo capacity is 100M. A large random-key load fills it faster than the checkpointer
+# can reclaim it, at which point InnoDB throttles the inserting thread and throughput
+# collapses -- the load appears hung. 4G keeps the benchmark measuring the schema.
+innodb_redo_log_capacity=4G
 [mysql]
 socket=$SOCKET
 port=$PORT
