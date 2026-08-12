@@ -483,17 +483,22 @@ def main():
     line(" " + time.strftime("%Y-%m-%d %H:%M:%S"))
     for e in engines:
         line(f"   {e['label']:<9} {e['version']}")
-    # Say why an engine is absent. Silence here reads as "MySQL has no results" rather than
-    # "MySQL was never reached", which is the more useful thing to know.
-    for cmdline, why in unreachable:
-        if not why.startswith("duplicate"):
-            line(f"   {'(none)':<9} not reached via `{cmdline}`: {why}")
+    # Say why an engine is absent -- silence reads as "MySQL had no results" rather than
+    # "MySQL was never reached". Only worth printing when a flavour is actually missing:
+    # a failed probe against a server already detected above is noise, not a problem.
     missing = {"mariadb", "mysql"} - {e["flavour"] for e in engines}
     for m in sorted(missing):
-        line(f"   NOTE: no {m} server was reached, so these results cover only "
+        line(f"   MISSING: no {m} server was reached, so these results cover only "
              f"{'/'.join(sorted(e['flavour'] for e in engines))}.")
-        line("         The two engines diverge sharply on this workload -- see README for")
-        line("         running both side by side, or pass --engine to point at yours.")
+        line("            The two engines diverge sharply on this workload; run")
+        line("            `sudo ./setup_mysql8.sh` to add MySQL 8 alongside, or pass --engine.")
+    if missing:
+        line("   other candidates probed (each may simply be a duplicate route to the"
+             " engine above):")
+        for cmdline, why in unreachable:
+            if not why.startswith("duplicate"):
+                line(f"     {cmdline}")
+                line(f"       -> {why}")
     line("=" * 104)
 
     for prof in profiles:
