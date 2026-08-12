@@ -164,6 +164,35 @@ measurements. A query window that starts before a filter column's config point c
 filter for the older span -- that fallback is planner behaviour, outside this benchmark's
 scope.
 
+## Round 3: full-shape benchmark at 31 archives/s (`bench3.py`)
+
+The corpus models the mongodb archive-analyzer report: 8 filter columns whose per-archive
+distinct counts follow the measured shape classes (~2,500 side rows per archive, 20x round
+2's single column), arrival-rate timestamps, hourly side-table partitions. Designs under
+test: `inline` (8 delimited TEXT columns), `side_shared` (one side table, column_id in the
+key), `side_percol` (one table per column), `inline_json` (one JSON document per archive,
+plus per-path multi-valued-index attempts on MySQL with failures recorded as results).
+
+Three entry points, so the database persists and query experiments can iterate on it:
+
+```bash
+./bench3_setup.sh                   # clean + tune servers + BUILD (default 0.05 arch/s x 28d)
+./bench3_setup.sh --rate 0.5        # full scale: ~3B side rows, hours of build, ~500 GB disk
+./bench3_query.sh                   # full query/write/interference matrix on the existing db
+./bench3_query.sh --query Q3_sel_hot --window 7d --design side_percol
+./bench3_all.sh                     # both
+```
+
+The build writes `lc3_manifest.json` (scale, seed, probe set, per-probe ground-truth hit
+counts when the corpus is small enough to compute them) and keeps database `lc3`. Query runs
+check every hit count against ground truth and across designs. Metrics per design: data/index
+size and % of compressed data (256 MB raw/archive at 50x), build rate, add-a-column DDL cost,
+GC drop-vs-delete, insert rate at 1/10 archives per txn and 4 connections, physical bytes
+written per archive, cold+warm query ms / hits / rows scanned / pruning power for 11 queries
+(1-2 predicates, equality and prefix wildcard, hot to rare) x 3 windows, and query latency
+while the ingest path runs concurrently. For true cold numbers, restart the server and run
+`./bench3_query.sh` immediately -- run1_ms of that pass is a cold measurement.
+
 The header prints each engine's binlog and flush settings and warns if the binary log is on:
 MySQL 8 enables it by default with `sync_binlog=1`, which caps single-transaction write rates
 at the disk's fsync rate and invalidates cross-engine write comparisons. `setup_mysql8.sh`
