@@ -294,6 +294,13 @@ def table_mb(engine, tbl, rows):
 
 def bench_variant(engine, variant, paths, needles, batch_vals, archives, n_vals,
                   do_optimize, log):
+
+    def phase(name, t0):
+        """Reports how long each step took, so a slow run shows where the time went."""
+        log.write(f"        {name:<12}{time.time() - t0:>8.1f}s\n")
+        log.flush()
+        return time.time()
+
     tbl = "t_inline" if variant == "inline" else f"t_{variant}"
     r = {"engine": engine["label"], "variant": variant, "status": "ok"}
     sh(engine["cmd"], f"DROP TABLE IF EXISTS {tbl}; " + DDL[variant].format(t=tbl) + ";", DB)
@@ -310,12 +317,14 @@ def bench_variant(engine, variant, paths, needles, batch_vals, archives, n_vals,
         r["status"] = "LOAD FAILED"
         r["note"] = (err.strip().splitlines()[-1] if err.strip() else "error")[:70]
         return r
+    tp = phase("load", t0)
     r["store_mb"], r["b_arch"] = table_mb(engine, tbl, archives)
     if do_optimize and variant in ("side_unpart", "side_part"):
         t0 = time.time()
         sh(engine["cmd"], f"OPTIMIZE TABLE {tbl};", DB)
         r["opt_s"] = round(time.time() - t0, 1)
         r["opt_mb"], _ = table_mb(engine, tbl, archives)
+        tp = phase("optimize", tp)
     for kind in ("exact", "prefix"):
         lit = needles["rare" if kind == "exact" else "prefix"]
         for wname, w1, w2 in WINDOWS:
@@ -328,11 +337,13 @@ def bench_variant(engine, variant, paths, needles, batch_vals, archives, n_vals,
                     r[f"{kind}_parts"] = partitions_touched(engine, sql)
             if err:
                 r["status"], r["note"] = "QUERY FAILED", err[:70]
+    tp = phase("queries", tp)
     vidx = VARIANTS.index(variant)
     base_id = archives + vidx * 2 * len(batch_vals)
     r["ins1_s"] = insert_rate(engine, variant, tbl, batch_vals, base_id, 1)
     r["ins10_s"] = insert_rate(engine, variant, tbl, batch_vals,
                                base_id + len(batch_vals), 10)
+    tp = phase("inserts", tp)
     # GC comparison: remove one mid-year day from the side table both ways.
     if variant == "side_part":
         t0 = time.time()
@@ -345,6 +356,8 @@ def bench_variant(engine, variant, paths, needles, batch_vals, archives, n_vals,
                       f"DELETE FROM {tbl} WHERE begin_timestamp >= {w1} "
                       f"AND begin_timestamp < {w2};", DB)
         r["gc_ms"] = round((time.time() - t0) * 1000, 1) if rc == 0 else None
+    if variant in ("side_part", "side_unpart"):
+        phase("gc", tp)
     sh(engine["cmd"], f"DROP TABLE IF EXISTS {tbl};", DB)
     return r
 

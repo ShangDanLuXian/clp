@@ -118,10 +118,34 @@ JSON is slow everywhere, MVI cannot serve prefix queries). Round 2 stress-tests 
 decision -- inline `text_delim` vs the raw-value side table -- under production conditions:
 
 ```bash
+./run_all.sh                     # clean + verify setup + tune + run, in one command
+./run_all.sh --with-mysql        # same, plus install/configure MySQL 8 for both engines
+./run_all.sh --scale 100000      # fast pass; extra args go through to bench_lc2.py
+./run_all.sh --clean-only        # just reclaim space from a previous run
+```
+
+`run_all.sh` is the entry point: it installs and starts a server if needed, raises the redo
+log (see below), drops `lcbench` on every engine, removes staging dirs orphaned by aborted
+runs, then runs the benchmark into a timestamped results file with a matching progress log.
+Run it as your normal user -- it sudo's only for the privileged steps.
+
+**Redo log capacity is the setting that decides whether this run takes minutes or hours.**
+A 125M-row random-key load fills the default log (96M on MariaDB, 100M on MySQL 8) faster
+than the checkpointer can reclaim it, at which point InnoDB throttles the writing thread and
+the load appears hung. `run_all.sh` raises it to 4G automatically; note that this *allocates*
+4 GB of disk for the log files, so budget for it on a small volume. The benchmark header
+prints the setting and warns when it is below 1G.
+
+To drive the benchmark directly instead:
+
+```bash
 python3 bench_lc2.py                          # both profiles, 100K then 1M archives
 python3 bench_lc2.py --scale 100000           # quick pass only
 python3 bench_lc2.py --scale 5000000          # if you have ~60 GB free disk
 ```
+
+Progress goes to stderr with a per-phase breakdown (load / optimize / queries / inserts / gc)
+per variant, so a long run shows where the time is actually going.
 
 What it measures, per engine and scale: combined **time-window AND value** queries at
 1h/1d/7d windows (the shape production actually runs); the side table **partitioned daily on
