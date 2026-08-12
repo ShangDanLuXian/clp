@@ -44,33 +44,68 @@ MANIFEST = "lc3_manifest.json"
 RAW_BYTES_PER_ARCHIVE = 256 * 1024 * 1024
 COMPRESSION = 50
 
-# (name, tag, width, distinct/archive, pool size) -- shape from the mongodb report's
-# per-archive distinct classes: constants, 2-8, 9-64, 65-512, 513-4K.
-ALL_COLUMNS = [
-    ("host",     "h1", 12, 1,    1000),
-    ("flag1",    "f1", 6,  3,    8),
-    ("flag2",    "f2", 6,  3,    8),
-    ("module1",  "m1", 12, 20,   200),
-    ("module2",  "m2", 12, 20,   200),
-    ("entity1",  "e1", 20, 326,  30000),
-    ("entity2",  "e2", 20, 326,  30000),
-    ("session1", "s1", 30, 1800, 500000),
-]
-# How permissive the index configuration is. Storage is dominated by the highest-distinct
-# column configured -- session1 alone is ~77% of the "full" tier's bytes -- so the tier is a
-# parameter, not a constant: the point is the cost curve, not any single configuration.
-TIERS = {
-    "lean":     ["host", "flag1", "flag2", "module1", "module2"],
-    "standard": ["host", "flag1", "flag2", "module1", "module2", "entity1", "entity2"],
-    "full":     [c[0] for c in ALL_COLUMNS],
+# Filter columns are admitted under a storage budget: the service accepts a user's proposed
+# index configuration only if the total filter payload stays under BUDGET_PCT of the
+# compressed archive. That policy, not the schema, is what bounds size -- and it excludes by
+# construction the high-distinct columns (326/1,800 per archive) that dominated earlier runs.
+BUDGET_PCT = 0.1
+MAX_COLUMNS = 64                      # schema limit (64 TEXT columns fit the row-size cap)
+
+# archetype -> (tag letter, value width, distinct/archive, pool size, real-world role)
+ARCHETYPES = {
+    "d1":  ("h", 12, 1,  1000, "host / pod / region"),
+    "d3":  ("e", 8,  3,  12,   "env / tier"),
+    "d8":  ("s", 10, 8,  40,   "severity / method"),
+    "d20": ("m", 14, 20, 300,  "module / service"),
+    "d64": ("p", 18, 64, 5000, "endpoint / error code"),
 }
-COLUMNS = [c for c in ALL_COLUMNS if c[0] in TIERS["standard"]]
+# Realistic index configurations, by column count. All are budget-admissible; the point of
+# the sweep is what changes with the NUMBER of configured columns, since size is capped.
+CONFIGS = {
+    "c8":   {"d1": 3,  "d3": 2,  "d8": 2,  "d20": 1},
+    "c32":  {"d1": 15, "d3": 9,  "d8": 5,  "d20": 3},
+    "c64":  {"d1": 30, "d3": 18, "d8": 10, "d20": 5, "d64": 1},
+    "wide": {"d20": 17},              # few columns, deliberately near the ceiling
+    "over": {"d20": 10, "d64": 5},    # deliberately over budget: exercises rejection
+}
+COLUMNS = []
 DESIGNS = ["inline", "side_shared", "side_percol", "inline_json"]
 
 
-def set_tier(tier):
+def build_columns(config):
+    """Expands a config spec into (name, tag, width, distinct, pool) column tuples."""
+    cols = []
+    for arch, n in CONFIGS[config].items():
+        letter, width, distinct, pool, _ = ARCHETYPES[arch]
+        for i in range(n):
+            tag = f"{letter}{len(cols):02d}"      # distinct value universe per column
+            cols.append((f"{arch}_{i:02d}", tag, width, distinct, pool))
+    return cols
+
+
+def config_cost(columns):
+    """(values/archive, payload bytes/archive, % of a compressed archive)."""
+    rows = sum(c[3] for c in columns)
+    payload = sum(c[3] * (c[2] + 1) for c in columns) + len(columns)
+    comp = RAW_BYTES_PER_ARCHIVE / COMPRESSION
+    return rows, payload, 100.0 * payload / comp
+
+
+def admit(columns, budget_pct=BUDGET_PCT):
+    """The admission check the service would run on a user's proposed configuration."""
+    rows, payload, pct = config_cost(columns)
+    reasons = []
+    if len(columns) > MAX_COLUMNS:
+        reasons.append(f"{len(columns)} columns exceeds the {MAX_COLUMNS}-column schema limit")
+    if pct > budget_pct:
+        reasons.append(f"{pct:.4f}% of compressed exceeds the {budget_pct}% budget "
+                       f"({payload:,} B > {int(budget_pct / 100 * RAW_BYTES_PER_ARCHIVE / COMPRESSION):,} B)")
+    return (not reasons), reasons
+
+
+def set_config(config):
     global COLUMNS
-    COLUMNS = [c for c in ALL_COLUMNS if c[0] in TIERS[tier]]
+    COLUMNS = build_columns(config)
     return COLUMNS
 
 
@@ -81,47 +116,100 @@ def val(tag, width, i):
     return (tag + format(i, f"0{digits}d") + "x" * width)[:width]
 
 
-for _c in ALL_COLUMNS:
-    assert _c[4] <= 10 ** min(6, _c[2] - len(_c[1])), f"pool too large for width: {_c[0]}"
+def _check_archetypes():
+    for name, (letter, width, distinct, pool, _) in ARCHETYPES.items():
+        digits = min(6, width - 3)                       # tag is letter + 2 ordinal digits
+        assert pool <= 10 ** digits, f"{name}: pool {pool} too large for width {width}"
+        assert distinct <= pool, f"{name}: distinct {distinct} exceeds pool {pool}"
+
+
+_check_archetypes()
+
+
+def plan_text(config, budget_pct, days, gran, designs):
+    """The admission decision plus what the configuration implies, before anything is built."""
+    cols = build_columns(config)
+    rows, payload, pct = config_cost(cols)
+    comp = RAW_BYTES_PER_ARCHIVE / COMPRESSION
+    cap = int(budget_pct / 100 * comp)
+    ok, reasons = admit(cols, budget_pct)
+    out = [f"CONFIG '{config}': {len(cols)} columns, {rows:,} values/archive",
+           f"  budget {budget_pct}% of a {comp/1048576:.2f} MB compressed archive "
+           f"= {cap:,} B/archive",
+           f"  proposed {payload:,} B/archive = {pct:.4f}%  -> "
+           f"{'ADMITTED' if ok else 'REJECTED'}"]
+    for r in reasons:
+        out.append(f"     ! {r}")
+    out.append(f"  {'archetype':<12}{'n':>4}{'distinct':>10}{'width':>7}"
+               f"{'B/archive':>12}{'% of budget':>13}   role")
+    by_arch = {}
+    for c in cols:
+        by_arch.setdefault(c[0].split("_")[0], []).append(c)
+    for arch, cs in sorted(by_arch.items(), key=lambda kv: -sum(c[3] * (c[2] + 1)
+                                                               for c in kv[1])):
+        b = sum(c[3] * (c[2] + 1) for c in cs)
+        d, w = cs[0][3], cs[0][2]
+        out.append(f"  {arch:<12}{len(cs):>4}{d:>10,}{w:>7}{b:>12,}{100*b/cap:>12.1f}%"
+                   f"   {ARCHETYPES[arch][4]}")
+    for design in designs:
+        set_config(config)
+        total, per = partition_files(design, days, gran)
+        warn = ""
+        if per > 8192:
+            warn = "  ! over the 8,192-partitions-per-table engine limit"
+        elif total > 20000:
+            warn = "  ! likely over the process open-file limit"
+        if design.startswith("side"):
+            out.append(f"  partitions ({gran}) {design:<12}{total:>8,} total "
+                       f"({per:,}/table){warn}")
+    return "\n".join(out)
+
+
+def first_of(arch):
+    """First configured column of an archetype, or None if the config has none."""
+    return next((c for c in COLUMNS if c[0].startswith(arch + "_")), None)
 
 
 def make_probes():
-    """The query matrix, restricted to columns the active tier configures as filters.
-    Selectivities span hot (a flag value, ~37% of archives) to rare (a session value)."""
-    active = {c[0] for c in COLUMNS}
-    eq = {c[0]: val(c[1], c[2], 7 % c[4]) for c in COLUMNS}
-    eq.setdefault("entity1", val("e1", 20, 500))
-    if "entity1" in active:
-        eq["entity1"] = val("e1", 20, 500)
-    if "session1" in active:
-        eq["session1"] = val("s1", 30, 123456)
-    narrow = "e100001"              # entity1 values 10..19 -> 10 pool values
-    broad = "s11234"                # session1 values 123400..123499 -> 100 pool values
+    """The query matrix, built from whichever archetypes the active config contains.
+
+    Selectivity is a property of the archetype: an archive holds `distinct` of the column's
+    `pool` values, so an equality probe matches ~distinct/pool of archives -- 0.1% for a
+    host-like column up to 25% for an env-like one. That spread is the point.
+    """
+    def eq(arch):
+        c = first_of(arch)
+        return None if c is None else (c[0], "eq", val(c[1], c[2], 7 % c[4]))
+
+    def pfx(arch, keep_digits=4):
+        c = first_of(arch)
+        if c is None:
+            return None
+        # A prefix of the full value: matches every pool value sharing those leading digits.
+        digits = min(6, c[2] - len(c[1]))
+        return (c[0], "pfx", c[1] + format(7 % c[4], f"0{digits}d")[:keep_digits])
+
+    def second(arch):
+        cs = [c for c in COLUMNS if c[0].startswith(arch + "_")]
+        if len(cs) < 2:
+            return None
+        c = cs[1]
+        return (c[0], "eq", val(c[1], c[2], 7 % c[4]))
+
     candidates = {
-        "Q1_host":    [("host", "eq", eq.get("host"))],
-        "Q1_flag":    [("flag1", "eq", eq.get("flag1"))],
-        "Q1_module":  [("module1", "eq", eq.get("module1"))],
-        "Q1_entity":  [("entity1", "eq", eq.get("entity1"))],
-        "Q1_session": [("session1", "eq", eq.get("session1"))],
-        "Q2_narrow":  [("entity1", "pfx", narrow)],
-        "Q2_broad":   [("session1", "pfx", broad)],
-        "Q3_sel_sel": [("entity1", "eq", eq.get("entity1")),
-                       ("session1", "eq", eq.get("session1"))],
-        "Q3_sel_hot": [("entity1", "eq", eq.get("entity1")),
-                       ("flag1", "eq", eq.get("flag1"))],
-        "Q3_hot_hot": [("flag1", "eq", eq.get("flag1")),
-                       ("flag2", "eq", val("f2", 6, 3))],
-        "Q4_hot_pfx": [("flag1", "eq", eq.get("flag1")), ("entity1", "pfx", narrow)],
+        "Q1_d1":        [eq("d1")],                 # ~0.1% of archives  (best filter)
+        "Q1_d3":        [eq("d3")],                 # ~25%               (weakest)
+        "Q1_d8":        [eq("d8")],                 # ~20%
+        "Q1_d20":       [eq("d20")],                # ~6.7%
+        "Q1_d64":       [eq("d64")],                # ~1.3%
+        "Q2_pfx_d20":   [pfx("d20")],
+        "Q2_pfx_d64":   [pfx("d64", 3)],
+        "Q3_sel_sel":   [eq("d1"), eq("d20")],
+        "Q3_sel_hot":   [eq("d20"), eq("d3")],
+        "Q3_hot_hot":   [eq("d3"), second("d3")],
+        "Q4_hot_pfx":   [eq("d3"), pfx("d20")],
     }
-    # A lean tier has no entity/session columns, so those probes simply do not exist.
-    return {q: p for q, p in candidates.items() if all(c in active for c, _, _ in p)}
-
-
-def tier_cost(columns):
-    """Payload bytes and value count per archive, before storage overhead."""
-    rows = sum(c[3] for c in columns)
-    payload = sum(c[3] * (c[2] + 1) for c in columns) + len(columns)
-    return rows, payload
+    return {q: p for q, p in candidates.items() if all(x is not None for x in p)}
 
 
 def windows(days):
@@ -225,7 +313,23 @@ def daily_parts(days):
     return "PARTITION BY RANGE (begin_timestamp) (" + ",".join(parts) + ")"
 
 
-def ddl(design, days):
+def side_parts(days, gran):
+    return hourly_parts(days) if gran == "hourly" else daily_parts(days)
+
+
+def partition_files(design, days, gran):
+    """Partitions across the whole design. side_percol multiplies by column count, which is
+    what makes hourly granularity untenable at high column counts (8,192/table engine cap,
+    and one file per partition against the process open-file limit)."""
+    per = days * 24 + 2 if gran == "hourly" else days + 2
+    if design == "side_percol":
+        return per * len(COLUMNS), per
+    if design == "side_shared":
+        return per, per
+    return days + 2, days + 2
+
+
+def ddl(design, days, gran="hourly"):
     side_cols = ("value VARCHAR(64) NOT NULL, begin_timestamp BIGINT NOT NULL, "
                  "archive_id INT UNSIGNED NOT NULL")
     if design == "inline":
@@ -243,10 +347,10 @@ def ddl(design, days):
         return {"t_side": f"CREATE TABLE t_side (column_id TINYINT UNSIGNED NOT NULL, "
                           f"{side_cols}, PRIMARY KEY (column_id, value, begin_timestamp, "
                           f"archive_id)) ENGINE=InnoDB DEFAULT CHARSET=ascii "
-                          + hourly_parts(days)}
+                          + side_parts(days, gran)}
     return {f"t_lc_{c[0]}": f"CREATE TABLE t_lc_{c[0]} ({side_cols}, PRIMARY KEY (value, "
                             f"begin_timestamp, archive_id)) ENGINE=InnoDB "
-                            f"DEFAULT CHARSET=ascii " + hourly_parts(days)
+                            f"DEFAULT CHARSET=ascii " + side_parts(days, gran)
             for c in COLUMNS}
 
 
@@ -545,19 +649,18 @@ def do_build(a, engines, out):
     wins = windows(a.days)
     want_gt = archives <= 200_000
     designs = a.design or DESIGNS
-    rows_per, payload = tier_cost(COLUMNS)
-    comp_arch = RAW_BYTES_PER_ARCHIVE / COMPRESSION
-    line(f"archives={archives:,} (rate {a.rate}/s x {a.days}d)  tier={a.columns}  "
-         f"side rows/archive={rows_per:,}  "
+    line(plan_text(a.config, a.budget_pct, a.days, a.partition, designs))
+    ok, reasons = admit(COLUMNS, a.budget_pct)
+    if not ok:
+        sys.exit("configuration REJECTED by the admission policy:\n  - "
+                 + "\n  - ".join(reasons))
+    rows_per, payload, pct = config_cost(COLUMNS)
+    line(f"archives={archives:,} (rate {a.rate}/s x {a.days}d)  "
          f"ground truth={'yes' if want_gt else 'no (too large; cross-design check only)'}")
-    line(f"filter payload {payload:,} B/archive = {100*payload/comp_arch:.3f}% of a "
-         f"compressed archive ({comp_arch/1048576:.2f} MB at {COMPRESSION}x); by column:")
-    for c in sorted(COLUMNS, key=lambda x: -x[3] * (x[2] + 1)):
-        b = c[3] * (c[2] + 1)
-        line(f"    {c[0]:<10}{c[3]:>6,} distinct x {c[2]:>3}B = {b:>8,} B "
-             f"({100*b/payload:>5.1f}% of filter payload)")
     manifest = {"created": time.strftime("%Y-%m-%d %H:%M:%S"), "seed": a.seed,
-                "rate": a.rate, "days": a.days, "archives": archives, "columns": a.columns,
+                "rate": a.rate, "days": a.days, "archives": archives, "config": a.config,
+                "partition": a.partition, "budget_pct": a.budget_pct,
+                "columns": len(COLUMNS), "payload_b": payload, "payload_pct": pct,
                 "designs": designs, "engines": [], "gt": None, "build": {}}
     with tempfile.TemporaryDirectory(dir=a.tmpdir) as td:
         line("generating corpus ...")
@@ -583,7 +686,7 @@ def do_build(a, engines, out):
             for design in designs:
                 bres = {"engine": e["label"], "design": design}
                 t0 = time.time()
-                for tbl, stmt in ddl(design, a.days).items():
+                for tbl, stmt in ddl(design, a.days, a.partition).items():
                     rc, _, err = sh(e["cmd"], stmt + ";", DB)
                     if rc != 0:
                         line(f"  ! {design}/{tbl}: "
@@ -610,7 +713,7 @@ def do_build(a, engines, out):
                            DB, local_infile=True)
                 bres["load_s"] = round(time.time() - t0, 1)
                 d_b = i_b = 0
-                for tbl in ddl(design, a.days):
+                for tbl in ddl(design, a.days, a.partition):
                     d, i = table_size(e, tbl)
                     d_b += d
                     i_b += i
@@ -628,18 +731,21 @@ def do_build(a, engines, out):
                                  "begin_timestamp BIGINT NOT NULL, archive_id INT UNSIGNED "
                                  "NOT NULL, PRIMARY KEY (value, begin_timestamp, archive_id))"
                                  " ENGINE=InnoDB DEFAULT CHARSET=ascii "
-                                 + hourly_parts(a.days) + ";", DB)
+                                 + side_parts(a.days, a.partition) + ";", DB)
                 bres["addcol_s"] = round(time.time() - t0, 2)
                 # GC: one early-morning hour, far from the query windows
-                gc_tbl = {"side_shared": "t_side", "side_percol": "t_lc_entity1"}.get(design)
+                gc_first = f"t_lc_{COLUMNS[0][0]}" if COLUMNS else None
+                gc_tbl = {"side_shared": "t_side", "side_percol": gc_first}.get(design)
+                gc_part = "p_h0027" if a.partition == "hourly" else "p_d002"
                 if gc_tbl:
                     t0 = time.time()
-                    sh(e["cmd"], f"ALTER TABLE {gc_tbl} DROP PARTITION p_h0027;", DB)
+                    sh(e["cmd"], f"ALTER TABLE {gc_tbl} DROP PARTITION {gc_part};", DB)
                     bres["gc_drop_ms"] = round((time.time() - t0) * 1000, 1)
-                    w1 = T0 + 29 * HOUR
+                    w1 = T0 + (29 * HOUR if a.partition == "hourly" else 4 * DAY)
+                    span = HOUR if a.partition == "hourly" else DAY
                     t0 = time.time()
                     sh(e["cmd"], f"DELETE FROM {gc_tbl} WHERE begin_timestamp >= {w1} "
-                                 f"AND begin_timestamp < {w1 + HOUR};", DB)
+                                 f"AND begin_timestamp < {w1 + span};", DB)
                     bres["gc_del_ms"] = round((time.time() - t0) * 1000, 1)
                 if design == "inline_json" and e["flavour"] == "mysql":
                     mvi = {}
@@ -751,14 +857,19 @@ def do_query(a, engines, manifest, out):
 # ----------------------------------------------------------------------------- main
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("mode", choices=["build", "query", "all"])
+    ap.add_argument("mode", choices=["plan", "build", "query", "all"])
     ap.add_argument("--engine", action="append", default=[], metavar="LABEL=COMMAND")
     ap.add_argument("--rate", type=float, default=0.05,
                     help="archives/second of simulated history (default 0.05; full=0.5)")
     ap.add_argument("--days", type=int, default=28)
-    ap.add_argument("--columns", choices=list(TIERS), default="standard",
-                    help="how permissive the index configuration is; storage is dominated "
-                         "by the highest-distinct column included (default: standard)")
+    ap.add_argument("--config", choices=list(CONFIGS), default="c8",
+                    help="index configuration to benchmark (default c8); all but 'over' are "
+                         "admissible under the storage budget")
+    ap.add_argument("--budget-pct", type=float, default=BUDGET_PCT,
+                    help="max %% of a compressed archive the filter columns may consume")
+    ap.add_argument("--partition", choices=["hourly", "daily"], default="hourly",
+                    help="side-table partition granularity; side_percol multiplies partition "
+                         "count by column count, so wide configs need daily")
     ap.add_argument("--design", action="append", choices=DESIGNS, default=[])
     ap.add_argument("--query", action="append", default=[])
     ap.add_argument("--window", action="append", default=[], choices=["1h", "1d", "7d"])
@@ -771,7 +882,15 @@ def main():
     ap.add_argument("--out", default="")
     ap.add_argument("--tmpdir", default=tempfile.gettempdir())
     a = ap.parse_args()
-    set_tier(a.columns)
+    set_config(a.config)
+
+    if a.mode == "plan":
+        # Pure policy evaluation: no server, no data. Shows every configuration's verdict.
+        for cfg in CONFIGS:
+            set_config(cfg)
+            print(plan_text(cfg, a.budget_pct, a.days, a.partition, a.design or DESIGNS))
+            print()
+        return
 
     engines, failed = detect(a.engine or DEFAULT_ENGINES)
     if not engines:
@@ -803,14 +922,15 @@ def main():
         if not os.path.exists(MANIFEST):
             sys.exit(f"{MANIFEST} not found -- run build first")
         manifest = json.load(open(MANIFEST))
-        # The tier defines which tables exist, so query runs must use the built one.
-        built = manifest.get("columns", "full")
-        if built != a.columns:
-            line(f"  (using tier '{built}' from the manifest, not '{a.columns}')")
-            set_tier(built)
+        # The config defines which tables exist, so query runs must use the built one.
+        built = manifest.get("config", "c8")
+        if built != a.config:
+            line(f"  (using config '{built}' from the manifest, not '{a.config}')")
+            set_config(built)
+        a.partition = manifest.get("partition", a.partition)
         bad = [q for q in a.query if q not in make_probes()]
         if bad:
-            sys.exit(f"query {bad} not available in tier '{built}'; "
+            sys.exit(f"query {bad} not available in config '{built}'; "
                      f"choose from {list(make_probes())}")
         do_query(a, engines, manifest, out)
     line(f"\nwritten to {outpath}")

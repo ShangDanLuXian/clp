@@ -173,28 +173,52 @@ side-table partitions. Designs under test: `inline` (delimited TEXT columns), `s
 (one JSON document per archive, plus per-path multi-valued-index attempts on MySQL with
 failures recorded as results).
 
-**Filter storage is dominated by the highest-distinct column configured**, so how permissive
-the index configuration is (`--columns`) is a parameter, not a constant. Per archive, against
-a 5.12 MB compressed archive (256 MB raw at 50x):
+### The storage budget is an admission policy, not a benchmark variable
 
-| tier | columns | values/archive | filter payload | % of compressed |
-|---|---|---:|---:|---:|
-| `lean` | host, 2 flags, 2 modules (<=20 distinct) | 47 | 580 B | 0.011% |
-| `standard` (default) | + 2 entity columns (326 each) | 699 | 14.3 KB | 0.266% |
-| `full` | + a session column (1,800 distinct) | 2,499 | 70.1 KB | 1.305% |
+Users nominate which columns to index, and the service **rejects a configuration whose total
+filter payload exceeds 0.1% of the compressed archive** (`--budget-pct`). At 256 MB raw and
+50x compression that ceiling is **5,368 bytes per archive**, which is what makes the size
+question answerable up front rather than discovered after loading. `python3 bench3.py plan`
+evaluates every configuration against the policy without touching a database:
 
-One session-shaped column is ~77% of the `full` tier's bytes. Run more than one tier to get
-the cost curve; the build prints the per-column breakdown, and the manifest records the tier
-so query runs match what was built (probes referencing absent columns are dropped).
+| archetype | distinct/archive | payload | how many fit the budget |
+|---|---:|---:|---:|
+| host / pod / region | 1 | 13 B | 400 |
+| env / tier | 3 | 27 B | 190 |
+| severity / method | 8 | 88 B | 59 |
+| module / service | 20 | 300 B | 17 |
+| endpoint / error code | 64 | 1,216 B | 4 |
+
+Anything with hundreds of distinct values per archive is inadmissible on its own -- a single
+326-distinct column is 6.8 KB, above the entire budget -- so the policy excludes exactly the
+shapes that made storage a problem. Configurations under test (`--config`), all bounded by
+the 64-column schema limit:
+
+| config | columns | values/archive | payload | % of compressed | verdict |
+|---|---:|---:|---:|---:|---|
+| `c8` (default) | 8 | 45 | 577 B | 0.011% | admitted |
+| `c32` | 32 | 142 | 1,810 B | 0.034% | admitted |
+| `c64` | 64 | 328 | 4,536 B | 0.085% | admitted |
+| `wide` | 17 | 340 | 5,117 B | 0.095% | admitted (95% of budget) |
+| `over` | 15 | 520 | 9,095 B | 0.169% | **rejected** |
+
+Because size is capped by policy, the sweep measures what varies with the *number* of
+configured columns: query cost, write throughput, and partition count. That last one is a
+real constraint on `side_percol`, whose partitions multiply by column count -- 64 columns x
+674 hourly partitions is 43,136 files, past the process open-file limit and near the
+8,192-per-table engine cap. `--partition daily` trades partition-pruning granularity for
+feasibility; `side_shared` is unaffected. The planner prints these counts and warns.
 
 Three entry points, so the database persists and query experiments can iterate on it:
 
 ```bash
-./bench3_setup.sh                   # clean + tune servers + BUILD (default 0.05 arch/s x 28d)
-./bench3_setup.sh --rate 0.5        # full scale: ~3B side rows, hours of build, ~500 GB disk
-./bench3_query.sh                   # full query/write/interference matrix on the existing db
+python3 bench3.py plan                        # admission verdicts only; no server needed
+./bench3_setup.sh                             # clean + tune + BUILD (c8, 0.05 arch/s x 28d)
+./bench3_setup.sh --config c64 --partition daily      # 64 columns; daily avoids 43K files
+./bench3_setup.sh --rate 0.5                  # full scale: hours of build, ~100 GB disk
+./bench3_query.sh                             # query/write/interference on the existing db
 ./bench3_query.sh --query Q3_sel_hot --window 7d --design side_percol
-./bench3_all.sh                     # both
+./bench3_all.sh                               # both
 ```
 
 The build writes `lc3_manifest.json` (scale, seed, probe set, per-probe ground-truth hit
