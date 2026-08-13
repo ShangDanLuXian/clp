@@ -761,14 +761,22 @@ def do_build(a, engines, out):
                     sh(e["cmd"], f"DELETE FROM {gc_tbl} WHERE begin_timestamp >= {w1} "
                                  f"AND begin_timestamp < {w1 + span};", DB)
                     bres["gc_del_ms"] = round((time.time() - t0) * 1000, 1)
-                if design == "inline_json" and e["flavour"] == "mysql":
+                if design == "inline_json" and e["flavour"] == "mysql" and not a.skip_mvi:
+                    # Each multi-valued index build scans the whole table and parses every
+                    # JSON document -- minutes to tens of minutes per index at scale. Log
+                    # per-index progress so a long build is visible, and time each one:
+                    # this IS the config-change cost of the JSON+MVI design.
                     mvi = {}
                     for c in COLUMNS:
+                        t0 = time.time()
+                        sys.stderr.write(f"      building mvi_{c[0]} ...\n")
                         rc, _, err = sh(e["cmd"],
                                         f"ALTER TABLE t_json ADD INDEX mvi_{c[0]} "
                                         f"((CAST(v->'$.{c[0]}' AS CHAR(64) ARRAY)));", DB)
-                        mvi[c[0]] = "ok" if rc == 0 else \
+                        el = round(time.time() - t0, 1)
+                        mvi[c[0]] = f"ok ({el}s)" if rc == 0 else \
                             (err.strip().splitlines() or ["failed"])[-1][:60]
+                        sys.stderr.write(f"        ... {el}s\n")
                     bres["mvi"] = mvi
                 manifest["build"][f"{e['label']}/{design}"] = bres
                 flag = "  ** OVER BUDGET **" if bres["over_budget"] else ""
@@ -893,6 +901,9 @@ def main():
     ap.add_argument("--target-rate", type=float, default=31.0)
     ap.add_argument("--skip-writes", action="store_true")
     ap.add_argument("--skip-interference", action="store_true")
+    ap.add_argument("--skip-mvi", action="store_true",
+                    help="skip MySQL multi-valued-index builds on inline_json (hours at "
+                         "scale, and the optimizer has not been observed using them)")
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--out", default="")
     ap.add_argument("--tmpdir", default=tempfile.gettempdir())
