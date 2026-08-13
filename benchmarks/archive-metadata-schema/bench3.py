@@ -464,19 +464,25 @@ def q_side(design, preds, w1, w2, form="join"):
         return (f"SELECT COUNT(DISTINCT {a0}.archive_id) FROM {t0_} {a0} "
                 f"WHERE {c0.replace('column_id', a0 + '.column_id')}{a0}.{v0} "
                 f"AND {q_time(w1, w2, a0)}")
+    # Every side row of one archive carries the archive's own (denormalized) timestamp, so
+    # the intersection can join on (archive_id AND begin_timestamp). With both bound, the
+    # inner access is a full-PK point probe -- O(log) per outer row on any engine -- instead
+    # of a rescan of the inner value's window run (quadratic without a hash join).
     if form == "exists":
         inner = []
         for al, tb, ci, vc in refs[1:]:
             inner.append(f"EXISTS (SELECT 1 FROM {tb} {al} WHERE "
                          f"{ci.replace('column_id', al + '.column_id')}{al}.{vc} "
-                         f"AND {q_time(w1, w2, al)} AND {al}.archive_id = {a0}.archive_id)")
+                         f"AND {q_time(w1, w2, al)} AND {al}.archive_id = {a0}.archive_id "
+                         f"AND {al}.begin_timestamp = {a0}.begin_timestamp)")
         return (f"SELECT COUNT(DISTINCT {a0}.archive_id) FROM {t0_} {a0} WHERE "
                 f"{c0.replace('column_id', a0 + '.column_id')}{a0}.{v0} "
                 f"AND {q_time(w1, w2, a0)} AND " + " AND ".join(inner))
     joins, conds = [f"{t0_} {a0}"], [
         f"{c0.replace('column_id', a0 + '.column_id')}{a0}.{v0}", q_time(w1, w2, a0)]
     for al, tb, ci, vc in refs[1:]:
-        joins.append(f"JOIN {tb} {al} ON {al}.archive_id = {a0}.archive_id")
+        joins.append(f"JOIN {tb} {al} ON {al}.archive_id = {a0}.archive_id "
+                     f"AND {al}.begin_timestamp = {a0}.begin_timestamp")
         conds += [f"{ci.replace('column_id', al + '.column_id')}{al}.{vc}",
                   q_time(w1, w2, al)]
     return (f"SELECT COUNT(DISTINCT {a0}.archive_id) FROM " + " ".join(joins)
