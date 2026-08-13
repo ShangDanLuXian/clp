@@ -496,9 +496,17 @@ def build_query(design, preds, w1, w2, form="join"):
 
 
 # ----------------------------------------------------------------------------- measurement
+QUERY_TIMEOUT_S = 180
+
+
 def timed(engine, sql):
-    """Two executions: (run1_ms, warm_ms, hits, scanned_on_warm)."""
-    script = ("FLUSH STATUS;\nSET @t=NOW(6);\n" + sql + ";\n"
+    """Two executions: (run1_ms, warm_ms, hits, scanned_on_warm). A per-statement timeout
+    turns a pathological plan into a recorded TIMEOUT instead of an hours-long stall --
+    the timeout IS the finding (session-scoped, so other phases are unaffected)."""
+    cap = (f"SET SESSION max_statement_time={QUERY_TIMEOUT_S};\n"
+           if engine["flavour"] == "mariadb"
+           else f"SET SESSION max_execution_time={QUERY_TIMEOUT_S * 1000};\n")
+    script = (cap + "FLUSH STATUS;\nSET @t=NOW(6);\n" + sql + ";\n"
               "SELECT CONCAT('R1=',TIMESTAMPDIFF(MICROSECOND,@t,NOW(6))/1000);\n"
               "FLUSH STATUS;\nSET @t=NOW(6);\n" + sql + ";\n"
               "SELECT CONCAT('R2=',TIMESTAMPDIFF(MICROSECOND,@t,NOW(6))/1000);\n"
@@ -832,7 +840,13 @@ def do_query(a, engines, manifest, out):
                     sql = build_query(design, preds, w1, w2, a.join_form)
                     r1, r2, hits, scanned, err = timed(e, sql)
                     if err:
-                        line(f"  {design:<12}{q:<12}{w:<5} ! {err}")
+                        low = err.lower()
+                        if "interrupt" in low or "execution time" in low \
+                                or "statement_time" in low:
+                            line(f"  {design:<12}{q:<12}{w:<5} "
+                                 f"TIMEOUT (>{QUERY_TIMEOUT_S}s)")
+                        else:
+                            line(f"  {design:<12}{q:<12}{w:<5} ! {err}")
                         continue
                     check = ""
                     if gt:
@@ -904,11 +918,15 @@ def main():
     ap.add_argument("--skip-mvi", action="store_true",
                     help="skip MySQL multi-valued-index builds on inline_json (hours at "
                          "scale, and the optimizer has not been observed using them)")
+    ap.add_argument("--query-timeout", type=int, default=180,
+                    help="per-statement cap in seconds; a slower query records TIMEOUT")
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--out", default="")
     ap.add_argument("--tmpdir", default=tempfile.gettempdir())
     a = ap.parse_args()
     set_config(a.config)
+    global QUERY_TIMEOUT_S
+    QUERY_TIMEOUT_S = a.query_timeout
 
     if a.mode == "plan":
         # Pure policy evaluation: no server, no data. Shows every configuration's verdict.
