@@ -63,7 +63,12 @@ python3 bench4.py $STORE_EXPS --small "$N" --engine mariadb="$MARIA" \
     --out "lc4_storage_mariadb_${STAMP}.txt" > "p1_mariadb_${STAMP}.log" 2>&1 &
 P1M=$!
 if [ "$have_mysql8" -eq 1 ] && [ "$CONCURRENT" -eq 1 ]; then
-    sleep 600           # stagger: de-phases the two heaviest load stretches
+    # Stagger the two engines so their heaviest load stretches do not coincide. Scale it
+    # with the run: a fixed delay would dominate a small smoke run entirely.
+    STAGGER=$(( N / 10000 ))
+    [ "$STAGGER" -gt 600 ] && STAGGER=600
+    [ "$STAGGER" -gt 0 ] && echo "  staggering MySQL start by ${STAGGER}s"
+    sleep "$STAGGER"
     # shellcheck disable=SC2086
     python3 bench4.py $STORE_EXPS --small "$N" --engine mysql="$MY8" \
         --out "lc4_storage_mysql_${STAMP}.txt" > "p1_mysql_${STAMP}.log" 2>&1 &
