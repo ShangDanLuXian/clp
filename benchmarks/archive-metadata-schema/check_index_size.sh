@@ -19,7 +19,7 @@ set -uo pipefail
 
 CLIENT="${1:-$(command -v mysql || command -v mariadb)}"
 ROWS="${2:-100000}"
-DB=idxsize
+DB="${IDXSIZE_DB:-idxsize}"
 # column_id TINYINT(1) + begin_timestamp BIGINT(8) + archive_id INT(4)
 PK_OTHER=13
 LIMIT=3072
@@ -27,8 +27,15 @@ FAILED=0
 
 q() { $CLIENT -N -B ${2:+"$2"} -e "$1" 2>&1; }
 $CLIENT -e "SELECT 1" >/dev/null 2>&1 || { echo "no server via: $CLIENT" >&2; exit 1; }
-$CLIENT -e "DROP DATABASE IF EXISTS $DB; CREATE DATABASE $DB;" 2>/dev/null \
-    || { echo "cannot create $DB -- GRANT ALL PRIVILEGES ON $DB.* TO CURRENT_USER();" >&2; exit 1; }
+# Report the server's own message: "access denied" and "unknown database" need different
+# fixes, and swallowing the error leaves the reader guessing which one they hit.
+if ! ERR=$($CLIENT -e "DROP DATABASE IF EXISTS $DB; CREATE DATABASE $DB;" 2>&1) || [ -n "$ERR" ]
+then
+    printf '%s\n' "$ERR" >&2
+    echo "  grant it with:" >&2
+    echo "    sudo mysql -e \"GRANT ALL PRIVILEGES ON $DB.* TO '$USER'@'localhost';\"" >&2
+    exit 1
+fi
 trap '$CLIENT -e "DROP DATABASE IF EXISTS $DB;" 2>/dev/null' EXIT
 echo "server: $(q 'SELECT VERSION();')   rows: $ROWS"
 
