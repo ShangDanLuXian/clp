@@ -167,12 +167,15 @@ def gen_corpus(archives, cols, outdir, seed, mb=False, base_extra=None):
 
 
 def load(e, tbl, path, columns):
+    sys.stderr.write(f"    loading {tbl} [{e['label']}] ...\n")
     t0 = time.time()
     rc, _, err = sh(e["cmd"], f"LOAD DATA LOCAL INFILE '{path}' INTO TABLE {tbl} "
                               f"({columns});", DB, local_infile=True)
+    el = round(time.time() - t0, 1)
+    sys.stderr.write(f"      ... {el}s\n")
     if rc != 0:
         return None, (err.strip().splitlines() or ["?"])[-1][:70]
-    return round(time.time() - t0, 1), None
+    return el, None
 
 
 SIDE_COLS = ("column_id TINYINT UNSIGNED NOT NULL, value VARCHAR(64) NOT NULL, "
@@ -535,8 +538,10 @@ def main():
 
     storage_exps = {"B1", "B2", "B4", "B5"} & set(exps)
     paths = {}
+    tmp_dirs = []
     if storage_exps:
         td = tempfile.mkdtemp(dir=a.tmpdir)
+        tmp_dirs.append(td)
         sys.stderr.write("generating storage corpora ...\n")
         paths["plain"], _ = gen_corpus(a.small, C8, td, a.seed)
         os.rename(paths["plain"], os.path.join(td, "plain.tsv"))
@@ -560,6 +565,7 @@ def main():
     if query_exps:
         sys.stderr.write("building query corpus ...\n")
         sp, bp = build_query_corpus(engines, a, out, a.tmpdir, a.seed)
+        tmp_dirs.append(os.path.dirname(sp))
         if "B6" in exps:
             b6(engines, a, out)
         if "B7" in exps:
@@ -572,6 +578,9 @@ def main():
             b3(engines, a, out)
     for e in engines:
         sh(e["cmd"], f"DROP DATABASE IF EXISTS {DB};")
+    import shutil
+    for td in tmp_dirs:
+        shutil.rmtree(td, ignore_errors=True)
     line(f"\nwritten to {outpath}")
     out.close()
 
