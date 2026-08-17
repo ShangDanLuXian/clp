@@ -254,8 +254,11 @@ def b2(engines, a, out, paths):
     line("  " + "-" * 84)
     for e in engines:
         variants = [("plain", ""),
-                    ("compressed_kbs8", "ROW_FORMAT=COMPRESSED KEY_BLOCK_SIZE=8"),
-                    ("compressed_kbs4", "ROW_FORMAT=COMPRESSED KEY_BLOCK_SIZE=4")]
+                    ("compressed_kbs8", "ROW_FORMAT=COMPRESSED KEY_BLOCK_SIZE=8")]
+        if not a.skip_kbs4:
+            # kbs4 is the most expensive load in the suite (~6x plain) and loses on every
+            # axis; skippable once its verdict is established at smaller scale.
+            variants.append(("compressed_kbs4", "ROW_FORMAT=COMPRESSED KEY_BLOCK_SIZE=4"))
         if e["flavour"] == "mariadb":
             variants.append(("page_compressed", "PAGE_COMPRESSED=1"))
         base_b = None
@@ -517,6 +520,9 @@ def main():
                     help="archives for storage experiments (unpartitioned)")
     ap.add_argument("--archives", type=int, default=300_000,
                     help="archives for the partitioned query corpus (B3, B6-B9)")
+    ap.add_argument("--skip-kbs4", action="store_true",
+                    help="skip the KEY_BLOCK_SIZE=4 variant in B2 (slowest load in the "
+                         "suite; loses on every axis at every scale measured)")
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--out", default="")
     ap.add_argument("--tmpdir", default=tempfile.gettempdir())
