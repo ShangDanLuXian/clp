@@ -131,10 +131,14 @@ def timed(e, sql, timeout_s=180):
     for line in out.splitlines():
         if line.startswith("MS="):
             ms = float(line[3:])
-        elif "\t" in line:
-            scanned += int(line.split("\t")[1])
-        elif line.strip().isdigit():
-            hits = int(line.strip())
+            continue
+        # A result row can itself contain tabs (multi-column SELECTs) and NULLs, so key off
+        # the counter NAME rather than assuming any tabbed line is a SHOW STATUS row.
+        parts = line.split("\t")
+        if parts[0] in ("Handler_read_next", "Handler_read_rnd_next"):
+            scanned += int(parts[1])
+        elif parts[0].strip().lstrip("-").isdigit():
+            hits = int(parts[0].strip())
     return ms, hits, scanned, None
 
 
