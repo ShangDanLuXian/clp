@@ -18,7 +18,7 @@ so one tenant's postings stay one contiguous key range, and hourly partitioning 
 begin_timestamp is unchanged.
 
 Usage:
-    python3 bench_tenancy.py                              # 100 tenants x 2,000 archives
+    python3 bench_tenancy.py                              # 100 tenants x 10,000 archives
     python3 bench_tenancy.py --datasets 300 --per 1000
     python3 bench_tenancy.py --engine mariadb=mysql \\
         --engine mysql="/opt/mysql8/usr/bin/mysql --defaults-file=/etc/my8.cnf -u root"
@@ -179,6 +179,12 @@ def timed(e, sql, timeout_s=300):
     return ms, None
 
 
+def fmt(ms, err):
+    """Formats a timing cell. A failed query returns an error STRING, and applying a float
+    format code to it raises ValueError mid-report -- which is how the first run died."""
+    return f"{ms:>10.1f}" if ms is not None else f"{(err or 'ERR')[:10]:>10}"
+
+
 def wall(fn):
     t0 = time.time()
     fn()
@@ -272,23 +278,47 @@ def main():
         line(f"  {'  = per empty tenant':<26}{eb_s / a.datasets / 1024:>15.1f} KB"
              f"{'(none)':>19}")
 
+        # Load failures must stop the run. Ignoring them produced a report whose sizes and
+        # timings were all zero while still looking like results -- worse than a crash.
+        fails = []
+
         def load_split():
             for k, dp in enumerate(dpaths):
                 if k % 25 == 0:
                     sys.stderr.write(f"    [{e['label']}] load split {k}/{a.datasets}\n")
-                sh(e, f"LOAD DATA LOCAL INFILE '{dp}' INTO TABLE side_d{k:04d} "
-                      f"(column_id,value,begin_timestamp,archive_id);", DB, True)
+                rc, _, err = sh(e, f"LOAD DATA LOCAL INFILE '{dp}' INTO TABLE side_d{k:04d} "
+                                   f"(column_id,value,begin_timestamp,archive_id);", DB, True)
+                if rc != 0 and len(fails) < 3:
+                    fails.append(f"split tenant {k}: "
+                                 f"{(err.strip().splitlines() or ['?'])[-1][:70]}")
         t_ls = wall(load_split)
         fb_s, _ = file_bytes(e, "side_d%")
 
         def load_uni():
             sys.stderr.write(f"    [{e['label']}] load unified\n")
-            sh(e, f"LOAD DATA LOCAL INFILE '{upath}' INTO TABLE side_all "
-                  f"(dataset_id,column_id,value,begin_timestamp,archive_id);", DB, True)
+            rc, _, err = sh(e, f"LOAD DATA LOCAL INFILE '{upath}' INTO TABLE side_all "
+                               f"(dataset_id,column_id,value,begin_timestamp,archive_id);",
+                            DB, True)
+            if rc != 0:
+                fails.append(f"unified: {(err.strip().splitlines() or ['?'])[-1][:70]}")
         t_lu = wall(load_uni)
         fb_u, _ = file_bytes(e, "side_all%")
         db_s = data_bytes(e, "side\\_d%")
         db_u = data_bytes(e, "side\\_all")
+
+        if fails or db_s == 0 or db_u == 0:
+            line("")
+            line("  !! LOAD FAILED -- everything below this point would be meaningless.")
+            for f in fails:
+                line(f"     {f}")
+            if not fails and (db_s == 0 or db_u == 0):
+                line("     loads reported success but the tables measure 0 bytes;")
+                line("     the server is likely wedged (disk full leaves InnoDB read-only).")
+            line(f"     split measured {db_s:,} B, unified measured {db_u:,} B")
+            line("     Free disk (this run needs ~15 GB at the default scale) or lower")
+            line("     --per, then re-run. T1 CREATE/empty-size numbers above are still valid.")
+            sh(e, f"DROP DATABASE IF EXISTS {DB};")
+            continue
 
         line(f"  {'load time':<26}{t_ls:>16.1f} s{t_lu:>17.1f} s")
         line(f"  {'file bytes loaded':<26}{fb_s / 1048576:>15.1f} MB{fb_u / 1048576:>16.1f} MB")
@@ -314,8 +344,7 @@ def main():
                             f"WHERE {pred};")
         m2, err2 = timed(e, f"SELECT COUNT(DISTINCT archive_id) FROM side_all "
                             f"WHERE dataset_id={k} AND {pred};")
-        line(f"  {'one tenant, 24h window':<44}"
-             f"{m1 if m1 is not None else err1:>10.1f}{m2 if m2 is not None else err2:>10.1f}")
+        line(f"  {'one tenant, 24h window':<44}{fmt(m1, err1)}{fmt(m2, err2)}")
         union = " UNION ALL ".join(
             f"SELECT COUNT(DISTINCT archive_id) c FROM side_d{j:04d} WHERE {pred}"
             for j in range(a.datasets))
@@ -323,12 +352,10 @@ def main():
         inlist = ",".join(str(j) for j in range(a.datasets))
         m4, err4 = timed(e, f"SELECT COUNT(DISTINCT dataset_id, archive_id) FROM side_all "
                             f"WHERE dataset_id IN ({inlist}) AND {pred};")
-        line(f"  {'ALL tenants (UNION ALL vs IN-list)':<44}"
-             f"{m3 if m3 is not None else err3:>10.1f}{m4 if m4 is not None else err4:>10.1f}")
+        line(f"  {'ALL tenants (UNION ALL vs IN-list)':<44}{fmt(m3, err3)}{fmt(m4, err4)}")
         m5, err5 = timed(e, f"SELECT COUNT(DISTINCT dataset_id, archive_id) FROM side_all "
                             f"WHERE {pred};")
-        line(f"  {'unified, dataset_id OMITTED (the trap)':<44}{'--':>10}"
-             f"{m5 if m5 is not None else err5:>10.1f}")
+        line(f"  {'unified, dataset_id OMITTED (the trap)':<44}{'--':>10}{fmt(m5, err5)}")
         line("    (omitting dataset_id forfeits the PK prefix: the index cannot seek on")
         line("     column_id/value alone, so the predicate scans the whole time window)")
 
