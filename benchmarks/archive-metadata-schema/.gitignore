@@ -2,3 +2,12 @@
 *.tsv
 tmp*/
 lc_bench_results.txt
+
+# Run outputs land in the working directory; curated ones are copied into results/ by hand.
+tenancy_results_*.txt
+lc[234]_*.txt
+valuetype_*.txt
+side_charset_*.txt
+bench4_full.log
+tenancy.log
+p1_*.log
