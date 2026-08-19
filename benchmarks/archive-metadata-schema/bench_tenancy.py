@@ -149,6 +149,23 @@ def data_bytes(e, like):
     return nums[-1] if nums else 0
 
 
+def limits(e, need_files):
+    """Reports the server's file-handle headroom against what the split design demands.
+
+    Every partition is its own tablespace file, so N tenants x P partitions is N*P files.
+    Once that exceeds innodb_open_files the server evicts and reopens tablespaces
+    continuously, which shows up as load and query time rather than as an error -- so the
+    ratio has to be printed alongside the results or they cannot be interpreted."""
+    got = {}
+    for v in ("open_files_limit", "table_open_cache", "innodb_open_files"):
+        rc, out, _ = sh(e, f"SHOW GLOBAL VARIABLES LIKE '{v}';")
+        nums = [int(x) for x in out.split() if x.isdigit()]
+        got[v] = nums[-1] if nums else 0
+    got["files_needed_by_split"] = need_files
+    got["thrashing"] = need_files > got["innodb_open_files"]
+    return got
+
+
 def timed(e, sql, timeout_s=300):
     """Warm wall-clock: runs twice, reports the second."""
     guard = (f"SET SESSION max_statement_time={timeout_s};\n" if e["flavour"] == "mariadb"
@@ -172,7 +189,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--engine", action="append", default=[])
     ap.add_argument("--datasets", type=int, default=100)
-    ap.add_argument("--per", type=int, default=2000, help="archives per dataset")
+    ap.add_argument("--per", type=int, default=10_000,
+                    help="archives per dataset (default 100 x 10,000 = 1M archives)")
     ap.add_argument("--hours", type=int, default=168)
     ap.add_argument("--tmpdir", default=tempfile.gettempdir())
     ap.add_argument("--out", default="")
@@ -209,6 +227,20 @@ def main():
     nfiles = a.hours + 2
     for e in engines:
         sh(e, f"DROP DATABASE IF EXISTS {DB}; CREATE DATABASE {DB};")
+        lim = limits(e, a.datasets * nfiles)
+        line("")
+        line("=" * 96)
+        line(f" T0  file-handle headroom  [{e['label']}]")
+        line("=" * 96)
+        line(f"  split needs {lim['files_needed_by_split']:,} tablespace files "
+             f"({a.datasets} tenants x {nfiles} partitions); unified needs {nfiles:,}")
+        line(f"  innodb_open_files={lim['innodb_open_files']:,}  "
+             f"table_open_cache={lim['table_open_cache']:,}  "
+             f"open_files_limit={lim['open_files_limit']:,}")
+        if lim["thrashing"]:
+            line("  -> split EXCEEDS innodb_open_files: the server will evict and reopen")
+            line("     tablespaces continuously. This is a real cost of the design, not a")
+            line("     misconfiguration, but read T1/T2 split timings with it in mind.")
         line("")
         line("=" * 96)
         line(f" T1  build  [{e['label']}]")
