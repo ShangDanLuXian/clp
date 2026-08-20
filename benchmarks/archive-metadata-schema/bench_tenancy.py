@@ -186,10 +186,17 @@ def _bp_settle(e):
 
 
 def bp_cold(e):
-    """Evicts the buffer pool so the next query reads storage: shrink the pool to one
-    128 MB chunk, sweep the evictor table through the shrunken pool to push out whatever
-    survived, then restore and VERIFY the original size (restore is unconditional -- a
-    clamped shrink must never leave the pool tiny)."""
+    """Evicts the buffer pool so the next query reads storage: shrink to one 128 MB chunk,
+    sweep the evictor table through the shrunken pool, restore and VERIFY the original size.
+
+    Returns "evict" on success, or a string starting with "unavailable:" naming the ACTUAL
+    reason. Two failures are distinct and must not be conflated (an earlier version reported
+    both as "pool too small", which printed '4 GB is at or below 128 MB'):
+      - the pool already sits at the floor, so there is nothing to cycle;
+      - the server refused or clamped the shrink, so the pool never emptied.
+    Sweeping alone is never a fallback: scanned pages enter the OLD sublist
+    (innodb_old_blocks_pct, default 37%) and are evicted from there without displacing the
+    YOUNG pages, so a sweep churns a third of the pool and leaves arbitrary residue."""
     if "bp" not in e:
         _, o, _ = sh(e, "SELECT @@innodb_buffer_pool_size;")
         n = [int(x) for x in o.split() if x.isdigit()]
@@ -198,21 +205,22 @@ def bp_cold(e):
         e["flush"] = (o.split() or ["?"])[-1]
     size = e["bp"]
     if size <= 134217728:
-        # Cannot shrink below the server's floor, and a SWEEP alone cannot evict InnoDB:
-        # scanned pages enter the OLD sublist (innodb_old_blocks_pct, default 37%) and are
-        # evicted from there without displacing the YOUNG pages. That scan-resistance means
-        # a sweep churns about a third of the pool and leaves the hot pages of whichever
-        # table ran last -- producing cold numbers that are silently arbitrary. Refuse.
-        return None
-    sh(e, "SET GLOBAL innodb_buffer_pool_size=134217728;")
-    shrunk = 0 < _bp_settle(e) < size
+        return (f"unavailable: pool is {size:,} B, already at/below the 128 MB floor this "
+                f"evicts to -- nothing to cycle")
+    rc, _, err = sh(e, "SET GLOBAL innodb_buffer_pool_size=134217728;")
+    got = _bp_settle(e)
+    shrunk = 0 < got < size
     sh(e, "SELECT COALESCE(SUM(begin_timestamp % 7), 0) FROM evictor;", DB)
     sh(e, f"SET GLOBAL innodb_buffer_pool_size={size};")
     if _bp_settle(e) != size:
         sh(e, f"SET GLOBAL innodb_buffer_pool_size={size};")
         if _bp_settle(e) != size:
             return "evict (POOL RESTORE FAILED -- restore it manually)"
-    return "evict" if shrunk else None
+    if shrunk:
+        return "evict"
+    detail = (err.strip().splitlines() or [""])[-1][:60] if rc != 0 else \
+        f"requested 128 MB, server settled at {got:,} B"
+    return f"unavailable: shrink refused/clamped ({detail})"
 
 
 def timed_cw(e, sql, do_cold, timeout_s=300):
@@ -420,7 +428,7 @@ def main():
             sh(e, "DROP TABLE IF EXISTS evictor; CREATE TABLE evictor AS "
                   "SELECT * FROM side_all LIMIT 3000000;", DB)
             mode = bp_cold(e)
-            do_cold = mode is not None
+            do_cold = not str(mode).startswith("unavailable:")
         if do_cold:
             line(f"  cold = first run after buffer-pool eviction (mode: {mode}; "
                  f"flush_method={e.get('flush', '?')}).")
@@ -430,11 +438,11 @@ def main():
         elif a.no_cold:
             line("  (--no-cold: first column is run1, load-warmed, NOT cold)")
         else:
-            line(f"  COLD UNAVAILABLE: innodb_buffer_pool_size is {e.get('bp', 0):,} B, at or")
-            line("  below the 128 MB floor this evicts to, so the pool cannot be cycled.")
+            line(f"  COLD UNAVAILABLE -- {str(mode).replace('unavailable: ', '')}.")
             line("  A scan-only sweep does NOT evict InnoDB (scan-resistant LRU), so cold")
-            line("  numbers would be arbitrary -- the first column is run1 instead. Raise")
-            line("  innodb_buffer_pool_size above 128 MB and re-run for real cold figures.")
+            line("  numbers would be arbitrary. The first column is run1 instead: it is")
+            line("  PARTIALLY cold (the evictor sweep and the resize attempt do displace")
+            line("  pages) but it is not a controlled measurement -- do not quote it as cold.")
         w1 = T0 + (a.hours - 24) * HOUR
         w2 = T0 + a.hours * HOUR
         tw = f"begin_timestamp >= {w1} AND begin_timestamp < {w2}"
