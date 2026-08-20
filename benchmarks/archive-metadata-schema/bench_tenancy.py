@@ -284,6 +284,8 @@ def main():
     ap.add_argument("--per", type=int, default=10_000,
                     help="archives per dataset (default 100 x 10,000 = 1M archives)")
     ap.add_argument("--hours", type=int, default=168)
+    ap.add_argument("--keep", action="store_true",
+                    help="leave the tenancy database in place for external cold probing")
     ap.add_argument("--no-cold", action="store_true",
                     help="skip buffer-pool eviction; first latency column is then run1")
     ap.add_argument("--tmpdir", default=tempfile.gettempdir())
@@ -511,7 +513,11 @@ def main():
         line(f"  offboard unified: DELETE {a.per * POSTINGS:,} rows = {t_offu:,.2f} s "
              f"(space returns only after purge/OPTIMIZE)")
 
-        sh(e, f"DROP DATABASE IF EXISTS {DB};")
+        if not a.keep:
+            sh(e, f"DROP DATABASE IF EXISTS {DB};")
+        else:
+            line(f"\n  --keep: database `{DB}` left in place for cold probing "
+                 f"(./cold_probe.sh)")
 
     import shutil
     shutil.rmtree(td, ignore_errors=True)
