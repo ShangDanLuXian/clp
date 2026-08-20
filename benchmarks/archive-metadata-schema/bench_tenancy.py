@@ -18,6 +18,7 @@ so one tenant's postings stay one contiguous key range, and hourly partitioning 
 begin_timestamp is unchanged.
 
 Usage:
+    python3 bench_tenancy.py --datasets 100 --per 3000    # the <=1h configuration
     python3 bench_tenancy.py                              # 100 tenants x 10,000 archives
     python3 bench_tenancy.py --datasets 300 --per 1000
     python3 bench_tenancy.py --engine mariadb=mysql \\
@@ -166,6 +167,70 @@ def limits(e, need_files):
     return got
 
 
+def _bp_settle(e):
+    """Waits for an online buffer-pool resize to finish and returns the ACTUAL size the
+    server settled on. Never assumes the requested size was honored: servers clamp
+    out-of-range requests, and an exact-match wait then spins forever."""
+    prev = -1
+    for _ in range(480):
+        _, o, _ = sh(e, "SHOW GLOBAL STATUS LIKE 'Innodb_buffer_pool_resize_status';")
+        busy = "resizing" in o.lower() or "completing" in o.lower()
+        _, o, _ = sh(e, "SELECT @@innodb_buffer_pool_size;")
+        n = [int(x) for x in o.split() if x.isdigit()]
+        cur = n[-1] if n else -1
+        if not busy and cur == prev and cur > 0:
+            return cur
+        prev = cur
+        time.sleep(0.5)
+    return prev
+
+
+def bp_cold(e):
+    """Evicts the buffer pool so the next query reads storage: shrink the pool to one
+    128 MB chunk, sweep the evictor table through the shrunken pool to push out whatever
+    survived, then restore and VERIFY the original size (restore is unconditional -- a
+    clamped shrink must never leave the pool tiny)."""
+    if "bp" not in e:
+        _, o, _ = sh(e, "SELECT @@innodb_buffer_pool_size;")
+        n = [int(x) for x in o.split() if x.isdigit()]
+        e["bp"] = n[-1] if n else 0
+        _, o, _ = sh(e, "SELECT @@innodb_flush_method;")
+        e["flush"] = (o.split() or ["?"])[-1]
+    size = e["bp"]
+    shrunk = False
+    if size > 134217728:
+        sh(e, "SET GLOBAL innodb_buffer_pool_size=134217728;")
+        shrunk = 0 < _bp_settle(e) < size
+    sh(e, "SELECT COALESCE(SUM(begin_timestamp % 7), 0) FROM evictor;", DB)
+    if shrunk:
+        sh(e, f"SET GLOBAL innodb_buffer_pool_size={size};")
+        if _bp_settle(e) != size:
+            sh(e, f"SET GLOBAL innodb_buffer_pool_size={size};")
+            if _bp_settle(e) != size:
+                return "evict (POOL RESTORE FAILED -- restore it manually)"
+    return "evict" if shrunk else "sweep-only"
+
+
+def timed_cw(e, sql, do_cold, timeout_s=300):
+    """(cold_ms, warm_ms, err): evict, run once cold, re-run immediately for warm.
+    With do_cold False the first run is merely run1 (load-warmed), kept for the column."""
+    if do_cold:
+        bp_cold(e)
+    guard = (f"SET SESSION max_statement_time={timeout_s};\n" if e["flavour"] == "mariadb"
+             else f"SET SESSION max_execution_time={timeout_s * 1000};\n")
+    t0 = time.time()
+    rc, _, err = sh(e, guard + sql, DB, timeout=timeout_s + 60)
+    cold = (time.time() - t0) * 1000
+    if rc != 0:
+        return None, None, (err.strip().splitlines() or ["?"])[-1][:60]
+    t0 = time.time()
+    rc, _, err = sh(e, guard + sql, DB, timeout=timeout_s + 60)
+    warm = (time.time() - t0) * 1000
+    if rc != 0:
+        return cold, None, (err.strip().splitlines() or ["?"])[-1][:60]
+    return cold, warm, None
+
+
 def timed(e, sql, timeout_s=300):
     """Warm wall-clock: runs twice, reports the second."""
     guard = (f"SET SESSION max_statement_time={timeout_s};\n" if e["flavour"] == "mariadb"
@@ -177,6 +242,14 @@ def timed(e, sql, timeout_s=300):
     if rc != 0:
         return None, (err.strip().splitlines() or ["?"])[-1][:60]
     return ms, None
+
+
+def fmt2(cold, warm, err):
+    """A 'cold/warm' cell; a failed query prints its error instead of crashing the row."""
+    if err is not None and cold is None:
+        return f"{err[:19]:>21}"
+    w = f"{warm:,.0f}" if warm is not None else "ERR"
+    return f"{cold:>12,.0f} /{w:>7}"
 
 
 def fmt(ms, err):
@@ -198,6 +271,8 @@ def main():
     ap.add_argument("--per", type=int, default=10_000,
                     help="archives per dataset (default 100 x 10,000 = 1M archives)")
     ap.add_argument("--hours", type=int, default=168)
+    ap.add_argument("--no-cold", action="store_true",
+                    help="skip buffer-pool eviction; first latency column is then run1")
     ap.add_argument("--tmpdir", default=tempfile.gettempdir())
     ap.add_argument("--out", default="")
     a = ap.parse_args()
@@ -330,34 +405,53 @@ def main():
 
         line("")
         line("=" * 96)
-        line(f" T2  query (warm, ms)  [{e['label']}]")
+        line(f" T2  query latency, cold / warm ms  [{e['label']}]")
         line("=" * 96)
+        # The evictor exists so a shrunken pool can be swept clean of BOTH designs'
+        # pages; timed queries never touch it. ~200 MB, larger than the shrink target.
+        do_cold = not a.no_cold
+        if do_cold:
+            sh(e, "DROP TABLE IF EXISTS evictor; CREATE TABLE evictor AS "
+                  "SELECT * FROM side_all LIMIT 3000000;", DB)
+            mode = bp_cold(e)
+            line(f"  cold = first run after buffer-pool eviction (mode: {mode}; "
+                 f"flush_method={e.get('flush', '?')}).")
+            line("  O_DIRECT means cold reads truly hit storage; a buffered flush_method "
+                 "can still")
+            line("  serve them from the OS page cache. warm = same statement re-issued.")
+        else:
+            line("  (--no-cold: first column is run1, load-warmed, NOT cold)")
         w1 = T0 + (a.hours - 24) * HOUR
         w2 = T0 + a.hours * HOUR
         tw = f"begin_timestamp >= {w1} AND begin_timestamp < {w2}"
         probe = val("m0", 14, 7)
         pred = f"column_id=7 AND value='{probe}' AND {tw}"
         k = a.datasets // 2
-        line(f"  {'query':<44}{'split':>10}{'unified':>10}")
-        line("  " + "-" * 66)
-        m1, err1 = timed(e, f"SELECT COUNT(DISTINCT archive_id) FROM side_d{k:04d} "
-                            f"WHERE {pred};")
-        m2, err2 = timed(e, f"SELECT COUNT(DISTINCT archive_id) FROM side_all "
-                            f"WHERE dataset_id={k} AND {pred};")
-        line(f"  {'one tenant, 24h window':<44}{fmt(m1, err1)}{fmt(m2, err2)}")
+        line(f"  {'query':<42}{'split cold/warm':>21}{'unified cold/warm':>22}")
+        line("  " + "-" * 86)
+        c1, w1m, e1 = timed_cw(e, f"SELECT COUNT(DISTINCT archive_id) FROM side_d{k:04d} "
+                                  f"WHERE {pred};", do_cold)
+        c2, w2m, e2 = timed_cw(e, f"SELECT COUNT(DISTINCT archive_id) FROM side_all "
+                                  f"WHERE dataset_id={k} AND {pred};", do_cold)
+        line(f"  {'one tenant, 24h window':<42}{fmt2(c1, w1m, e1)}{fmt2(c2, w2m, e2):>22}")
         union = " UNION ALL ".join(
             f"SELECT COUNT(DISTINCT archive_id) c FROM side_d{j:04d} WHERE {pred}"
             for j in range(a.datasets))
-        m3, err3 = timed(e, f"SELECT SUM(c) FROM ({union}) u;")
+        c3, w3m, e3 = timed_cw(e, f"SELECT SUM(c) FROM ({union}) u;", do_cold)
         inlist = ",".join(str(j) for j in range(a.datasets))
-        m4, err4 = timed(e, f"SELECT COUNT(DISTINCT dataset_id, archive_id) FROM side_all "
-                            f"WHERE dataset_id IN ({inlist}) AND {pred};")
-        line(f"  {'ALL tenants (UNION ALL vs IN-list)':<44}{fmt(m3, err3)}{fmt(m4, err4)}")
-        m5, err5 = timed(e, f"SELECT COUNT(DISTINCT dataset_id, archive_id) FROM side_all "
-                            f"WHERE {pred};")
-        line(f"  {'unified, dataset_id OMITTED (the trap)':<44}{'--':>10}{fmt(m5, err5)}")
+        c4, w4m, e4 = timed_cw(e, f"SELECT COUNT(DISTINCT dataset_id, archive_id) "
+                                  f"FROM side_all WHERE dataset_id IN ({inlist}) "
+                                  f"AND {pred};", do_cold)
+        line(f"  {'ALL tenants (UNION ALL vs IN-list)':<42}{fmt2(c3, w3m, e3)}"
+             f"{fmt2(c4, w4m, e4):>22}")
+        c5, w5m, e5 = timed_cw(e, f"SELECT COUNT(DISTINCT dataset_id, archive_id) "
+                                  f"FROM side_all WHERE {pred};", do_cold)
+        line(f"  {'unified, dataset_id OMITTED (the trap)':<42}{'--':>21}"
+             f"{fmt2(c5, w5m, e5):>22}")
         line("    (omitting dataset_id forfeits the PK prefix: the index cannot seek on")
-        line("     column_id/value alone, so the predicate scans the whole time window)")
+        line("     column_id/value alone, so the predicate scans the whole time window.")
+        line("     cold split pays first-touch on ONE tenant table; cold unified pays it")
+        line("     on the one big tree -- the comparison production users actually feel.)")
 
         line("")
         line("=" * 96)
