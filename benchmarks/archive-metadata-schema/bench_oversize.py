@@ -202,45 +202,53 @@ def build(e, archives, n_long, tmpdir):
     return pool
 
 
-def _wait_bp(e, want):
-    """Waits for an online buffer-pool resize to settle."""
+def _bp_settle(e):
+    """Waits for an online buffer-pool resize to finish and returns the ACTUAL size the
+    server settled on. Never assumes the requested size was honored: servers clamp out-of-
+    range requests (MariaDB 10.11 reports chunk_size=0 and clamps tiny requests to its
+    floor), and an exact-match wait on the requested value then spins forever."""
+    prev = -1
     for _ in range(240):
+        _, o, _ = sh(e, "SHOW GLOBAL STATUS LIKE 'Innodb_buffer_pool_resize_status';")
+        busy = "resizing" in o.lower() or "completing" in o.lower()
         _, o, _ = sh(e, "SELECT @@innodb_buffer_pool_size;")
         n = [int(x) for x in o.split() if x.isdigit()]
-        if n and n[-1] == want:
-            _, o, _ = sh(e, "SHOW GLOBAL STATUS LIKE 'Innodb_buffer_pool_resize_status';")
-            if "completing" not in o.lower() and "resizing" not in o.lower():
-                time.sleep(0.5)
-                return True
+        cur = n[-1] if n else -1
+        if not busy and cur == prev and cur > 0:
+            return cur
+        prev = cur
         time.sleep(0.5)
-    return False
+    return prev
 
 
 def bp_cold(e):
-    """Evicts the buffer pool so the next query reads storage: shrink the pool to one
-    chunk, sweep the whole corpus through the shrunken pool, restore the size. The next
-    query then runs against a production-sized but EMPTY pool -- true cold. On a server
-    whose pool is already one chunk the shrink is skipped and the sweep alone must do the
-    evicting (honest only when the corpus is larger than the pool). ref is swept LAST so
-    the residue that survives belongs to the one table no timed query touches."""
+    """Evicts the buffer pool so the next query reads storage: shrink the pool as far as
+    the server allows, sweep the whole corpus through the shrunken pool, then restore and
+    VERIFY the original size. The restore is unconditional -- an earlier version restored
+    only after a fully-confirmed shrink, and a clamped shrink left the pool at the
+    server's floor for everything that followed. ref is swept LAST so the residue that
+    survives belongs to the one table no timed query touches."""
     if "bp" not in e:
-        _, o, _ = sh(e, "SELECT @@innodb_buffer_pool_size, @@innodb_buffer_pool_chunk_size;")
+        _, o, _ = sh(e, "SELECT @@innodb_buffer_pool_size;")
         n = [int(x) for x in o.split() if x.isdigit()]
-        e["bp"] = (n[-2], n[-1]) if len(n) >= 2 else (0, 0)
+        e["bp"] = n[-1] if n else 0
         _, o, _ = sh(e, "SELECT @@innodb_flush_method;")
         e["flush"] = (o.split() or ["?"])[-1]
-    size, chunk = e["bp"]
+    size = e["bp"]
     shrunk = False
-    if size > chunk:
-        rc, _, _ = sh(e, f"SET GLOBAL innodb_buffer_pool_size={chunk};")
-        shrunk = rc == 0 and _wait_bp(e, chunk)
+    if size > 134217728:                       # only worth shrinking above one 128 MB chunk
+        sh(e, "SET GLOBAL innodb_buffer_pool_size=134217728;")
+        shrunk = 0 < _bp_settle(e) < size
     sh(e, "SELECT SUM(LENGTH(value)) FROM trunc; SELECT SUM(LENGTH(value)) FROM marker; "
           "SELECT SUM(LENGTH(value)) FROM naive; SELECT SUM(LENGTH(value)) FROM longv; "
           "SELECT COUNT(*) FROM overflow; SELECT COUNT(*) FROM reject; "
           "SELECT SUM(LENGTH(value)) FROM ref;", DB)
     if shrunk:
         sh(e, f"SET GLOBAL innodb_buffer_pool_size={size};")
-        _wait_bp(e, size)
+        if _bp_settle(e) != size:
+            sh(e, f"SET GLOBAL innodb_buffer_pool_size={size};")
+            if _bp_settle(e) != size:
+                return "evict (POOL RESTORE FAILED -- restore it manually)"
     return "evict" if shrunk else "sweep-only"
 
 
