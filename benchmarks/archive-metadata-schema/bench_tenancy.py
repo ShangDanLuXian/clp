@@ -197,21 +197,26 @@ def bp_cold(e):
         _, o, _ = sh(e, "SELECT @@innodb_flush_method;")
         e["flush"] = (o.split() or ["?"])[-1]
     size = e["bp"]
-    shrunk = False
-    if size > 134217728:
-        sh(e, "SET GLOBAL innodb_buffer_pool_size=134217728;")
-        shrunk = 0 < _bp_settle(e) < size
+    if size <= 134217728:
+        # Cannot shrink below the server's floor, and a SWEEP alone cannot evict InnoDB:
+        # scanned pages enter the OLD sublist (innodb_old_blocks_pct, default 37%) and are
+        # evicted from there without displacing the YOUNG pages. That scan-resistance means
+        # a sweep churns about a third of the pool and leaves the hot pages of whichever
+        # table ran last -- producing cold numbers that are silently arbitrary. Refuse.
+        return None
+    sh(e, "SET GLOBAL innodb_buffer_pool_size=134217728;")
+    shrunk = 0 < _bp_settle(e) < size
     sh(e, "SELECT COALESCE(SUM(begin_timestamp % 7), 0) FROM evictor;", DB)
-    if shrunk:
+    sh(e, f"SET GLOBAL innodb_buffer_pool_size={size};")
+    if _bp_settle(e) != size:
         sh(e, f"SET GLOBAL innodb_buffer_pool_size={size};")
         if _bp_settle(e) != size:
-            sh(e, f"SET GLOBAL innodb_buffer_pool_size={size};")
-            if _bp_settle(e) != size:
-                return "evict (POOL RESTORE FAILED -- restore it manually)"
-    return "evict" if shrunk else "sweep-only"
+            return "evict (POOL RESTORE FAILED -- restore it manually)"
+    return "evict" if shrunk else None
 
 
 def timed_cw(e, sql, do_cold, timeout_s=300):
+    """do_cold False means the first column is merely run1, not cold."""
     """(cold_ms, warm_ms, err): evict, run once cold, re-run immediately for warm.
     With do_cold False the first run is merely run1 (load-warmed), kept for the column."""
     if do_cold:
@@ -410,24 +415,34 @@ def main():
         # The evictor exists so a shrunken pool can be swept clean of BOTH designs'
         # pages; timed queries never touch it. ~200 MB, larger than the shrink target.
         do_cold = not a.no_cold
+        mode = None
         if do_cold:
             sh(e, "DROP TABLE IF EXISTS evictor; CREATE TABLE evictor AS "
                   "SELECT * FROM side_all LIMIT 3000000;", DB)
             mode = bp_cold(e)
+            do_cold = mode is not None
+        if do_cold:
             line(f"  cold = first run after buffer-pool eviction (mode: {mode}; "
                  f"flush_method={e.get('flush', '?')}).")
             line("  O_DIRECT means cold reads truly hit storage; a buffered flush_method "
                  "can still")
             line("  serve them from the OS page cache. warm = same statement re-issued.")
-        else:
+        elif a.no_cold:
             line("  (--no-cold: first column is run1, load-warmed, NOT cold)")
+        else:
+            line(f"  COLD UNAVAILABLE: innodb_buffer_pool_size is {e.get('bp', 0):,} B, at or")
+            line("  below the 128 MB floor this evicts to, so the pool cannot be cycled.")
+            line("  A scan-only sweep does NOT evict InnoDB (scan-resistant LRU), so cold")
+            line("  numbers would be arbitrary -- the first column is run1 instead. Raise")
+            line("  innodb_buffer_pool_size above 128 MB and re-run for real cold figures.")
         w1 = T0 + (a.hours - 24) * HOUR
         w2 = T0 + a.hours * HOUR
         tw = f"begin_timestamp >= {w1} AND begin_timestamp < {w2}"
         probe = val("m0", 14, 7)
         pred = f"column_id=7 AND value='{probe}' AND {tw}"
         k = a.datasets // 2
-        line(f"  {'query':<42}{'split cold/warm':>21}{'unified cold/warm':>22}")
+        c0 = "cold/warm" if do_cold else "run1/warm"
+        line(f"  {'query':<42}{'split ' + c0:>21}{'unified ' + c0:>22}")
         line("  " + "-" * 86)
         c1, w1m, e1 = timed_cw(e, f"SELECT COUNT(DISTINCT archive_id) FROM side_d{k:04d} "
                                   f"WHERE {pred};", do_cold)
