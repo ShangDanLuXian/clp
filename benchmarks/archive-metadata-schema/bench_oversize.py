@@ -343,6 +343,7 @@ def main():
              f"{'eq tr':>7}{'eq mk':>7}{'eq lt':>7}"
              f"{'ifx tr':>8}{'ifx mk':>8}{'ifx lt':>8}")
         line("  " + "-" * 84)
+        lat = []
         for pct in (0, 1, 5, 10, 25):
             nl = max(0, POOL * pct // 100)
             build(e, a.archives, nl, a.tmpdir)
@@ -360,21 +361,35 @@ def main():
                 return (len(cand) / len(truth)) if truth and cand is not None else 0
 
             t_eq, _ = q_truth(e, f"value={eq_probe}")
-            c_eq_t, _ = q_policy(e, "trunc", f"value={eq_probe}", False)
-            c_eq_m, _ = q_policy(e, "marker", f"value={eq_probe}", True)
-            c_eq_l, _ = q_ltab(e, f"value={eq_probe}", None)
+            c_eq_t, ms_eq_t = q_policy(e, "trunc", f"value={eq_probe}", False)
+            c_eq_m, ms_eq_m = q_policy(e, "marker", f"value={eq_probe}", True)
+            c_eq_l, ms_eq_l = q_ltab(e, f"value={eq_probe}", None)
             t_ix, _ = q_truth(e, f"value LIKE '{infix_probe}'")
-            c_ix_t, _ = q_policy(e, "trunc",
-                                 f"(value LIKE '{infix_probe}' OR LENGTH(value)={CAP})", False)
-            c_ix_m, _ = q_policy(e, "marker", f"value LIKE '{infix_probe}'", True)
-            c_ix_l, _ = q_ltab(e, f"value LIKE '{infix_probe}'",
-                               f"value LIKE '{infix_probe}'")
+            c_ix_t, ms_ix_t = q_policy(
+                e, "trunc", f"(value LIKE '{infix_probe}' OR LENGTH(value)={CAP})", False)
+            c_ix_m, ms_ix_m = q_policy(e, "marker", f"value LIKE '{infix_probe}'", True)
+            c_ix_l, ms_ix_l = q_ltab(e, f"value LIKE '{infix_probe}'",
+                                     f"value LIKE '{infix_probe}'")
             line(f"  {str(pct) + '%':<10}{sz['trunc'] / 1048576:>9,.1f}"
                  f"{sz['marker'] / 1048576:>8,.1f}{sz['ltab'] / 1048576:>8,.1f}"
                  f"{ratio(t_eq, c_eq_t):>6.2f}x{ratio(t_eq, c_eq_m):>6.2f}x"
                  f"{ratio(t_eq, c_eq_l):>6.2f}x"
                  f"{ratio(t_ix, c_ix_t):>7.2f}x{ratio(t_ix, c_ix_m):>7.2f}x"
                  f"{ratio(t_ix, c_ix_l):>7.2f}x")
+            lat.append(f"  {str(pct) + '%':<10}"
+                       f"{ms_eq_t:>8,.1f}{ms_eq_m:>8,.1f}{ms_eq_l:>8,.1f}"
+                       f"{ms_ix_t:>9,.1f}{ms_ix_m:>9,.1f}{ms_ix_l:>9,.1f}")
+        line("")
+        line(f" O4  side-table query latency, warm ms  [{e['label']}]")
+        line(f"  {'oversized':<10}{'eq tr':>8}{'eq mk':>8}{'eq lt':>8}"
+             f"{'ifx tr':>9}{'ifx mk':>9}{'ifx lt':>9}")
+        line("  " + "-" * 62)
+        for row in lat:
+            line(row)
+        line("  (this is ONLY the SQL side of the query. The dominating cost of a bad")
+        line("   policy is downstream: every extra candidate is an archive OPENED and")
+        line("   searched for nothing -- which is what the ratio table above counts.)")
+        line("")
         line("  (ratios are archives-opened / archives-that-actually-match, on SELECTIVE")
         line("   probes. 1.00x is perfect pruning. ltab = short postings + long values")
         line("   stored WHOLE in a side table + rejection markers for archives with more")
