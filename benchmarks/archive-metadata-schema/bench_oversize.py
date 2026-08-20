@@ -2,13 +2,18 @@
 """Oversized filter values: does the truncate + cap-length + overflow scheme stay correct,
 and what does it cost?
 
-A value longer than the side table's cap cannot be stored whole. Three write policies:
+A value longer than the side table's cap cannot be stored whole. Four write policies:
 
   trunc   store the first CAP bytes. Query terms are truncated identically. A posting of
           EXACTLY CAP bytes has an unknown tail, so it matches any wildcard pattern
           unconditionally -- otherwise a match sitting past the boundary is invisible.
   marker  drop the oversized postings, write one row per (column, archive) into an
           overflow table. Every query UNIONs it, so the archive is always a candidate.
+  ltab    keep values <= CAP in the normal postings and store oversized values WHOLE in
+          a separate long-value table, so every query shape evaluates against the full
+          value -- no cap-length rule, no truncation semantics. Bounded by a per-archive
+          cutoff: an archive with more than REJECT_K oversized values for the column gets
+          one rejection marker instead of rows.
   naive   drop the oversized postings and record nothing. This is the design we must NOT
           ship; it is measured here only to show what it silently loses.
 
@@ -37,6 +42,7 @@ DB = "oversize"
 CAP = 1024                       # the side table's VARBINARY(CAP)
 LONG_LEN = 3000                  # length of an oversized value
 COLLIDE = 4                      # oversized values per identical-CAP-prefix group
+REJECT_K = 3                     # ltab: more oversized values than this in one archive -> reject
 POOL = 200                       # distinct values in the column's pool
 PER_ARCHIVE = 8                  # postings per archive for this column
 T0 = 1704067200 * 10**9
@@ -113,12 +119,19 @@ def build_pool(n_long):
 
 
 def gen(archives, pool, outdir):
-    """Writes ground truth (full values) and the three policies' posting sets."""
+    """Writes ground truth (full values) and every policy's posting set.
+
+    The fourth policy, `ltab`, is the long-value side table: values <= CAP go to the normal
+    postings (the same file the marker policy uses), values above it go WHOLE into a
+    separate small table -- UNLESS one archive has more than REJECT_K of them for the
+    column, in which case the application gives up on that (archive, column) and writes a
+    single rejection marker instead. That per-archive cutoff is what bounds the long-value
+    table: heavy offenders are rejected, so what remains is rare by construction."""
     import random
     rng = random.Random(7)
     span = max(1, HOURS * HOUR // archives)
     paths = {n: os.path.join(outdir, f"{n}.tsv")
-             for n in ("ref", "trunc", "marker", "naive", "overflow")}
+             for n in ("ref", "trunc", "marker", "naive", "overflow", "longv", "reject")}
     fh = {n: open(p, "wb") for n, p in paths.items()}
     for i in range(archives):
         ts = T0 + i * span
@@ -128,11 +141,16 @@ def gen(archives, pool, outdir):
             row = b"\t%s\t%d\t%d\n" % (v, ts, i)
             fh["ref"].write(b"0" + row)
             fh["trunc"].write(b"0\t%s\t%d\t%d\n" % (v[:CAP], ts, i))
-            if len(v) <= CAP:                       # marker and naive keep only short values
+            if len(v) <= CAP:                       # marker/naive/ltab short postings
                 fh["marker"].write(b"0" + row)
                 fh["naive"].write(b"0" + row)
         if big:                                     # one marker row for the whole archive
             fh["overflow"].write(b"0\t%d\t%d\n" % (ts, i))
+            if len(big) > REJECT_K:                 # ltab: too many -> reject the column
+                fh["reject"].write(b"0\t%d\t%d\n" % (ts, i))
+            else:                                   # ltab: rare -> store the values WHOLE
+                for s, v in enumerate(big):
+                    fh["longv"].write(b"0\t%s\t%d\t%d\t%d\n" % (v, ts, i, s))
     for f in fh.values():
         f.close()
     for p in paths.values():
@@ -159,14 +177,26 @@ def build(e, archives, n_long, tmpdir):
         sh(e, f"CREATE TABLE {t} (column_id TINYINT UNSIGNED NOT NULL, "
               f"value VARBINARY({CAP}) NOT NULL, begin_timestamp BIGINT NOT NULL, "
               f"archive_id INT UNSIGNED NOT NULL, {SIDE_PK}) ENGINE=InnoDB " + parts() + ";", DB)
-    sh(e, "CREATE TABLE overflow (column_id TINYINT UNSIGNED NOT NULL, "
-          "begin_timestamp BIGINT NOT NULL, archive_id INT UNSIGNED NOT NULL, "
-          "PRIMARY KEY (column_id, begin_timestamp, archive_id)) ENGINE=InnoDB "
-          + parts() + ";", DB)
+    for t in ("overflow", "reject"):
+        sh(e, f"CREATE TABLE {t} (column_id TINYINT UNSIGNED NOT NULL, "
+              "begin_timestamp BIGINT NOT NULL, archive_id INT UNSIGNED NOT NULL, "
+              "PRIMARY KEY (column_id, begin_timestamp, archive_id)) ENGINE=InnoDB "
+              + parts() + ";", DB)
+    # The long-value table stores oversized values WHOLE. The full value cannot live in an
+    # index (3072-byte key limit), so the PK is positional and a PREFIX index serves
+    # equality/prefix seeks -- InnoDB fetches the row and applies the full predicate, so
+    # the prefix never leaks false candidates.
+    sh(e, f"CREATE TABLE longv (column_id TINYINT UNSIGNED NOT NULL, "
+          f"value VARBINARY({LONG_LEN}) NOT NULL, begin_timestamp BIGINT NOT NULL, "
+          f"archive_id INT UNSIGNED NOT NULL, seq SMALLINT UNSIGNED NOT NULL, "
+          f"PRIMARY KEY (column_id, begin_timestamp, archive_id, seq), "
+          f"KEY ix_val (column_id, value({CAP}))) ENGINE=InnoDB " + parts() + ";", DB)
     cols = "column_id,value,begin_timestamp,archive_id"
     for t in ("ref", "trunc", "marker", "naive"):
         load(e, t, paths[t], cols)
-    load(e, "overflow", paths["overflow"], "column_id,begin_timestamp,archive_id")
+    load(e, "longv", paths["longv"], cols + ",seq")
+    for t in ("overflow", "reject"):
+        load(e, t, paths[t], "column_id,begin_timestamp,archive_id")
     import shutil
     shutil.rmtree(td, ignore_errors=True)
     return pool
@@ -192,6 +222,20 @@ def q_policy(e, tbl, where, with_overflow):
     if with_overflow:
         sql += " UNION SELECT archive_id FROM overflow WHERE column_id=0"
     return ids(e, sql + ";")
+
+
+def q_ltab(e, where_short, where_long):
+    """The long-value-table policy's candidate query: short postings, plus the long-value
+    table evaluated against the FULL value (this is what removes the cap-length rule),
+    plus the rejection markers. Either branch may be None when the term's length proves it
+    could never match that table -- the application-side skip."""
+    br = []
+    if where_short is not None:
+        br.append(f"SELECT DISTINCT archive_id FROM marker WHERE column_id=0 AND {where_short}")
+    if where_long is not None:
+        br.append(f"SELECT DISTINCT archive_id FROM longv WHERE column_id=0 AND {where_long}")
+    br.append("SELECT archive_id FROM reject WHERE column_id=0")
+    return ids(e, " UNION ".join(br) + ";")
 
 
 def hexlit(b):
@@ -254,12 +298,22 @@ def main():
                 line(f"  {name:<34} ground-truth query failed")
                 continue
             for pol, tbl, ovf in (("trunc", "trunc", False), ("marker", "marker", True),
-                                  ("naive", "naive", False)):
-                # marker/naive never hold an oversized value, so a >cap term is truncated
-                # only for trunc; the others search for what they actually stored.
-                w = cand_where if pol == "trunc" else truth_where.replace(
-                    f" OR LENGTH(value)={CAP}", "")
-                cand, _ = q_policy(e, tbl, w, ovf)
+                                  ("ltab", None, None), ("naive", "naive", False)):
+                if pol == "ltab":
+                    # A term/pattern whose length proves it cannot match one of the two
+                    # tables skips that branch entirely -- the application-side rule.
+                    if name.startswith("equality, short"):
+                        cand, _ = q_ltab(e, truth_where, None)
+                    elif name.startswith("equality, term > cap"):
+                        cand, _ = q_ltab(e, None, truth_where)
+                    else:
+                        cand, _ = q_ltab(e, truth_where, truth_where)
+                else:
+                    # marker/naive never hold an oversized value, so a >cap term is
+                    # truncated only for trunc; the others search what they stored.
+                    w = cand_where if pol == "trunc" else truth_where.replace(
+                        f" OR LENGTH(value)={CAP}", "")
+                    cand, _ = q_policy(e, tbl, w, ovf)
                 if cand is None:
                     line(f"  {name:<34}{pol:<9} query failed")
                     continue
@@ -270,7 +324,8 @@ def main():
                 line(f"  {name:<34}{pol:<9}{len(truth):>8,}{len(cand):>8,}"
                      f"{miss:>9,}{extra:>8,}  {'pass' if ok else 'FALSE NEGATIVES'}")
             line("  " + "-" * 88)
-        line(f"  trunc + marker: {'ALL CORRECT' if failures == 0 else str(failures) + ' FAILED'}"
+        line(f"  trunc + marker + ltab: "
+             f"{'ALL CORRECT' if failures == 0 else str(failures) + ' FAILED'}"
              f"    naive: false negatives above are the expected demonstration of why")
         line("  dropping an oversized posting without recording anything cannot be shipped.")
 
@@ -284,21 +339,22 @@ def main():
         # ratio 1.00x for any policy and hides the effect entirely.
         eq_probe = hexlit(pool[0])                       # one short value
         infix_probe = "%-00000-%"                        # substring of that one value only
-        line(f"  {'oversized':<10}{'trunc_MB':>9}{'marker_MB':>10}{'ovf_rows':>9}"
-             f"{'eq trunc':>10}{'eq mark':>9}{'infix trunc':>13}{'infix mark':>12}")
+        line(f"  {'oversized':<10}{'trunc_MB':>9}{'mark_MB':>8}{'ltab_MB':>8}"
+             f"{'eq tr':>7}{'eq mk':>7}{'eq lt':>7}"
+             f"{'ifx tr':>8}{'ifx mk':>8}{'ifx lt':>8}")
         line("  " + "-" * 84)
         for pct in (0, 1, 5, 10, 25):
             nl = max(0, POOL * pct // 100)
             build(e, a.archives, nl, a.tmpdir)
             sz = {}
-            for t in ("trunc", "marker"):
+            for t in ("trunc", "marker", "longv", "reject"):
                 sh(e, f"ANALYZE TABLE {t};", DB)
                 _, o, _ = sh(e, "SELECT data_length+index_length FROM information_schema."
                                 f"tables WHERE table_schema='{DB}' AND table_name='{t}';", DB)
                 n = [int(x) for x in o.split() if x.isdigit()]
                 sz[t] = n[-1] if n else 0
-            _, o, _ = sh(e, "SELECT COUNT(*) FROM overflow;", DB)
-            ovf = int(([x for x in o.split() if x.isdigit()] or [0])[-1])
+            # ltab total = the short postings plus the long-value table plus its markers.
+            sz["ltab"] = sz["marker"] + sz["longv"] + sz["reject"]
 
             def ratio(truth, cand):
                 return (len(cand) / len(truth)) if truth and cand is not None else 0
@@ -306,18 +362,24 @@ def main():
             t_eq, _ = q_truth(e, f"value={eq_probe}")
             c_eq_t, _ = q_policy(e, "trunc", f"value={eq_probe}", False)
             c_eq_m, _ = q_policy(e, "marker", f"value={eq_probe}", True)
+            c_eq_l, _ = q_ltab(e, f"value={eq_probe}", None)
             t_ix, _ = q_truth(e, f"value LIKE '{infix_probe}'")
             c_ix_t, _ = q_policy(e, "trunc",
                                  f"(value LIKE '{infix_probe}' OR LENGTH(value)={CAP})", False)
             c_ix_m, _ = q_policy(e, "marker", f"value LIKE '{infix_probe}'", True)
+            c_ix_l, _ = q_ltab(e, f"value LIKE '{infix_probe}'",
+                               f"value LIKE '{infix_probe}'")
             line(f"  {str(pct) + '%':<10}{sz['trunc'] / 1048576:>9,.1f}"
-                 f"{sz['marker'] / 1048576:>10,.1f}{ovf:>9,}"
-                 f"{ratio(t_eq, c_eq_t):>9.2f}x{ratio(t_eq, c_eq_m):>8.2f}x"
-                 f"{ratio(t_ix, c_ix_t):>12.2f}x{ratio(t_ix, c_ix_m):>11.2f}x")
+                 f"{sz['marker'] / 1048576:>8,.1f}{sz['ltab'] / 1048576:>8,.1f}"
+                 f"{ratio(t_eq, c_eq_t):>6.2f}x{ratio(t_eq, c_eq_m):>6.2f}x"
+                 f"{ratio(t_eq, c_eq_l):>6.2f}x"
+                 f"{ratio(t_ix, c_ix_t):>7.2f}x{ratio(t_ix, c_ix_m):>7.2f}x"
+                 f"{ratio(t_ix, c_ix_l):>7.2f}x")
         line("  (ratios are archives-opened / archives-that-actually-match, on SELECTIVE")
-        line("   probes. 1.00x is perfect pruning; 10x means ten archives opened per hit.")
-        line("   trunc keeps equality exact and pays only on wildcards; marker pays on")
-        line("   everything but its storage never grows.)")
+        line("   probes. 1.00x is perfect pruning. ltab = short postings + long values")
+        line("   stored WHOLE in a side table + rejection markers for archives with more")
+        line(f"   than {REJECT_K} oversized values in this column: its only over-match is")
+        line("   those rejected archives.)")
         sh(e, f"DROP DATABASE IF EXISTS {DB};")
 
     line(f"\nwritten to {outpath}")
