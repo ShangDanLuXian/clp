@@ -203,18 +203,28 @@ def build(e, archives, n_long, tmpdir):
 
 
 def ids(e, sql):
-    """Returns (set_of_archive_ids, elapsed_ms). Warm: runs twice, times the second."""
-    sh(e, sql, DB)
+    """Returns (set_of_archive_ids, run1_ms, warm_ms).
+
+    run1 is the FIRST issue of the statement after the corpus was built. It is not fully
+    disk-cold -- the buffer pool still holds pages the load itself touched -- but it pays
+    first-touch costs the warm run does not (optimizer, dictionary, pages the load wrote
+    but the query path has not read). warm is the same statement re-issued immediately."""
     t0 = time.time()
     rc, out, err = sh(e, sql, DB)
-    ms = (time.time() - t0) * 1000
+    r1 = (time.time() - t0) * 1000
     if rc != 0:
-        return None, ms
-    return {int(x) for x in out.split() if x.strip().isdigit()}, ms
+        return None, r1, r1
+    t0 = time.time()
+    rc, out, err = sh(e, sql, DB)
+    wm = (time.time() - t0) * 1000
+    if rc != 0:
+        return None, r1, wm
+    return {int(x) for x in out.split() if x.strip().isdigit()}, r1, wm
 
 
 def q_truth(e, where):
-    return ids(e, f"SELECT DISTINCT archive_id FROM ref WHERE column_id=0 AND {where};")
+    r = ids(e, f"SELECT DISTINCT archive_id FROM ref WHERE column_id=0 AND {where};")
+    return r[0], r[2]
 
 
 def q_policy(e, tbl, where, with_overflow):
@@ -279,8 +289,8 @@ def main():
         line(f" O1  correctness: truth must be a SUBSET of candidates  [{e['label']}]")
         line("=" * 98)
         line(f"  {'query shape':<34}{'policy':<9}{'truth':>8}{'cands':>8}"
-             f"{'missing':>9}{'extra':>8}  verdict")
-        line("  " + "-" * 88)
+             f"{'missing':>9}{'extra':>8}{'run1_ms':>9}{'warm_ms':>9}  verdict")
+        line("  " + "-" * 104)
         shapes = [
             ("equality, short term", f"value={hexlit(short_v)}", f"value={hexlit(short_v)}"),
             ("equality, term > cap", f"value={hexlit(long_v)}",
@@ -303,17 +313,17 @@ def main():
                     # A term/pattern whose length proves it cannot match one of the two
                     # tables skips that branch entirely -- the application-side rule.
                     if name.startswith("equality, short"):
-                        cand, _ = q_ltab(e, truth_where, None)
+                        cand, r1, wm = q_ltab(e, truth_where, None)
                     elif name.startswith("equality, term > cap"):
-                        cand, _ = q_ltab(e, None, truth_where)
+                        cand, r1, wm = q_ltab(e, None, truth_where)
                     else:
-                        cand, _ = q_ltab(e, truth_where, truth_where)
+                        cand, r1, wm = q_ltab(e, truth_where, truth_where)
                 else:
                     # marker/naive never hold an oversized value, so a >cap term is
                     # truncated only for trunc; the others search what they stored.
                     w = cand_where if pol == "trunc" else truth_where.replace(
                         f" OR LENGTH(value)={CAP}", "")
-                    cand, _ = q_policy(e, tbl, w, ovf)
+                    cand, r1, wm = q_policy(e, tbl, w, ovf)
                 if cand is None:
                     line(f"  {name:<34}{pol:<9} query failed")
                     continue
@@ -322,8 +332,9 @@ def main():
                 if not ok and pol != "naive":
                     failures += 1                 # only shippable policies count as failures
                 line(f"  {name:<34}{pol:<9}{len(truth):>8,}{len(cand):>8,}"
-                     f"{miss:>9,}{extra:>8,}  {'pass' if ok else 'FALSE NEGATIVES'}")
-            line("  " + "-" * 88)
+                     f"{miss:>9,}{extra:>8,}{r1:>9,.1f}{wm:>9,.1f}"
+                     f"  {'pass' if ok else 'FALSE NEGATIVES'}")
+            line("  " + "-" * 104)
         line(f"  trunc + marker + ltab: "
              f"{'ALL CORRECT' if failures == 0 else str(failures) + ' FAILED'}"
              f"    naive: false negatives above are the expected demonstration of why")
@@ -361,31 +372,42 @@ def main():
                 return (len(cand) / len(truth)) if truth and cand is not None else 0
 
             t_eq, _ = q_truth(e, f"value={eq_probe}")
-            c_eq_t, ms_eq_t = q_policy(e, "trunc", f"value={eq_probe}", False)
-            c_eq_m, ms_eq_m = q_policy(e, "marker", f"value={eq_probe}", True)
-            c_eq_l, ms_eq_l = q_ltab(e, f"value={eq_probe}", None)
+            c_eq_t, r1_eq_t, ms_eq_t = q_policy(e, "trunc", f"value={eq_probe}", False)
+            c_eq_m, r1_eq_m, ms_eq_m = q_policy(e, "marker", f"value={eq_probe}", True)
+            c_eq_l, r1_eq_l, ms_eq_l = q_ltab(e, f"value={eq_probe}", None)
             t_ix, _ = q_truth(e, f"value LIKE '{infix_probe}'")
-            c_ix_t, ms_ix_t = q_policy(
+            c_ix_t, r1_ix_t, ms_ix_t = q_policy(
                 e, "trunc", f"(value LIKE '{infix_probe}' OR LENGTH(value)={CAP})", False)
-            c_ix_m, ms_ix_m = q_policy(e, "marker", f"value LIKE '{infix_probe}'", True)
-            c_ix_l, ms_ix_l = q_ltab(e, f"value LIKE '{infix_probe}'",
-                                     f"value LIKE '{infix_probe}'")
+            c_ix_m, r1_ix_m, ms_ix_m = q_policy(e, "marker",
+                                                f"value LIKE '{infix_probe}'", True)
+            c_ix_l, r1_ix_l, ms_ix_l = q_ltab(e, f"value LIKE '{infix_probe}'",
+                                              f"value LIKE '{infix_probe}'")
             line(f"  {str(pct) + '%':<10}{sz['trunc'] / 1048576:>9,.1f}"
                  f"{sz['marker'] / 1048576:>8,.1f}{sz['ltab'] / 1048576:>8,.1f}"
                  f"{ratio(t_eq, c_eq_t):>6.2f}x{ratio(t_eq, c_eq_m):>6.2f}x"
                  f"{ratio(t_eq, c_eq_l):>6.2f}x"
                  f"{ratio(t_ix, c_ix_t):>7.2f}x{ratio(t_ix, c_ix_m):>7.2f}x"
                  f"{ratio(t_ix, c_ix_l):>7.2f}x")
-            lat.append(f"  {str(pct) + '%':<10}"
-                       f"{ms_eq_t:>8,.1f}{ms_eq_m:>8,.1f}{ms_eq_l:>8,.1f}"
-                       f"{ms_ix_t:>9,.1f}{ms_ix_m:>9,.1f}{ms_ix_l:>9,.1f}")
+            lat.append((f"  {str(pct) + '%':<10}"
+                        f"{r1_eq_t:>8,.1f}{r1_eq_m:>8,.1f}{r1_eq_l:>8,.1f}"
+                        f"{r1_ix_t:>9,.1f}{r1_ix_m:>9,.1f}{r1_ix_l:>9,.1f}",
+                        f"  {str(pct) + '%':<10}"
+                        f"{ms_eq_t:>8,.1f}{ms_eq_m:>8,.1f}{ms_eq_l:>8,.1f}"
+                        f"{ms_ix_t:>9,.1f}{ms_ix_m:>9,.1f}{ms_ix_l:>9,.1f}"))
         line("")
-        line(f" O4  side-table query latency, warm ms  [{e['label']}]")
-        line(f"  {'oversized':<10}{'eq tr':>8}{'eq mk':>8}{'eq lt':>8}"
-             f"{'ifx tr':>9}{'ifx mk':>9}{'ifx lt':>9}")
+        line(f" O4  side-table query latency  [{e['label']}]")
+        hdr = (f"  {'oversized':<10}{'eq tr':>8}{'eq mk':>8}{'eq lt':>8}"
+               f"{'ifx tr':>9}{'ifx mk':>9}{'ifx lt':>9}")
+        line("  run1 (first issue after build -- pays first-touch, not fully disk-cold):")
+        line(hdr)
         line("  " + "-" * 62)
-        for row in lat:
-            line(row)
+        for r1row, _ in lat:
+            line(r1row)
+        line("  warm (same statement re-issued immediately):")
+        line(hdr)
+        line("  " + "-" * 62)
+        for _, wmrow in lat:
+            line(wmrow)
         line("  (this is ONLY the SQL side of the query. The dominating cost of a bad")
         line("   policy is downstream: every extra candidate is an archive OPENED and")
         line("   searched for nothing -- which is what the ratio table above counts.)")
