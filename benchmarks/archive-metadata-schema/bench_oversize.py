@@ -355,8 +355,13 @@ def main():
              f"{'ifx tr':>8}{'ifx mk':>8}{'ifx lt':>8}")
         line("  " + "-" * 84)
         lat = []
-        for pct in (0, 1, 5, 10, 25):
-            nl = max(0, POOL * pct // 100)
+        # Dense at the low end: the admission budget (total <= ~1.5x of the byte budget)
+        # keeps the reachable regime under a few percent oversized -- a column beyond that
+        # is demoted by accounting long before. The last row is deliberately outside the
+        # reachable regime: it characterizes the FAILURE SHAPE if the valve broke (latency
+        # grows smoothly, correctness never breaks), and is not a forecast.
+        for label, nl in (("0%", 0), ("0.5%", 1), ("1%", 2), ("2%", 4), ("5%", 10),
+                          ("10%*", 20)):
             build(e, a.archives, nl, a.tmpdir)
             sz = {}
             for t in ("trunc", "marker", "longv", "reject"):
@@ -382,16 +387,16 @@ def main():
                                                 f"value LIKE '{infix_probe}'", True)
             c_ix_l, r1_ix_l, ms_ix_l = q_ltab(e, f"value LIKE '{infix_probe}'",
                                               f"value LIKE '{infix_probe}'")
-            line(f"  {str(pct) + '%':<10}{sz['trunc'] / 1048576:>9,.1f}"
+            line(f"  {label:<10}{sz['trunc'] / 1048576:>9,.1f}"
                  f"{sz['marker'] / 1048576:>8,.1f}{sz['ltab'] / 1048576:>8,.1f}"
                  f"{ratio(t_eq, c_eq_t):>6.2f}x{ratio(t_eq, c_eq_m):>6.2f}x"
                  f"{ratio(t_eq, c_eq_l):>6.2f}x"
                  f"{ratio(t_ix, c_ix_t):>7.2f}x{ratio(t_ix, c_ix_m):>7.2f}x"
                  f"{ratio(t_ix, c_ix_l):>7.2f}x")
-            lat.append((f"  {str(pct) + '%':<10}"
+            lat.append((f"  {label:<10}"
                         f"{r1_eq_t:>8,.1f}{r1_eq_m:>8,.1f}{r1_eq_l:>8,.1f}"
                         f"{r1_ix_t:>9,.1f}{r1_ix_m:>9,.1f}{r1_ix_l:>9,.1f}",
-                        f"  {str(pct) + '%':<10}"
+                        f"  {label:<10}"
                         f"{ms_eq_t:>8,.1f}{ms_eq_m:>8,.1f}{ms_eq_l:>8,.1f}"
                         f"{ms_ix_t:>9,.1f}{ms_ix_m:>9,.1f}{ms_ix_l:>9,.1f}"))
         line("")
@@ -416,7 +421,8 @@ def main():
         line("   probes. 1.00x is perfect pruning. ltab = short postings + long values")
         line("   stored WHOLE in a side table + rejection markers for archives with more")
         line(f"   than {REJECT_K} oversized values in this column: its only over-match is")
-        line("   those rejected archives.)")
+        line("   those rejected archives. The starred row is outside the budget-reachable")
+        line("   regime -- failure-shape reference only.)")
         sh(e, f"DROP DATABASE IF EXISTS {DB};")
 
     line(f"\nwritten to {outpath}")
