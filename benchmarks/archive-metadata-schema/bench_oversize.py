@@ -202,6 +202,48 @@ def build(e, archives, n_long, tmpdir):
     return pool
 
 
+def _wait_bp(e, want):
+    """Waits for an online buffer-pool resize to settle."""
+    for _ in range(240):
+        _, o, _ = sh(e, "SELECT @@innodb_buffer_pool_size;")
+        n = [int(x) for x in o.split() if x.isdigit()]
+        if n and n[-1] == want:
+            _, o, _ = sh(e, "SHOW GLOBAL STATUS LIKE 'Innodb_buffer_pool_resize_status';")
+            if "completing" not in o.lower() and "resizing" not in o.lower():
+                time.sleep(0.5)
+                return True
+        time.sleep(0.5)
+    return False
+
+
+def bp_cold(e):
+    """Evicts the buffer pool so the next query reads storage: shrink the pool to one
+    chunk, sweep the whole corpus through the shrunken pool, restore the size. The next
+    query then runs against a production-sized but EMPTY pool -- true cold. On a server
+    whose pool is already one chunk the shrink is skipped and the sweep alone must do the
+    evicting (honest only when the corpus is larger than the pool). ref is swept LAST so
+    the residue that survives belongs to the one table no timed query touches."""
+    if "bp" not in e:
+        _, o, _ = sh(e, "SELECT @@innodb_buffer_pool_size, @@innodb_buffer_pool_chunk_size;")
+        n = [int(x) for x in o.split() if x.isdigit()]
+        e["bp"] = (n[-2], n[-1]) if len(n) >= 2 else (0, 0)
+        _, o, _ = sh(e, "SELECT @@innodb_flush_method;")
+        e["flush"] = (o.split() or ["?"])[-1]
+    size, chunk = e["bp"]
+    shrunk = False
+    if size > chunk:
+        rc, _, _ = sh(e, f"SET GLOBAL innodb_buffer_pool_size={chunk};")
+        shrunk = rc == 0 and _wait_bp(e, chunk)
+    sh(e, "SELECT SUM(LENGTH(value)) FROM trunc; SELECT SUM(LENGTH(value)) FROM marker; "
+          "SELECT SUM(LENGTH(value)) FROM naive; SELECT SUM(LENGTH(value)) FROM longv; "
+          "SELECT COUNT(*) FROM overflow; SELECT COUNT(*) FROM reject; "
+          "SELECT SUM(LENGTH(value)) FROM ref;", DB)
+    if shrunk:
+        sh(e, f"SET GLOBAL innodb_buffer_pool_size={size};")
+        _wait_bp(e, size)
+    return "evict" if shrunk else "sweep-only"
+
+
 def ids(e, sql):
     """Returns (set_of_archive_ids, run1_ms, warm_ms).
 
@@ -258,6 +300,8 @@ def main():
     ap.add_argument("--archives", type=int, default=100_000)
     ap.add_argument("--tmpdir", default=tempfile.gettempdir())
     ap.add_argument("--out", default="")
+    ap.add_argument("--no-cold", action="store_true",
+                    help="skip the buffer-pool eviction before each O1 measurement")
     a = ap.parse_args()
 
     engines = detect(a.engine or ["mariadb=mysql", "mariadb=mariadb"])
@@ -288,8 +332,15 @@ def main():
         line("=" * 98)
         line(f" O1  correctness: truth must be a SUBSET of candidates  [{e['label']}]")
         line("=" * 98)
+        cold_mode = None if a.no_cold else bp_cold(e)
+        if cold_mode:
+            line(f"  cold = first run after buffer-pool eviction (mode: {cold_mode}; "
+                 f"flush_method={e.get('flush', '?')} -- O_DIRECT means cold reads truly")
+            line("  hit storage; a buffered flush_method can still serve them from the OS "
+                 "page cache)")
+        col1 = "cold_ms" if cold_mode else "run1_ms"
         line(f"  {'query shape':<34}{'policy':<9}{'truth':>8}{'cands':>8}"
-             f"{'missing':>9}{'extra':>8}{'run1_ms':>9}{'warm_ms':>9}  verdict")
+             f"{'missing':>9}{'extra':>8}{col1:>9}{'warm_ms':>9}  verdict")
         line("  " + "-" * 104)
         shapes = [
             ("equality, short term", f"value={hexlit(short_v)}", f"value={hexlit(short_v)}"),
@@ -309,6 +360,8 @@ def main():
                 continue
             for pol, tbl, ovf in (("trunc", "trunc", False), ("marker", "marker", True),
                                   ("ltab", None, None), ("naive", "naive", False)):
+                if cold_mode:
+                    bp_cold(e)
                 if pol == "ltab":
                     # A term/pattern whose length proves it cannot match one of the two
                     # tables skips that branch entirely -- the application-side rule.
@@ -413,6 +466,8 @@ def main():
         line("  " + "-" * 62)
         for _, wmrow in lat:
             line(wmrow)
+        line("  (run1 here is NOT cold -- the sweep rebuilds the corpus, so the load")
+        line("   itself warms the pool. True cold is measured in O1 via eviction.)")
         line("  (this is ONLY the SQL side of the query. The dominating cost of a bad")
         line("   policy is downstream: every extra candidate is an archive OPENED and")
         line("   searched for nothing -- which is what the ratio table above counts.)")
