@@ -67,6 +67,15 @@ ARCH_COLS = ("archive_id INT UNSIGNED NOT NULL, begin_timestamp BIGINT NOT NULL,
 # Global counters worth diffing around a query. Physical reads stand in for cold cost;
 # the table-cache pair is what actually bites the many-table configs.
 GLOBALS = ("Innodb_buffer_pool_reads", "Opened_tables", "Table_open_cache_misses")
+# Diffed around the BUILD to derive write amplification: bytes InnoDB actually pushed to
+# the data files, plus redo. Both are real storage writes and both belong in the ratio.
+WGLOBALS = ("Innodb_data_written", "Innodb_os_log_written", "Innodb_pages_written")
+
+# Payload bytes a row would occupy with no overhead at all -- the denominator for both
+# amplification figures. Value width is the posting-weighted mean of the c8 pools.
+AVG_VAL = sum(c[1] * c[2] for c in COLS) / POSTINGS
+ARCH_PAYLOAD = 4 + 8 + 8 + 8                    # archive_id, begin, end, size_bytes
+SIDE_PAYLOAD = 1 + AVG_VAL + 8 + 4              # column_id, value, begin, archive_id
 
 
 def sh(e, sql, db=None, timeout=3600):
@@ -192,7 +201,15 @@ def inventory(e, cfg, a):
     return tabs, prts, files, fbytes
 
 
-def data_bytes(e, cfg, a):
+def logical_bytes(cfg, a):
+    """Payload the data represents, ignoring every byte of storage overhead."""
+    ds = 2 if any(t[3] for t in all_tables(cfg, a)) else 0
+    n = a.datasets * a.archives
+    return n * (ARCH_PAYLOAD + ds) + n * POSTINGS * (SIDE_PAYLOAD + ds)
+
+
+def data_bytes(e, cfg, a, prefix=""):
+    """Stored bytes (clustered + secondary). prefix filters to one table KIND."""
     tot = 0
     for s in schemas(cfg, a):
         _, o, _ = sh(e, f"SELECT GROUP_CONCAT(table_name) FROM information_schema.tables "
@@ -202,11 +219,33 @@ def data_bytes(e, cfg, a):
             sh(e, "ANALYZE TABLE " + ", ".join(names.split(",")) + ";", s)
         fresh = ("SET SESSION information_schema_stats_expiry=0;\n"
                  if e["flavour"] == "mysql" else "")
+        like = f" AND table_name LIKE '{prefix}%'" if prefix else ""
         _, o, _ = sh(e, fresh + "SELECT COALESCE(SUM(data_length+index_length),0) "
-                                f"FROM information_schema.tables WHERE table_schema='{s}';")
+                                f"FROM information_schema.tables "
+                                f"WHERE table_schema='{s}'{like};")
         n = [int(x) for x in o.split() if x.isdigit()]
         tot += n[-1] if n else 0
     return tot
+
+
+def wstat(e):
+    _, o, _ = sh(e, "SHOW GLOBAL STATUS WHERE Variable_name IN "
+                    "(" + ",".join(f"'{g}'" for g in WGLOBALS) + ");")
+    d = {}
+    for ln in o.splitlines():
+        p = ln.split("\t")
+        if len(p) == 2 and p[1].strip().isdigit():
+            d[p[0]] = int(p[1])
+    return d
+
+
+def open_files(e):
+    """Gauge, not a counter: how many tablespace files InnoDB is holding open right now.
+    This is the pressure `Table_open_cache_misses` cannot see -- partitions are files, and
+    they compete for innodb_open_files, not for the table cache."""
+    _, o, _ = sh(e, "SHOW GLOBAL STATUS LIKE 'Innodb_num_open_files';")
+    n = [int(x) for x in o.split() if x.isdigit()]
+    return n[-1] if n else 0
 
 
 # --------------------------------------------------------------------------- build
@@ -275,6 +314,24 @@ def build(e, cfg, a, tmpdir):
 
 
 # --------------------------------------------------------------------------- query
+def go_cold(e, a):
+    """Empties the buffer pool by restarting the server.
+
+    Two traps. MariaDB dumps the pool at shutdown and reloads it at startup by default, so
+    a naive restart comes back WARM -- the dump is disabled first. And an online shrink is
+    not a substitute: 10.6 refuses or clamps it, and a table scan cannot evict InnoDB
+    because scanned pages sit in the OLD sublist and never displace the young ones."""
+    if not a.restart_cmd:
+        return False
+    sh(e, "SET GLOBAL innodb_buffer_pool_dump_at_shutdown=OFF;")
+    subprocess.run(a.restart_cmd, shell=True, capture_output=True, timeout=300)
+    for _ in range(60):
+        if sh(e, "SELECT 1;")[0] == 0:
+            return True
+        time.sleep(2)
+    return False
+
+
 def gstat(e):
     _, o, _ = sh(e, "SHOW GLOBAL STATUS WHERE Variable_name IN "
                     "(" + ",".join(f"'{g}'" for g in GLOBALS) + ");")
@@ -286,12 +343,32 @@ def gstat(e):
     return d
 
 
-def measure(e, sql, schema):
+def parts_touched(e, sql, schema):
+    """How many partitions the optimizer will actually visit -- pruning, verified."""
+    kw = "EXPLAIN PARTITIONS" if e["flavour"] == "mariadb" else "EXPLAIN"
+    rc, o, _ = sh(e, kw + " " + sql, schema)
+    if rc != 0:
+        return -1
+    n = 0
+    for ln in o.splitlines()[1:]:
+        for f in ln.split("\t"):
+            if "p_h" in f or "p_floor" in f or "p_future" in f:
+                n += len([x for x in f.split(",") if x.strip()])
+    return n
+
+
+def measure(e, sql, schema, a=None):
     """One query: wall ms, rows examined, physical page reads, table-cache misses.
 
     Physical reads are the portable cold-cost proxy -- pages fetched from storage rather
     than served by the pool -- so the number does not depend on how warm this machine
     happens to be right now."""
+    cold = None
+    if a is not None and a.restart_cmd:
+        if go_cold(e, a):
+            t0 = time.time()
+            sh(e, sql, schema)
+            cold = (time.time() - t0) * 1000
     before = gstat(e)
     body = "FLUSH STATUS;\n" + sql + "\nSHOW SESSION STATUS LIKE 'Handler_read%';"
     t0 = time.time()
@@ -299,7 +376,7 @@ def measure(e, sql, schema):
     ms = (time.time() - t0) * 1000
     after = gstat(e)
     if rc != 0:
-        return None
+        return {"err": (err.strip().splitlines() or ["?"])[-1][:52]}
     scanned = 0
     for ln in o.splitlines():
         p = ln.split("\t")
@@ -310,62 +387,79 @@ def measure(e, sql, schema):
     t0 = time.time()
     sh(e, sql, schema)
     warm = (time.time() - t0) * 1000
-    return {"ms": ms, "warm": warm, "scanned": scanned,
+    return {"cold": cold, "ms": ms, "warm": warm, "scanned": scanned,
+            "parts": parts_touched(e, sql, schema),
             "phys": max(0, after.get(GLOBALS[0], 0) - before.get(GLOBALS[0], 0)),
             "opens": max(0, after.get(GLOBALS[1], 0) - before.get(GLOBALS[1], 0)),
             "miss": max(0, after.get(GLOBALS[2], 0) - before.get(GLOBALS[2], 0))}
 
 
 def steps(e, cfg, a):
-    """The three SQL stages of a real filter query, measured separately."""
+    """The query matrix. Each shape isolates one thing the topology could plausibly change:
+    selectivity, window width, multi-predicate joins, wildcards, the metadata join, and the
+    cross-tenant fan-out that is the whole point of the comparison."""
     k = a.datasets // 2
     schema, at, st, needs_ds = plan(cfg, k, a)
-    w1, w2 = T0 + (a.hours - 24) * HOUR, T0 + a.hours * HOUR
-    v1, v2 = val("m0", 14, 7), val("s0", 10, 3)
+    ds = f"dataset_id={k} AND " if needs_ds else ""
+    dsx = f"x.dataset_id={k} AND " if needs_ds else ""
+    dss = f"s.dataset_id={k} AND " if needs_ds else ""
+    w24 = T0 + (a.hours - 24) * HOUR
+    w7d = T0 + max(0, a.hours - 168) * HOUR
+    wend = T0 + a.hours * HOUR
 
-    def tw(al):
-        """Both halves of the window must carry the alias -- qualifying only the first
-        leaves the second ambiguous the moment the query self-joins (ERROR 1052)."""
-        q = f"{al}." if al else ""
-        return f"{q}begin_timestamp >= {w1} AND {q}begin_timestamp < {w2}"
+    def tw(lo, alias=""):
+        """Both ends must carry the alias. Qualifying only the first term leaves the
+        second ambiguous the moment the query joins the table to itself."""
+        q = f"{alias}." if alias else ""
+        return f"{q}begin_timestamp >= {lo} AND {q}begin_timestamp < {wend}"
 
-    def dsp(al):
-        if not needs_ds:
-            return ""
-        return f"{f'{al}.' if al else ''}dataset_id={k} AND "
-
-    out = {}
-    out["S1 candidates"] = measure(
-        e, f"SELECT COUNT(DISTINCT archive_id) FROM {st} "
-           f"WHERE {dsp('')}column_id=7 AND value='{v1}' AND {tw('')};", schema)
-    # The ts-equality rule: bind BOTH key columns or the inner side cannot seek.
-    out["S2 two predicates"] = measure(
-        e, f"SELECT COUNT(*) FROM {st} x JOIN {st} y "
-           f"ON y.archive_id=x.archive_id AND y.begin_timestamp=x.begin_timestamp"
-           + (" AND y.dataset_id=x.dataset_id" if needs_ds else "")
-           + f" WHERE {dsp('x')}x.column_id=7 AND x.value='{v1}' "
-             f"AND y.column_id=5 AND y.value='{v2}' AND {tw('x')};", schema)
-    out["S3 join for metadata"] = measure(
-        e, f"SELECT COUNT(*), MAX(m.size_bytes) FROM {st} s JOIN {at} m "
-           f"ON m.archive_id=s.archive_id AND m.begin_timestamp=s.begin_timestamp"
-           + (" AND m.dataset_id=s.dataset_id" if needs_ds else "")
-           + f" WHERE {dsp('s')}s.column_id=7 AND s.value='{v1}' AND {tw('s')};", schema)
-    # Cross-tenant. Every config gets the same shape: one branch per table, each naming
-    # exactly the datasets that live in it. Dropping the dataset_id predicate where the
-    # column leads the PK would forfeit the seek and make the comparison unfair.
+    tw24 = tw(w24)
+    tw7d = tw(w7d)
+    sel = val("m0", 14, 7)          # 1 of 300 module values -- selective
+    hot = val("e0", 8, 3)           # 1 of 12 env values -- low selectivity
+    other = val("s0", 10, 3)
+    q = {}
+    q["Q1 point, 24h"] = (schema,
+        f"SELECT COUNT(DISTINCT archive_id) FROM {st} "
+        f"WHERE {ds}column_id=7 AND value='{sel}' AND {tw24};")
+    q["Q2 point, 7d"] = (schema,
+        f"SELECT COUNT(DISTINCT archive_id) FROM {st} "
+        f"WHERE {ds}column_id=7 AND value='{sel}' AND {tw7d};")
+    q["Q3 hot value, 24h"] = (schema,
+        f"SELECT COUNT(DISTINCT archive_id) FROM {st} "
+        f"WHERE {ds}column_id=3 AND value='{hot}' AND {tw24};")
+    q["Q4 prefix wildcard"] = (schema,
+        f"SELECT COUNT(DISTINCT archive_id) FROM {st} "
+        f"WHERE {ds}column_id=7 AND value LIKE '{sel[:5]}%' AND {tw24};")
+    # Both key columns bound, per the ts-equality rule: bind archive_id alone and the inner
+    # side cannot seek, because archive_id is the LAST part of the primary key.
+    q["Q5 two predicates AND"] = (schema,
+        f"SELECT COUNT(*) FROM {st} x JOIN {st} y "
+        f"ON y.archive_id=x.archive_id AND y.begin_timestamp=x.begin_timestamp"
+        + (" AND y.dataset_id=x.dataset_id" if needs_ds else "")
+        + f" WHERE {dsx}x.column_id=7 AND x.value='{sel}' "
+          f"AND y.column_id=5 AND y.value='{other}' AND {tw(w24, 'x')};")
+    q["Q6 join for metadata"] = (schema,
+        f"SELECT COUNT(*), MAX(a.size_bytes) FROM {st} s JOIN {at} a "
+        f"ON a.archive_id=s.archive_id AND a.begin_timestamp=s.begin_timestamp"
+        + (" AND a.dataset_id=s.dataset_id" if needs_ds else "")
+        + f" WHERE {dss}s.column_id=7 AND s.value='{sel}' AND {tw(w24, 's')};")
+    q["Q7 archives time range"] = (schema,
+        f"SELECT COUNT(*), SUM(size_bytes) FROM {at} WHERE {ds}{tw24};")
+    tabs = all_tables(cfg, a)
+    inlist = ",".join(str(j) for j in range(a.datasets))
     br = []
-    for s2, a2, t2, nd in all_tables(cfg, a):
-        ks = [j for j in range(a.datasets) if plan(cfg, j, a)[:3] == (s2, a2, t2)]
-        pred = f"dataset_id IN ({','.join(str(j) for j in ks)}) AND " if nd else ""
-        br.append(f"SELECT COUNT(DISTINCT archive_id) c FROM {s2}.{t2} "
-                  f"WHERE {pred}column_id=7 AND value='{v1}' AND {tw('')}")
-    out["X  all tenants"] = measure(
-        e, "SELECT SUM(c) FROM (" + " UNION ALL ".join(br) + ") u;", schemas(cfg, a)[0])
-    return out
+    for schema2, _, st2, nd in tabs:
+        pred = f"dataset_id IN ({inlist}) AND " if nd else ""
+        br.append(f"SELECT COUNT(DISTINCT archive_id) c FROM {schema2}.{st2} "
+                  f"WHERE {pred}column_id=7 AND value='{sel}' AND {tw24}")
+    q["Q8 all tenants"] = (schemas(cfg, a)[0],
+                           "SELECT SUM(c) FROM (" + " UNION ALL ".join(br) + ") u;")
+    return {name: measure(e, sql, sc, a) for name, (sc, sql) in q.items()}
 
 
 # --------------------------------------------------------------------------- retention
-def retention(e, cfg, a):
+def retention(e, cfg, a, before_bytes=0):
     """One expiry cycle under HETEROGENEOUS retention.
 
     A table holding exactly one tier drops its expired partitions outright. `unified` mixes
@@ -387,6 +481,7 @@ def retention(e, cfg, a):
                 rc, _, _ = sh(e, f"ALTER TABLE {tbl} DROP PARTITION p_h{h:04d};", schema)
                 stmts += 1
     el = time.time() - t0
+    after_bytes = data_bytes(e, cfg, a)
     # Rows still present that this dataset's own policy says should be gone.
     over = 0
     for k in range(a.datasets):
@@ -397,7 +492,7 @@ def retention(e, cfg, a):
         _, o, _ = sh(e, f"SELECT COUNT(*) FROM {side} WHERE {ds}begin_timestamp < {cut};",
                      schema)
         over += int(([x for x in o.split() if x.isdigit()] or [0])[-1])
-    return el, stmts, over
+    return el, stmts, over, after_bytes
 
 
 # --------------------------------------------------------------------------- main
@@ -412,6 +507,10 @@ def main():
                     help="retention hours per tier, assigned to users round-robin")
     ap.add_argument("--workers", type=int, default=4, help="concurrent writer processes")
     ap.add_argument("--configs", default=",".join(CONFIGS))
+    ap.add_argument("--restart-cmd", default="",
+                    help='shell command that restarts the server, e.g. '
+                         '"sudo service mariadb restart". Enables TRUE cold timings; '
+                         'without it the cold column is blank and phys_rd stands in.')
     ap.add_argument("--tmpdir", default=tempfile.gettempdir())
     ap.add_argument("--out", default="")
     a = ap.parse_args()
@@ -447,64 +546,90 @@ def main():
             create(e, cfg, a)
             tabs, prts, files, empty = inventory(e, cfg, a)
             sys.stderr.write(f"  [{e['label']}] {cfg}: load\n")
+            wb = wstat(e)
             secs, errs = build(e, cfg, a, td)
-            _, _, files2, fbytes = inventory(e, cfg, a)
+            wa = wstat(e)
+            _, _, _, fbytes = inventory(e, cfg, a)
+            dtot = data_bytes(e, cfg, a)
+            logical = logical_bytes(cfg, a)
+            written = (max(0, wa.get(WGLOBALS[0], 0) - wb.get(WGLOBALS[0], 0))
+                       + max(0, wa.get(WGLOBALS[1], 0) - wb.get(WGLOBALS[1], 0)))
             res[cfg] = {"tabs": tabs, "prts": prts, "files": files, "empty": empty,
-                        "load": secs, "errs": errs, "fbytes": fbytes,
-                        "dbytes": data_bytes(e, cfg, a)}
+                        "load": secs, "errs": errs, "fbytes": fbytes, "dbytes": dtot,
+                        "arch": data_bytes(e, cfg, a, "arch"),
+                        "side": data_bytes(e, cfg, a, "side"),
+                        "logical": logical, "written": written,
+                        "openf": open_files(e)}
             sys.stderr.write(f"  [{e['label']}] {cfg}: query\n")
             res[cfg]["steps"] = steps(e, cfg, a)
             sys.stderr.write(f"  [{e['label']}] {cfg}: retention\n")
-            res[cfg]["ret"] = retention(e, cfg, a)
+            res[cfg]["ret"] = retention(e, cfg, a, dtot)
             for s in schemas(cfg, a):
                 sh(e, f"DROP DATABASE IF EXISTS {s};")
 
         line("")
         line("=" * 98)
-        line(f" P0/P1  inventory, build and size  [{e['label']}]")
+        line(f" P0/P1  structure, size and amplification  [{e['label']}]")
         line("=" * 98)
-        line(f"  {'config':<17}{'tables':>8}{'parts':>8}{'files':>8}{'empty_MB':>10}"
-             f"{'load_s':>9}{'data_MB':>10}{'file_MB':>10}")
-        line("  " + "-" * 80)
+        line(f"  {'config':<17}{'tables':>7}{'parts':>8}{'open_f':>8}{'empty_MB':>10}"
+             f"{'arch_MB':>9}{'side_MB':>9}{'total_MB':>10}{'space_amp':>11}{'write_amp':>11}")
+        line("  " + "-" * 96)
         for cfg in cfgs:
             r = res[cfg]
-            line(f"  {cfg:<17}{r['tabs']:>8,}{r['prts']:>8,}{r['files']:>8,}"
-                 f"{r['empty'] / 1048576:>10,.1f}{r['load']:>9,.1f}"
-                 f"{r['dbytes'] / 1048576:>10,.1f}{r['fbytes'] / 1048576:>10,.1f}")
+            samp = r["dbytes"] / r["logical"] if r["logical"] else 0
+            wamp = r["written"] / r["logical"] if r["logical"] else 0
+            line(f"  {cfg:<17}{r['tabs']:>7,}{r['prts']:>8,}{r['openf']:>8,}"
+                 f"{r['empty'] / 1048576:>10,.1f}{r['arch'] / 1048576:>9,.1f}"
+                 f"{r['side'] / 1048576:>9,.1f}{r['dbytes'] / 1048576:>10,.1f}"
+                 f"{samp:>10.2f}x{wamp:>10.2f}x")
             if r["errs"]:
                 line(f"    !! load errors: {r['errs'][0]}")
-        line("  (empty_MB is measured after CREATE and before any row exists: the price of")
-        line("   simply having the tables. load is CONCURRENT and interleaved across")
-        line("   tenants -- W workers writing their own datasets at the same time.)")
+        line(f"  logical payload = {res[cfgs[0]]['logical'] / 1048576:,.1f} MB "
+             f"(rows x raw column bytes, zero overhead)")
+        line("  space_amp = stored pages / logical.  write_amp = (data written + redo)")
+        line("  / logical, i.e. bytes InnoDB actually pushed to storage per payload byte.")
+        line("  empty_MB is measured after CREATE, before any row: the price of existing.")
+        line("  open_f = Innodb_num_open_files, the pressure the table cache cannot see.")
+        line(f"  (load wall time, informational only: "
+             + ", ".join(f"{c} {res[c]['load']:.0f}s" for c in cfgs) + ")")
 
         line("")
         line("=" * 98)
-        line(f" P2  query, per step  [{e['label']}]")
+        line(f" P2  query matrix  [{e['label']}]")
         line("=" * 98)
-        line(f"  {'config':<17}{'step':<22}{'ms':>8}{'warm':>8}{'scanned':>10}"
-             f"{'phys_rd':>9}{'tbl_miss':>10}")
-        line("  " + "-" * 84)
+        cold_on = bool(a.restart_cmd)
+        line("  cold = first run after a full server restart with the buffer-pool dump"
+             if cold_on else
+             "  cold unavailable (pass --restart-cmd); phys_rd is the portable proxy")
+        line("  disabled, so the pool really is empty." if cold_on else
+             "  for it: pages fetched from storage, independent of current warmth.")
+        line(f"  {'config':<17}{'query':<22}{'cold':>9}{'warm':>8}{'scanned':>10}"
+             f"{'phys_rd':>9}{'parts':>7}{'tbl_miss':>9}")
+        line("  " + "-" * 92)
         for cfg in cfgs:
             for name, m in res[cfg]["steps"].items():
-                if m is None:
-                    line(f"  {cfg:<17}{name:<22}{'query failed':>8}")
+                if m is None or "err" in m:
+                    why = m.get("err", "no result") if m else "no result"
+                    line(f"  {cfg:<17}{name:<22}  FAILED: {why}")
                     continue
-                line(f"  {cfg:<17}{name:<22}{m['ms']:>8,.1f}{m['warm']:>8,.1f}"
-                     f"{m['scanned']:>10,}{m['phys']:>9,}{m['miss']:>10,}")
-            line("  " + "-" * 84)
-        line("  (phys_rd = pages fetched from storage, the portable cold-cost proxy.")
-        line("   tbl_miss = table-cache misses, which is what many-table configs pay.)")
+                cd = f"{m['cold']:,.1f}" if m["cold"] is not None else "-"
+                line(f"  {cfg:<17}{name:<22}{cd:>9}{m['warm']:>8,.1f}"
+                     f"{m['scanned']:>10,}{m['phys']:>9,}{m['parts']:>7,}"
+                     f"{m['miss']:>9,}")
+            line("  " + "-" * 92)
+        line("  parts = partitions the optimizer visits (pruning, from EXPLAIN).")
 
         line("")
         line("=" * 98)
         line(f" P3  retention with HETEROGENEOUS tiers  [{e['label']}]")
         line("=" * 98)
-        line(f"  {'config':<17}{'expiry_s':>10}{'statements':>12}"
+        line(f"  {'config':<17}{'expiry_s':>10}{'statements':>12}{'freed_MB':>11}"
              f"{'rows past policy':>19}")
-        line("  " + "-" * 60)
+        line("  " + "-" * 72)
         for cfg in cfgs:
-            el, stmts, over = res[cfg]["ret"]
-            line(f"  {cfg:<17}{el:>10,.2f}{stmts:>12,}{over:>19,}")
+            el, stmts, over, after = res[cfg]["ret"]
+            freed = (res[cfg]["dbytes"] - after) / 1048576
+            line(f"  {cfg:<17}{el:>10,.2f}{stmts:>12,}{freed:>11,.1f}{over:>19,}")
         line("  (rows past policy = rows still present that the owning dataset's own")
         line("   retention says should be gone. A table mixing tiers cannot drop a")
         line("   partition until its LONGEST tier expires, so shorter tenants over-retain.")
