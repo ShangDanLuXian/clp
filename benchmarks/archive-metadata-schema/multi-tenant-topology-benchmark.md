@@ -13,9 +13,12 @@ turns out: every query shape CLP actually serves is scoped to a single dataset, 
 shapes all five configurations tie. The decision is therefore made entirely on the builder
 and operational axes -- storage, write amplification, and footprint -- and `unified` wins
 every one of them. The current one-set-of-tables-per-dataset layout pays a 100x idle-storage
-floor and 36% more physical write bandwidth -- though 5.2 converts that second ratio to
-about 9 KB/s and argues it is a rounding error -- and, decisively, its tablespace count
-grows without bound in the number of tenants, toward limits hardware cannot raise.
+floor (only where partitions stay sparse -- 5.1) and 36% more physical write bandwidth
+(about 9 KB/s in absolute terms, a rounding error -- 5.2). Converted to absolutes most of
+the margins are small, and the recommendation rests instead on one structural fact and one
+negative result: `per_dataset`'s tablespace count grows with tenant count toward hard
+ceilings that hardware cannot raise, and co-locating tenants in one B-tree costs a
+single-tenant query nothing measurable.
 Section 5.4 records what happens IF retention were executed by partition drops; under the
 row-wise model it decides nothing, and the `tiered` variant it motivates is kept only as a
 contingency.
@@ -202,7 +205,10 @@ in this scenario.
 Where it becomes ongoing waste is many SMALL tenants -- the regime where a fixed cost per
 (dataset x partition) has nothing to amortize against. A near-idle dataset under
 `per_dataset` with hourly partitions and K=6 allocates 6 x 170 x 64 KB, about 65 MB, to hold
-almost nothing; ten thousand such datasets is ~640 GB of near-empty files. This is the
+almost nothing; ten thousand such datasets is ~640 GB of near-empty files. Note this is a
+hazard of creating datasets that carry no data, not a cost of scale: ten thousand REAL
+datasets at this run's density hold ~434 GB of actual metadata with the floor absorbed
+inside it, so the two figures are alternatives, never a sum. This is the
 sharpest statement of what `unified` does: it amortizes partition overhead ACROSS tenants
 rather than multiplying it BY them, so a partition is dense whenever the aggregate rate is
 dense and an idle tenant costs only its rows. Coarser partitioning is the other lever --
@@ -461,23 +467,40 @@ Compared with today's per-dataset layout the differences are 100x fewer tablespa
 100x less idle allocation, 36% less physical write bandwidth, and 3.4x less ingest wall
 time. Ordered by whether they can matter -- which is not the same as ordered by ratio:
 
-| cost of `per_dataset`   | at 100 datasets | at 10,000 datasets, K=6 | nature          |
-|-------------------------|-----------------|-------------------------|-----------------|
-| tablespace files        | 34,000          | 10.2 M                  | HARD CEILING    |
-| idle allocation         | 2,125 MB        | 637 GB                  | linear, IF small tenants |
-| extra write bandwidth   | ~9 KB/s         | ~900 KB/s               | linear, trivial |
-| extra ingest wall time  | 278 s / 7 days  | ~7.7 h / 7 days         | linear, buy HW  |
+| cost of `per_dataset`  | at 100 datasets | at 10,000 datasets, K=6 | does it matter?      |
+|------------------------|-----------------|-------------------------|----------------------|
+| tablespace files       | 34,000          | 10.2 M                  | **YES -- a ceiling** |
+| idle allocation        | 2,125 MB        | 637 GB IF near-empty    | only if tenants tiny |
+| extra write bandwidth  | ~9 KB/s         | ~900 KB/s               | no                   |
+| extra ingest wall time | 278 s / 7 days  | ~7.7 h / 7 days         | no -- buy hardware   |
 
-The bottom two rows are things hardware solves. The top row is not: file descriptors and the
-8,192-partitions-per-table limit are ceilings, and `per_dataset` approaches them purely by
-signing customers, independent of how much data anyone sends. The idle row becomes large in
-absolute terms without becoming a ceiling, and only in the many-small-tenants regime -- 5.1
-gives the density threshold (~18 archives per partition) below which it bites at all.
+Only the first row survives scrutiny, and the honest reading of this table is that the
+recommendation rests on it almost alone.
+
+The idle-allocation row assumes every partition sits at the 64 KB floor, i.e. that all
+10,000 datasets are nearly empty. At this run's density each (dataset, partition) holds
+~251 KB of real data, so the floor is absorbed and contributes nothing; the figures are not
+additive with actual storage, and at 10,000 REAL datasets the metadata is ~434 GB of which
+the floor is noise. That row is a hazard of careless dataset creation, not a property of the
+topology. The bottom two rows are rounding errors in absolute terms (5.2) and in any case
+are things hardware solves.
+
+The first row is different in kind: file descriptors and the 8,192-partitions-per-table
+limit are ceilings, not gradients, and `per_dataset` approaches them by signing customers,
+independent of how much data anyone sends. `K x N x (hours + 2)` reaches the maximum
+grantable `ulimit -n` of 1,048,576 at roughly 1,030 datasets under 7-day hourly partitions
+with K=6, at ~242 datasets under 30-day hourly, and at ~68 datasets under 7-year daily.
+Those are ordinary configurations, not asymptotes. `unified` needs `K x (hours + 2)` for the
+entire deployment -- 1,020 files at 7-day hourly, 15,354 at 7-year daily -- forever
+independent of tenant count.
 
 The recommendation therefore does not rest on any figure's magnitude at this run's scale --
-converted to absolutes, most of them are small. It rests on `unified` removing the factor of
-N from the one quantity that cannot be bought out of, while costing a single-tenant query
-nothing and improving the rest for free.
+converted to absolutes, most of them are small or conditional. It rests on two things: that
+`unified` removes the factor of N from the one quantity that has a hard ceiling, and on this
+benchmark's central NEGATIVE result -- that co-locating 100 tenants in one B-tree costs a
+single-tenant query nothing measurable (5.3). The ceiling could have been derived on paper.
+The negative result could not, and without it `unified` would be unviable whatever its file
+count.
 
 The case is entirely a builder-side and operational one. Query latency does not choose
 between these topologies: every shape CLP actually serves is scoped to one dataset, and on
