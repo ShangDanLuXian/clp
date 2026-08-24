@@ -347,6 +347,20 @@ operationally is: a background row-wise delete driven by each dataset's policy v
 config table -- which also makes retention arbitrary and mutable per dataset for free (a
 policy change is an UPDATE; the next delete cycle applies it, retroactively included).
 
+**This does not make `unified` immune to the file-handle ceiling; it makes the ceiling
+predictable.** Tablespace files are `K x (retention_hours + 2)`, so `unified` still crosses
+`innodb_open_files = 2000` at a long enough retention or a wide enough schema -- K=6 kinds
+at 30-day retention is 4,332 files, over the cap with a single tenant. The difference is
+which input moves it. Under `unified` the inputs are retention length and schema breadth:
+both chosen at design time, both computable exactly before deployment, neither growing on
+its own. Under `per_dataset` the same formula carries a factor of N, so the input that moves
+it is onboarding a customer -- crossing is not a design decision but a consequence of
+growth, and it continues without bound (1,000 datasets at K=6 and 30 days is 4.3 M files,
+beyond any workable fd limit). When `unified` does cross, the levers are raising the cap
+against a known bounded number, coarsening partitions to daily (that same K=6 30-day case
+becomes 192 files), or reducing K. Those levers exist for `per_dataset` too, but they are
+also divided by N, so they do not rescue it.
+
 Compared with today's per-dataset layout, at this run's scale: 100x fewer tables and files
 (344 open files with headroom instead of pinned saturation at the innodb_open_files cap),
 100x less idle allocation, and 27% less physical write bandwidth for identical data.
