@@ -154,7 +154,8 @@ differenced around each operation; partitions visited from `EXPLAIN PARTITIONS`.
 ## 4.0 What is measured
 
 - **P0 structure**: tables, partitions, open files, and the bytes a configuration costs
-  while completely EMPTY -- the price of existing before any data arrives.
+  while completely EMPTY -- allocated-but-unused space, measured after CREATE and before any
+  row exists. See 5.1 for why this is a steady-state floor rather than a day-one cost.
 - **P1 size and amplification**: stored bytes split by table kind; space amplification;
   write amplification across the concurrent build.
 - **P2 query matrix**: eight query shapes, each isolating one thing topology could change --
@@ -183,10 +184,24 @@ differenced around each operation; partitions visited from `EXPLAIN PARTITIONS`.
 | `unified`         |      2 |        340 |       344 |       21.2 |
 | `tiered`          |      6 |      1,020 |     1,024 |       63.8 |
 
-Empty cost is pure partition-file floor: 64 KB x partition count, exactly (2,125 MB /
-34,000 = 64 KB). Per dataset under the current design that is ~21 MB of allocation before a
-single row exists, times however many kinds production adds. At 1,000 datasets it is ~21 GB
-of floor.
+Empty cost is pure partition-file floor: a new InnoDB tablespace allocates 64 KB before it
+holds anything (at the default 16 KB page size), so the column is exactly 64 KB x partition
+count -- 2,125 MB / 34,000 = 64 KB. Per dataset under the current design that is ~21 MB,
+times however many kinds production adds. At 1,000 datasets it is ~21 GB of floor.
+
+**This is a steady-state figure, not a day-one cost.** Partitions are created by DDL, never
+by data arriving -- a row outside every declared boundary is rejected, not accommodated. The
+benchmark can declare all 170 boundaries at CREATE TABLE because it generates its own data
+and therefore knows the time range in advance; production has no such knowledge and would
+create a floor plus some hours forward of now, with a scheduled job extending the leading
+edge as retention removes the trailing one. The count climbs to `retention_hours + 2` over
+one retention period and then holds. So read this column as what a configuration costs once
+a dataset has been alive for a full retention window, which is the state it spends its life
+in. The ratios between configurations are unaffected: all five were measured identically.
+
+Note that under `per_dataset` this floor is paid even by a dataset shipping NO data, since
+the partition-maintenance job extends the window on a schedule and has no reason to know a
+dataset is idle.
 
 The `open_f` column shows file-handle saturation: all three many-table configurations sit
 pinned at exactly the `innodb_open_files` cap of 2,000, so the server must evict and reopen

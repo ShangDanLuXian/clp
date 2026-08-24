@@ -597,7 +597,10 @@ def main():
              f"(rows x raw column bytes, zero overhead)")
         line("  space_amp = stored pages / logical.  write_amp = (data written + redo)")
         line("  / logical, i.e. bytes InnoDB actually pushed to storage per payload byte.")
-        line("  empty_MB is measured after CREATE, before any row: the price of existing.")
+        line("  empty_MB is measured after CREATE, before any row: 64 KB x partition count.")
+        line("  It is a STEADY-STATE floor, not a day-one cost -- this harness declares the")
+        line("  whole retention window up front because it knows its own time range, whereas")
+        line("  production grows the window forward and reaches the same count in one cycle.")
         line("  open_f = Innodb_num_open_files, the pressure the table cache cannot see.")
         line(f"  (load wall time, informational only: "
              + ", ".join(f"{c} {res[c]['load']:.0f}s" for c in cfgs) + ")")
