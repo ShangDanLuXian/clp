@@ -13,8 +13,9 @@ turns out: every query shape CLP actually serves is scoped to a single dataset, 
 shapes all five configurations tie. The decision is therefore made entirely on the builder
 and operational axes -- storage, write amplification, and footprint -- and `unified` wins
 every one of them. The current one-set-of-tables-per-dataset layout pays a 100x idle-storage
-floor and 36% more physical write bandwidth, and its tablespace count grows without bound
-in the number of tenants.
+floor and 36% more physical write bandwidth -- though 5.2 converts that second ratio to
+about 9 KB/s and argues it is a rounding error -- and, decisively, its tablespace count
+grows without bound in the number of tenants, toward limits hardware cannot raise.
 Section 5.4 records what happens IF retention were executed by partition drops; under the
 row-wise model it decides nothing, and the `tiered` variant it motivates is kept only as a
 contingency.
@@ -259,6 +260,22 @@ DDL, and filesystem directories handle at all.
 Logical payload: 1,301.2 MB. Load wall times (informational): per_dataset 396 s,
 schema_per_user 400 s, per_user 263 s, unified 118 s, tiered 119 s.
 
+**Both of those spreads must be read in absolute terms, or they mislead.** The 1.2 M
+archives represent 168 h of ingest -- 604,800 s of real time -- loaded in 396 s, so the
+required steady-state rate is ~2 archives/s against a demonstrated ~3,030/s. The worst
+configuration is over-provisioned for its own ingest by roughly 1,500x, and the 3.4x spread
+between configurations is 3.4x on a quantity with three orders of magnitude of slack.
+
+The write-amplification ratio deflates the same way once converted: 15.91x of 1,301.2 MB is
+20,700 MB over seven days against `unified`'s 15,240 MB, a difference of 5,465 MB, or about
+**9 KB/s sustained** -- ~285 GB/year, against SSD endurance measured in petabytes. The 36%
+figure is real and reproducible, and at this scale it is an operational rounding error.
+
+Neither is therefore a reason to prefer any configuration. They are reported because they
+scale linearly with tenant count and because they corroborate the mechanism (many B-trees
+dirtied concurrently versus few), not because their magnitudes matter here. Section 7.0
+weighs them accordingly.
+
 Two findings. First, **write amplification is 36% higher for the per-dataset layout** (15.9x
 vs 11.7x): identical rows, but flushing them through 34,000 small partitions writes more
 partially-filled pages. Every payload byte costs ~12-16 bytes of physical writes either way
@@ -419,12 +436,26 @@ against a known bounded number, coarsening partitions to daily (that same K=6 30
 becomes 192 files), or reducing K. Those levers exist for `per_dataset` too, but they are
 also divided by N, so they do not rescue it.
 
-Compared with today's per-dataset layout, at this run's scale, ordered by strength of
-evidence: 100x less idle allocation (2,125 MB against 21.2 MB, measured), 27% less physical
-write bandwidth for identical data (measured), and 100x fewer tables and tablespace files --
-which buys roughly 10% on scan-heavy work at this oversubscription ratio (5.1), and, far
-more importantly, removes the factor of N that eventually walks the file count past the
-process fd limit entirely.
+Compared with today's per-dataset layout the differences are 100x fewer tablespace files,
+100x less idle allocation, 36% less physical write bandwidth, and 3.4x less ingest wall
+time. Ordered by whether they can matter -- which is not the same as ordered by ratio:
+
+| cost of `per_dataset`   | at 100 datasets | at 10,000 datasets, K=6 | nature          |
+|-------------------------|-----------------|-------------------------|-----------------|
+| tablespace files        | 34,000          | 10.2 M                  | HARD CEILING    |
+| idle allocation         | 2,125 MB        | 637 GB                  | linear, real    |
+| extra write bandwidth   | ~9 KB/s         | ~900 KB/s               | linear, trivial |
+| extra ingest wall time  | 278 s / 7 days  | ~7.7 h / 7 days         | linear, buy HW  |
+
+The bottom two rows are things hardware solves. The top row is not: file descriptors and the
+8,192-partitions-per-table limit are ceilings, and `per_dataset` approaches them purely by
+signing customers, independent of how much data anyone sends. The idle row is the one
+measured cost that becomes large in absolute terms without becoming a ceiling.
+
+The recommendation therefore does not rest on any figure's magnitude at this run's scale --
+converted to absolutes, most of them are small. It rests on `unified` removing the factor of
+N from the one quantity that cannot be bought out of, while costing a single-tenant query
+nothing and improving the rest for free.
 
 The case is entirely a builder-side and operational one. Query latency does not choose
 between these topologies: every shape CLP actually serves is scoped to one dataset, and on
