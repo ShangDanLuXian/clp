@@ -83,6 +83,22 @@ def size_mb(e, tbl):
     return 0.0
 
 
+def value_of(v, width):
+    """Zero-padded decimal, so the encoding is EXACTLY `width` bytes and stays injective.
+
+    An earlier version built "v<n>" then truncated to width, which silently collapsed
+    distinct values whenever width was too narrow to hold the index: at width 4 only ~1,000
+    strings exist, so a cell asking for 600,000 distinct values gave the plain table far
+    more repetition than requested and made the dictionary's own PRIMARY KEY drop rows as
+    duplicates. Every W=4 cell in that run was meaningless. `fits` below now refuses such a
+    cell instead of reporting a number for it."""
+    return str(v).zfill(width)
+
+
+def fits(distinct, width):
+    return len(str(max(0, distinct - 1))) <= width
+
+
 def generate(fp, fd, fm, rows, width, distinct):
     """One column, `rows` postings drawn round-robin over `distinct` values, written once
     with the value inline and once as a dictionary id. Round-robin rather than random so
@@ -91,13 +107,12 @@ def generate(fp, fd, fm, rows, width, distinct):
     with open(fp, "w") as p, open(fd, "w") as d:
         for i in range(rows):
             v = i % distinct
-            val = ("v" + str(v)).ljust(width, "x")[:width]
             ts = t0 + (i % 4032) * 3600
-            p.write(f"0\t0\t{val}\t{ts}\t{i}\n")
+            p.write(f"0\t0\t{value_of(v, width)}\t{ts}\t{i}\n")
             d.write(f"0\t0\t{v}\t{ts}\t{i}\n")
     with open(fm, "w") as m:
         for v in range(distinct):
-            m.write(f"0\t0\t{('v' + str(v)).ljust(width, 'x')[:width]}\t{v}\n")
+            m.write(f"0\t0\t{value_of(v, width)}\t{v}\n")
 
 
 PLAIN = ("dataset_id SMALLINT UNSIGNED NOT NULL, column_id TINYINT UNSIGNED NOT NULL, "
@@ -149,6 +164,10 @@ def main():
             distinct = max(1, a.rows // R)
             wstar = (K_ID * R + B_DICT) / (R - 1) if R > 1 else float("inf")
             for w in widths:
+                if not fits(distinct, w):
+                    print(f"  {R:>6} {wstar:>7.1f} | {w:>4}   skipped: {w} bytes cannot hold "
+                          f"{distinct:,} distinct values injectively")
+                    continue
                 fp = os.path.join(tmp, "p.tsv")
                 fd = os.path.join(tmp, "d.tsv")
                 fm = os.path.join(tmp, "m.tsv")
