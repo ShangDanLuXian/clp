@@ -324,8 +324,17 @@ def go_cold(e, a):
     if not a.restart_cmd:
         return False
     sh(e, "SET GLOBAL innodb_buffer_pool_dump_at_shutdown=OFF;")
-    subprocess.run(a.restart_cmd, shell=True, capture_output=True, timeout=300)
-    for _ in range(60):
+    # NEVER capture_output here. The command starts a DAEMON, which inherits the pipes;
+    # subprocess.run then waits for EOF on a pipe the daemon holds open for its whole life,
+    # and hangs forever -- the timeout kills the shell but not the grandchild holding the
+    # pipe. DEVNULL plus a new session keeps the restart detached and bounded.
+    try:
+        subprocess.run(a.restart_cmd, shell=True, stdin=subprocess.DEVNULL,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       timeout=300, start_new_session=True)
+    except subprocess.TimeoutExpired:
+        return False
+    for _ in range(180):                       # a many-partition server is slow to reopen
         if sh(e, "SELECT 1;")[0] == 0:
             return True
         time.sleep(2)
