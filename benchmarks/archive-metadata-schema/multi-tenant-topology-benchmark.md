@@ -87,7 +87,8 @@ assuming it.
 **open_f.** `Innodb_num_open_files`: how many tablespace files the server holds open at the
 moment of measurement. When a configuration needs more files than `innodb_open_files`, the
 server continuously evicts and reopens them; this gauge pinned at the cap is the direct
-signature of that thrashing.
+signature of that thrashing. It reports the working set at the moment it is sampled, which
+is a structural fact, not a latency cost -- see 5.1 for why the two must be kept apart.
 
 ---
 
@@ -185,10 +186,27 @@ Empty cost is pure partition-file floor: 64 KB x partition count, exactly (2,125
 single row exists, times however many kinds production adds. At 1,000 datasets it is ~21 GB
 of floor.
 
-The `open_f` column is the direct evidence of file-handle saturation: all three many-table
-configurations sit pinned at exactly the `innodb_open_files` cap of 2,000, meaning the
-server evicts and reopens tablespace files continuously. `unified` and `tiered` hold every
-file they need open at once, with headroom.
+The `open_f` column shows file-handle saturation: all three many-table configurations sit
+pinned at exactly the `innodb_open_files` cap of 2,000, so the server must evict and reopen
+tablespace files to touch anything outside the cached 2,000. `unified` and `tiered` hold
+every file they need open at once, with headroom.
+
+**This measures saturation, not a cost of saturation, and the two must not be conflated.**
+The gauge is sampled around the BUILD, where 16 workers writing 100 datasets concurrently
+genuinely hold a working set past the cap. The query phase is one query at a time on an idle
+server with a working set of 24 partitions, which fits under any cap -- which is why section
+5.3 finds no query penalty and why that is not a contradiction. Whether saturation costs
+foreground query latency would require a concurrent multi-tenant query workload, and this
+run does not contain one (section 8.0).
+
+What the file count IS measured to cost: idle allocation (the table above) and server
+restart time (section 6.2 -- minutes for 34,000 tablespaces against seconds for 340). The
+write-amplification gap in 5.2 should not be attributed to file handles either; B-tree count
+is the likelier mechanism. Beyond those, the file-count argument is structural rather than
+empirical: `K x N x (hours + 2)` grows without bound in N, and at 1,000 datasets with K=6
+and 30-day retention it reaches 4.3 M files -- past the process fd limit and past what
+backup, DDL, and filesystem directories handle comfortably. That case rests on arithmetic
+and needs no latency number.
 
 ### 5.2 Size and write amplification (P1)
 
@@ -395,17 +413,22 @@ here as physically null: adopt it only as an interim step for SQL hygiene, never
 
 ## 8.0 Open questions
 
-1. **Delete-job interference.** The retention job's own cost is out of scope, but a
+1. **Concurrent multi-tenant query load.** Every query in this run executed alone on an idle
+   server. Two effects can only appear under concurrency, and both are specific to the
+   design being recommended: contention on a single shared B-tree's hot pages, and an actual
+   cost for file-handle saturation (5.1), whose working set only exceeds the cap when many
+   tenants query different partitions at once. This is the most valuable missing experiment.
+2. **Delete-job interference.** The retention job's own cost is out of scope, but a
    sustained background delete churns the buffer pool and purge, which can surface in
    foreground query latency -- the one retention-adjacent effect that touches a metric we
    care about. Unmeasured.
-2. **Same-tenant, multi-dataset fan-out.** Does a tenant ever query across the several
+3. **Same-tenant, multi-dataset fan-out.** Does a tenant ever query across the several
    datasets it owns in one request? If so it is the only fan-out shape that survives the
    authorization boundary, and the matrix has no measurement of it (5.3). Adding it is
    small: Q8's structure at width `datasets-per-user` instead of width 100. The expected
    result is a latency tie, leaving the generated-UNION construction cost as the only
    difference -- but that is a prediction, not a measurement.
-3. The per_user anomalies (6.1) deserve one rerun before that configuration is described in
+4. The per_user anomalies (6.1) deserve one rerun before that configuration is described in
    any external document.
-4. The targeted cold pass on `unified` (6.2).
-5. The same matrix on MySQL 8, where partition-count costs are known to be larger.
+5. The targeted cold pass on `unified` (6.2).
+6. The same matrix on MySQL 8, where partition-count costs are known to be larger.
