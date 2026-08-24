@@ -190,7 +190,28 @@ holds anything (at the default 16 KB page size), so the column is exactly 64 KB 
 count -- 2,125 MB / 34,000 = 64 KB. Per dataset under the current design that is ~21 MB,
 times however many kinds production adds. At 1,000 datasets it is ~21 GB of floor.
 
-**This is a steady-state figure, not a day-one cost.** Partitions are created by DDL, never
+**The floor is only a lasting cost where partitions stay SPARSE.** 64 KB is an initial
+allocation; a partition holding real data grows past it, and the floor becomes the first
+64 KB of a file that is earning its keep. At this run's ~81 stored bytes per posting row,
+64 KB holds ~810 rows, or about **18 archives** -- so a dataset producing more than ~18
+archives per hourly partition absorbs the floor entirely. The benchmark's datasets produce
+71 archives/hour, comfortably above that line, which means the 2,125 MB above is a starting
+state that this run's own data had absorbed by the time it finished. It is NOT ongoing waste
+in this scenario.
+
+Where it becomes ongoing waste is many SMALL tenants -- the regime where a fixed cost per
+(dataset x partition) has nothing to amortize against. A near-idle dataset under
+`per_dataset` with hourly partitions and K=6 allocates 6 x 170 x 64 KB, about 65 MB, to hold
+almost nothing; ten thousand such datasets is ~640 GB of near-empty files. This is the
+sharpest statement of what `unified` does: it amortizes partition overhead ACROSS tenants
+rather than multiplying it BY them, so a partition is dense whenever the aggregate rate is
+dense and an idle tenant costs only its rows. Coarser partitioning is the other lever --
+daily partitions move the threshold from ~18 archives/hour to ~18 archives/day.
+
+So this row matters if the deployment expects many small or dormant datasets, and barely
+matters if it is a modest number of busy ones.
+
+**This is also a steady-state figure, not a day-one cost.** Partitions are created by DDL, never
 by data arriving -- a row outside every declared boundary is rejected, not accommodated. The
 benchmark can declare all 170 boundaries at CREATE TABLE because it generates its own data
 and therefore knows the time range in advance; production has no such knowledge and would
@@ -443,14 +464,15 @@ time. Ordered by whether they can matter -- which is not the same as ordered by 
 | cost of `per_dataset`   | at 100 datasets | at 10,000 datasets, K=6 | nature          |
 |-------------------------|-----------------|-------------------------|-----------------|
 | tablespace files        | 34,000          | 10.2 M                  | HARD CEILING    |
-| idle allocation         | 2,125 MB        | 637 GB                  | linear, real    |
+| idle allocation         | 2,125 MB        | 637 GB                  | linear, IF small tenants |
 | extra write bandwidth   | ~9 KB/s         | ~900 KB/s               | linear, trivial |
 | extra ingest wall time  | 278 s / 7 days  | ~7.7 h / 7 days         | linear, buy HW  |
 
 The bottom two rows are things hardware solves. The top row is not: file descriptors and the
 8,192-partitions-per-table limit are ceilings, and `per_dataset` approaches them purely by
-signing customers, independent of how much data anyone sends. The idle row is the one
-measured cost that becomes large in absolute terms without becoming a ceiling.
+signing customers, independent of how much data anyone sends. The idle row becomes large in
+absolute terms without becoming a ceiling, and only in the many-small-tenants regime -- 5.1
+gives the density threshold (~18 archives per partition) below which it bites at all.
 
 The recommendation therefore does not rest on any figure's magnitude at this run's scale --
 converted to absolutes, most of them are small. It rests on `unified` removing the factor of
