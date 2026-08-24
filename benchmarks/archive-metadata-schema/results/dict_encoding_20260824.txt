@@ -1,0 +1,24 @@
+engine local 10.11.14-MariaDB-0ubuntu0.24.04.1
+60,000 archives x 45 postings = 2,700,000 rows, 3404 distinct values per dataset
+
+  width design                        MB   B/row  vs plain
+  --------------------------------------------------------
+     12 plain (value inline)       226.0    87.8        --
+     12 dict (INT value_id)        186.2    72.3    -17.6%
+     12 plain + COMPRESSED kbs8      88.5    34.4    -60.8%
+     12 dict + COMPRESSED kbs8      77.7    30.2    -65.6%
+
+     40 plain (value inline)       346.0   134.4        --
+     40 dict (INT value_id)        186.3    72.4    -46.2%
+     40 plain + COMPRESSED kbs8     141.0    54.8    -59.2%
+     40 dict + COMPRESSED kbs8      77.8    30.2    -77.5%
+
+    100 plain (value inline)       582.0   226.0        --
+    100 dict (INT value_id)        187.5    72.8    -67.8%
+    100 plain + COMPRESSED kbs8     258.0   100.2    -55.7%
+    100 dict + COMPRESSED kbs8      79.0    30.7    -86.4%
+
+  Rows are identical across designs; only the value encoding differs.
+  The dict rows INCLUDE the dictionary table, so the comparison is net.
+
+[exited with code 0]
