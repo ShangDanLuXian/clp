@@ -155,25 +155,30 @@ The break-even width depends only on the id width and the repetition rate. It ca
 below `k` -- with unbounded repetition the dictionary is free, so it wins as soon as a value
 is wider than its id -- and it DIVERGES as R approaches 1.
 
-`bench_dict_breakeven.py` confirms it, with k=4 and B=30 fitted:
+`bench_dict_breakeven.py` confirms it, with k=4 and B=30 fitted (raw output in
+`results/dict_breakeven_20260824.txt`):
 
-| R   | W\* predicted | sign flip observed                     |
-|----:|-------------:|----------------------------------------|
-| 2   |         38.0 | between 32 (+6.4%) and 64 (-11.1%)     |
-| 5   |         12.5 | at 16 (+0.4%, dead even)               |
-| 20  |          5.8 | below 8 (already -4.5%)                |
-| 200 |          4.2 | below 8 (already -16.5%)               |
+| R   | W\* predicted | observed crossover | bracket                     |
+|----:|-------------:|-------------------:|-----------------------------|
+| 2   |         38.0 |                ~35 | +1.5% at 32 -> -8.9% at 48  |
+| 5   |         12.5 |               ~13.5 | +2.9% at 12 -> -4.9% at 16 |
+| 20  |          5.8 |                 <=6 | already -3.3% at 6         |
+| 200 |          4.2 |                 <=6 | already -7.1% at 6         |
 
-**Compression roughly doubles the break-even.** Measured at 1.7x-2.1x across the range, with
-no clear trend in R, so the working rule with `kbs8` enabled is `W* ~ 2(kR + B)/(R - 1)`:
+**Compression raises the break-even, but by no constant factor.** A coarser first run
+suggested a clean 2x; the finer grid does not support it -- recomputed ratios are ~1.2,
+~1.9, ~1.4 and ">1.8", with no trend in R. Compressed measurements are also visibly noisy,
+because zlib's ratio inside an 8 KB block depends on how particular byte patterns land. The
+`plain+z` column at R=2 is not even monotonic in width (44.4, 37.4, 32.9, 41.9, 45.4, 52.5,
+42.5, 52.0, 61.5 MB for W = 6..64), so +-20% brackets are the best this data supports.
 
-| repetition R | dictionary pays above |
-|-------------:|----------------------:|
-|            2 |                 ~76 B |
-|            5 |                 ~25 B |
-|           20 |                 ~12 B |
-|          200 |                  ~8 B |
-|    very high |          ~8 B (= 2*k) |
+What IS solid about the compressed case:
+
+| repetition R | compressed behaviour                                    |
+|-------------:|---------------------------------------------------------|
+|            2 | plain wins to 64 B; the dictionary never wins in range   |
+|            5 | within a few percent of each other across 12-16 B        |
+|          >=20 | the dictionary wins from roughly 10-12 B upward          |
 
 ### 4.1 The R = 1 case, and why it is not hypothetical
 
@@ -202,9 +207,12 @@ costs a fraction of one column rather than the design.
 **For the MVP: take compression, skip the dictionary.**
 
 Compression is one DDL clause, no schema change, no write-path work, and 61% at current
-widths. The dictionary, at those same widths, adds 12.2% -- and section 4.0 explains why
-that is not a small win but a coin flip: the compressed break-even at `c8`'s repetition
-rates is 8-12 B and `c8`'s mean width is 11.6 B, sitting on the line. Against that it costs
+widths. The dictionary at those same widths is a wash, measured directly at the operating
+point rather than inferred: `c8` runs W ~ 11.6 with R from 60 to 15,000, and the matching
+sweep cells (R=20/W=12 and R=200/W=12) give compressed deltas of **-1.7% and -5.1%**. The
+aggregate c8 measurement in section 2.0 put it at -12.2%, higher because that mix includes
+columns at R ~ 15,000 where the dictionary does best. Either way it is single digits to low
+double digits, at the crossover rather than past it. Against that it costs
 five things: a dictionary table, value-to-id resolution with concurrency control on every
 write, orphan collection, two-phase prefix wildcards, and per-column encoding decisions --
 which means two storage paths and a migration whenever a column changes category.
