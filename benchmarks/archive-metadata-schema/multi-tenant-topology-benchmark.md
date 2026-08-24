@@ -13,7 +13,8 @@ turns out: every query shape CLP actually serves is scoped to a single dataset, 
 shapes all five configurations tie. The decision is therefore made entirely on the builder
 and operational axes -- storage, write amplification, and footprint -- and `unified` wins
 every one of them. The current one-set-of-tables-per-dataset layout pays a 100x idle-storage
-floor, 36% more physical write bandwidth, and saturates the server's file-handle cache.
+floor and 36% more physical write bandwidth, and its tablespace count grows without bound
+in the number of tenants.
 Section 5.4 records what happens IF retention were executed by partition drops; under the
 row-wise model it decides nothing, and the `tiered` variant it motivates is kept only as a
 contingency.
@@ -37,7 +38,7 @@ kinds and the results scale by K, the kind count:
 **Partition / tablespace file.** Every table is `PARTITION BY RANGE (begin_timestamp)` into
 hourly partitions. InnoDB stores each partition as its own file on disk. A partition file
 has a fixed floor of 64 KB even when it holds zero rows, and the server holds an open file
-handle per recently-touched partition, bounded by `innodb_open_files`.
+handle per populated partition, bounded by `innodb_open_files`.
 
 **dataset_id-leading primary key.** In any configuration where one table holds more than one
 dataset, `dataset_id` is the FIRST column of the primary key, e.g. for the side table:
@@ -84,11 +85,12 @@ storage. See section 6.2 for why this still under-measured cold in this run.
 taken from `EXPLAIN PARTITIONS`. Confirms that time-range predicates prune, rather than
 assuming it.
 
-**open_f.** `Innodb_num_open_files`: how many tablespace files the server holds open at the
-moment of measurement. When a configuration needs more files than `innodb_open_files`, the
-server continuously evicts and reopens them; this gauge pinned at the cap is the direct
-signature of that thrashing. It reports the working set at the moment it is sampled, which
-is a structural fact, not a latency cost -- see 5.1 for why the two must be kept apart.
+**open_f.** `Innodb_num_open_files`: how many tablespace files the server holds open. It
+equals `min(tablespaces holding data, innodb_open_files)` -- files are opened at server
+startup, not by the queries that read them (measured in 5.1), so this gauge describes the
+INSTANCE and never a query's time window. Pinned at the cap means the instance has more
+tablespaces than cache slots, and hence that accesses outside the cached set must evict and
+reopen. It does not by itself mean anything is slow: 5.1 measures that cost at roughly 10%.
 
 ---
 
@@ -191,22 +193,42 @@ pinned at exactly the `innodb_open_files` cap of 2,000, so the server must evict
 tablespace files to touch anything outside the cached 2,000. `unified` and `tiered` hold
 every file they need open at once, with headroom.
 
-**This measures saturation, not a cost of saturation, and the two must not be conflated.**
-The gauge is sampled around the BUILD, where 16 workers writing 100 datasets concurrently
-genuinely hold a working set past the cap. The query phase is one query at a time on an idle
-server with a working set of 24 partitions, which fits under any cap -- which is why section
-5.3 finds no query penalty and why that is not a contradiction. Whether saturation costs
-foreground query latency would require a concurrent multi-tenant query workload, and this
-run does not contain one (section 8.0).
+**What the gauge means, and what saturation costs, were both measured separately** on a
+throwaway instance by `check_file_handles.sh`, because this run reported the pinned gauge as
+a finding without establishing either.
 
-What the file count IS measured to cost: idle allocation (the table above) and server
-restart time (section 6.2 -- minutes for 34,000 tablespaces against seconds for 340). The
-write-amplification gap in 5.2 should not be attributed to file handles either; B-tree count
-is the likelier mechanism. Beyond those, the file-count argument is structural rather than
-empirical: `K x N x (hours + 2)` grows without bound in N, and at 1,000 datasets with K=6
-and 30-day retention it reaches 4.3 M files -- past the process fd limit and past what
-backup, DDL, and filesystem directories handle comfortably. That case rests on arithmetic
-and needs no latency number.
+*The gauge is a property of the instance, not of a query.* Counting the server's open file
+descriptors by name in `/proc/<pid>/fd`, 60 of a table's 61 partition files were already
+open after a clean restart with the table untouched -- and with buffer-pool dump and restore
+both disabled, so the pool was not the cause. Queries pruned to one partition, to ten, and a
+full sweep each added nothing. So:
+
+    Innodb_num_open_files = min(tablespaces holding data, innodb_open_files)
+
+A query's time window does not enter into it. Thrash is therefore an instance-level
+condition -- total tablespaces exceeding the cap -- not something a wide query triggers.
+
+*Saturation costs about 10%, not a cliff.* Identical data, identical 32 MB pool, identical
+sweep of 200 partitions, varying only the cap: 841 ms at cap=1000 (all files open), 839 ms
+at 300, 823 ms at 30, and 935 ms at cap=12. Physical page reads were equal across all four
+(~42,200), so the difference is evict/reopen rather than I/O volume. The worst row is 17x
+oversubscribed -- the same ratio as `per_dataset`'s 34,000 tablespaces against a 2,000 cap
+-- and costs roughly 11%. The sweep is I/O bound, which under-states churn as a fraction; on
+cached data it would weigh more.
+
+This also explains why section 5.3 finds no query penalty, and why that is not a
+contradiction: the query shapes touch the same 24 partitions repeatedly, those stay resident
+in the handle LRU, and nothing churns however many tablespaces exist elsewhere.
+
+**The consequence is that file-handle saturation is a modest tax, not the load-bearing
+finding this document originally made it.** What the file count is measured to cost is idle
+allocation (the table above) and server restart time (section 6.2 -- minutes for 34,000
+tablespaces against seconds for 340). The write-amplification gap in 5.2 should not be
+attributed to file handles either; B-tree count is the likelier mechanism. The remaining
+file-count argument is structural rather than empirical, and it is a hard wall rather than a
+gradient: `K x N x (hours + 2)` grows without bound in N, reaching 4.3 M files at 1,000
+datasets with K=6 and 30-day retention -- past the process fd limit and past what backup,
+DDL, and filesystem directories handle at all.
 
 ### 5.2 Size and write amplification (P1)
 
