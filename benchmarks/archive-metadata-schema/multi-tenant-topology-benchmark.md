@@ -222,9 +222,10 @@ in the handle LRU, and nothing churns however many tablespaces exist elsewhere.
 
 **The consequence is that file-handle saturation is a modest tax, not the load-bearing
 finding this document originally made it.** What the file count is measured to cost is idle
-allocation (the table above) and server restart time (section 6.2 -- minutes for 34,000
-tablespaces against seconds for 340). The write-amplification gap in 5.2 should not be
-attributed to file handles either; B-tree count is the likelier mechanism. The remaining
+allocation (the table above). Startup cost scales with tablespace count for the same reason
+the gauge does -- the files are opened then -- though this run did not time it (6.2). The
+write-amplification gap in 5.2 should not be attributed to file handles either; B-tree count
+is the likelier mechanism. The remaining
 file-count argument is structural rather than empirical, and it is a hard wall rather than a
 gradient: `K x N x (hours + 2)` grows without bound in N, reaching 4.3 M files at 1,000
 datasets with K=6 and 30-day retention -- past the process fd limit and past what backup,
@@ -340,8 +341,10 @@ configuration is queried immediately after its own build, so the load itself war
 the pages the probes touch. No pool size fixes that. The honest cold measurement is a
 targeted follow-up: restart the server (with the buffer-pool dump/reload disabled) and rerun
 the matrix for `unified` and `tiered` only -- their 344 and 1,024 files reopen in seconds.
-The current design cannot be cold-benchmarked this way at all: restarting a server holding
-34,000 tablespace files takes minutes per restart, which is itself an operational finding.
+The current design is impractical to cold-benchmark this way, because tablespaces are
+opened at startup (measured in 5.1), so a server holding 34,000 of them does 100x the
+startup work of one holding 340. The wall time of that was NOT measured in this run; only
+the mechanism is established.
 Single-tenant shapes tie warm across all configurations, so the open cold question affects
 only Q8 -- which section 5.3 excludes from the decision anyway. Nothing the recommendation
 rests on is waiting on a cold number.
@@ -401,9 +404,12 @@ against a known bounded number, coarsening partitions to daily (that same K=6 30
 becomes 192 files), or reducing K. Those levers exist for `per_dataset` too, but they are
 also divided by N, so they do not rescue it.
 
-Compared with today's per-dataset layout, at this run's scale: 100x fewer tables and files
-(344 open files with headroom instead of pinned saturation at the innodb_open_files cap),
-100x less idle allocation, and 27% less physical write bandwidth for identical data.
+Compared with today's per-dataset layout, at this run's scale, ordered by strength of
+evidence: 100x less idle allocation (2,125 MB against 21.2 MB, measured), 27% less physical
+write bandwidth for identical data (measured), and 100x fewer tables and tablespace files --
+which buys roughly 10% on scan-heavy work at this oversubscription ratio (5.1), and, far
+more importantly, removes the factor of N that eventually walks the file count past the
+process fd limit entirely.
 
 The case is entirely a builder-side and operational one. Query latency does not choose
 between these topologies: every shape CLP actually serves is scoped to one dataset, and on
@@ -436,10 +442,11 @@ here as physically null: adopt it only as an interim step for SQL hygiene, never
 ## 8.0 Open questions
 
 1. **Concurrent multi-tenant query load.** Every query in this run executed alone on an idle
-   server. Two effects can only appear under concurrency, and both are specific to the
-   design being recommended: contention on a single shared B-tree's hot pages, and an actual
-   cost for file-handle saturation (5.1), whose working set only exceeds the cap when many
-   tenants query different partitions at once. This is the most valuable missing experiment.
+   server. The effect that can only appear under concurrency is the one specific to the
+   design being recommended: latch contention on a single shared B-tree's hot pages, where
+   `unified` concentrates every tenant's writes and reads into one tree that `per_dataset`
+   spreads across 200. Nothing here measures it, and it is the most valuable missing
+   experiment. (File-handle saturation is no longer in this list: 5.1 measures it.)
 2. **Delete-job interference.** The retention job's own cost is out of scope, but a
    sustained background delete churns the buffer pool and purge, which can surface in
    foreground query latency -- the one retention-adjacent effect that touches a metric we
