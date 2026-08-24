@@ -15,8 +15,8 @@ and operational axes -- storage, write amplification, and footprint -- and `unif
 every one of them. The current one-set-of-tables-per-dataset layout pays a 100x idle-storage
 floor, 36% more physical write bandwidth, and saturates the server's file-handle cache.
 Section 5.4 records what happens IF retention were executed by partition drops; under the
-row-wise model it
-decides nothing, and the `tiered` variant it motivates is kept only as a contingency.
+row-wise model it decides nothing, and the `tiered` variant it motivates is kept only as a
+contingency.
 
 ---
 
@@ -216,11 +216,12 @@ The `per_user` row is anomalous -- see section 6.1.
 
 ### 5.3 Query matrix (P2)
 
-Single-tenant shapes (Q1-Q7) are a five-way tie: 2.5-4.1 ms warm across every configuration,
-identical rows examined (104 / 816 / 417 / 1,714), identical partitions visited (24 for the
-24 h window, 168 for 7 days, 48 for the joins). Sharing a table with 99 other tenants costs
-a single-tenant query nothing measurable: the dataset_id key prefix and partition pruning
-isolate it as effectively as a private table does.
+Single-tenant shapes (Q1-Q7) are a five-way tie: identical rows examined (104 / 816 / 417 /
+1,714) and identical partitions visited (24 for the 24 h window, 168 for 7 days, 48 for the
+joins), with wall times all inside 2.5-4.1 ms -- though section 6.3 explains why the
+structural counters, not the timer, are what carry that conclusion. Sharing a table with 99
+other tenants costs a single-tenant query nothing measurable: the dataset_id key prefix and
+partition pruning isolate it as effectively as a private table does.
 
 Q8 -- the same value looked up across all 100 datasets, ~11,000 rows -- is the only shape
 that separates them:
@@ -305,7 +306,26 @@ Single-tenant shapes tie warm across all configurations, so the open cold questi
 only Q8 -- which section 5.3 excludes from the decision anyway. Nothing the recommendation
 rests on is waiting on a cold number.
 
-### 6.3 Other limitations
+### 6.3 What the millisecond column actually times
+
+Every query runs as a fresh `mysql -e "..."` subprocess, so each reported wall time includes
+process spawn, client startup, socket connect, and the auth handshake -- a floor of several
+milliseconds before the server does any work. Server-side execution for these shapes is
+almost certainly sub-millisecond and is buried under that floor. The 2.5-4.1 ms figures are
+therefore not a measurement of index work, and the five-way tie should NOT be read off them.
+
+It should be read off the structural counters, which are server-side and exact: rows
+examined identical at 104 / 816 / 417 / 1,714 and partitions visited identical at 24 / 168 /
+48 across all five configurations. Identical rows touched and identical partitions opened is
+direct evidence that the index work is the same; the timer only fails to contradict it.
+
+This does not weaken the conclusion, because of what section 4.0's query step is FOR. The
+side-table lookup is the candidate-reduction prefix of a user query, not the query: the user
+waits on opening and searching each candidate archive, measured in earlier rounds at roughly
+200 ms per archive. A metadata step of one millisecond or five is invisible against that. No
+topology choice can move end-user query latency; the decision is a builder-side one.
+
+### 6.4 Other limitations
 
 - One engine, one machine, one run. Earlier rounds showed MySQL 8 amplifies every DDL and
   partition-count cost (up to 10x slower DDL, DROP PARTITION cost growing with table size),
