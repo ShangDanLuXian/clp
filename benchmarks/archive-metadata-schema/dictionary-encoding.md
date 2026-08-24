@@ -134,25 +134,112 @@ threshold is not low-cardinality, which is a cleaner demotion signal than counti
 
 ---
 
-## 4.0 Recommendation
+## 4.0 The break-even, in closed form
 
-Take compression now: one DDL clause, no schema change, no write-path work, 61% at current
-widths.
+Dictionary encoding is not a global win or loss; it is per column, and it is calculable.
+With `W` the mean value width, `R` the postings per distinct value, `k` the id width, `A`
+the fixed bytes per posting row, `B` the fixed bytes per dictionary row, and `f` the page
+fill factor:
 
-Treat the dictionary as a separate decision that hinges on a fact not yet established --
-**the width distribution of real filter values.** The `c8` shape's 12 B is a modelling
-assumption inherited from earlier rounds, and it is likely an understatement: pod names,
-service identifiers, URLs and error strings land in the 30-80 B range, where the dictionary
-adds 45-69% on top of compression rather than 12%.
+    plain = N(A + W)/f
+    dict  = N(A + k)/f + (N/R)(B + W)/f
 
-Measure that distribution before deciding. If values really are ~12 B, the dictionary buys
-little space and should be justified on the wildcard and key-limit arguments alone -- which
-may well be enough, since dissolving the oversized-value machinery removes a subsystem
-rather than optimizing one.
+Setting them equal, `f` cancels (same engine, same row format) and `A` cancels (same other
+columns, same InnoDB overhead), leaving
+
+        k*R + B
+    W* = ───────
+         R - 1
+
+The break-even width depends only on the id width and the repetition rate. It can never fall
+below `k` -- with unbounded repetition the dictionary is free, so it wins as soon as a value
+is wider than its id -- and it DIVERGES as R approaches 1.
+
+`bench_dict_breakeven.py` confirms it, with k=4 and B=30 fitted:
+
+| R   | W\* predicted | sign flip observed                     |
+|----:|-------------:|----------------------------------------|
+| 2   |         38.0 | between 32 (+6.4%) and 64 (-11.1%)     |
+| 5   |         12.5 | at 16 (+0.4%, dead even)               |
+| 20  |          5.8 | below 8 (already -4.5%)                |
+| 200 |          4.2 | below 8 (already -16.5%)               |
+
+**Compression roughly doubles the break-even.** Measured at 1.7x-2.1x across the range, with
+no clear trend in R, so the working rule with `kbs8` enabled is `W* ~ 2(kR + B)/(R - 1)`:
+
+| repetition R | dictionary pays above |
+|-------------:|----------------------:|
+|            2 |                 ~76 B |
+|            5 |                 ~25 B |
+|           20 |                 ~12 B |
+|          200 |                  ~8 B |
+|    very high |          ~8 B (= 2*k) |
+
+### 4.1 The R = 1 case, and why it is not hypothetical
+
+A file-unique column -- one where each archive carries ~15 values and no value is ever
+shared across archives -- has R = 1 exactly. The formula's denominator vanishes: the
+dictionary never pays at any width, because each value is stored once in the dictionary AND
+referenced once in a posting, where plain storage writes it once in total. The penalty is
+`(k + B)/f` per posting, about 53 bytes:
+
+| value width | plain B/row | dict B/row | penalty |
+|------------:|------------:|-----------:|--------:|
+|        40 B |         131 |        184 |    +40% |
+|       100 B |         225 |        278 |    +24% |
+
+Note the opposition: a file-unique column is the BEST case for the side table, since one
+value identifies exactly one archive, and the WORST case for a dictionary. No single global
+encoding choice is right for both, which is what makes this a per-column decision.
+
+The penalty is nonetheless bounded at 24-40%, not an order of magnitude, so a wrong decision
+costs a fraction of one column rather than the design.
 
 ---
 
-## 5.0 Open questions
+## 5.0 Recommendation
+
+**For the MVP: take compression, skip the dictionary.**
+
+Compression is one DDL clause, no schema change, no write-path work, and 61% at current
+widths. The dictionary, at those same widths, adds 12.2% -- and section 4.0 explains why
+that is not a small win but a coin flip: the compressed break-even at `c8`'s repetition
+rates is 8-12 B and `c8`'s mean width is 11.6 B, sitting on the line. Against that it costs
+five things: a dictionary table, value-to-id resolution with concurrency control on every
+write, orphan collection, two-phase prefix wildcards, and per-column encoding decisions --
+which means two storage paths and a migration whenever a column changes category.
+
+**If it is built anyway, the mechanism can stay simple.** No online estimators or counters
+are needed, because R and W are properties of data already stored. One query after a warm-up
+period, once per (dataset, column):
+
+```sql
+SELECT column_id,
+       COUNT(*) / COUNT(DISTINCT value) AS R,
+       AVG(LENGTH(value))               AS W
+FROM   side_all
+WHERE  dataset_id = ?
+GROUP  BY column_id;
+```
+
+Encode when `W > 2*(4*R + 30)/(R - 1)`. A file-unique column returns R ~ 1, the threshold is
+infinite, and it stays inline with no special case -- the formula already covers it.
+
+**What would change this recommendation:** measuring real filter-value widths above ~20 B.
+The `c8` shape's 12 B is a modelling assumption inherited from earlier rounds and is likely
+an understatement -- pod names, service identifiers, URLs and error strings land in the
+30-80 B range, where the dictionary adds 45-69% on top of compression rather than 12%. That
+measurement is one `AVG(LENGTH(value))` over real datasets, and this entire decision hinges
+on it, so it should come before any implementation.
+
+Separately, the wildcard and key-limit arguments (section 3.0) may justify the dictionary
+even at narrow widths, since dissolving the oversized-value machinery removes a subsystem
+rather than optimizing one. That is a design-simplicity argument, not a storage one, and
+should be weighed on its own terms.
+
+---
+
+## 6.0 Open questions
 
 1. **Real value widths.** Everything in section 4.0 turns on this and it is unmeasured.
 2. **Query cost of the extra lookup.** One additional index seek by inspection; unmeasured.
