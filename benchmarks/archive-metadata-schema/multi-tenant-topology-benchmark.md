@@ -6,11 +6,14 @@ be organized when one deployment serves many users. It is self-contained -- ever
 uses is defined in section 1.0, the exact setup is in section 3.0, and every number quoted
 comes from the run recorded in `topology_results_20260824-010411.txt`.
 
-The one-line conclusion: **one set of tables per retention tier (`tiered`) matches the best
-design on every performance axis and is the only cheap design that never retains a tenant's
-rows past that tenant's own retention policy.** The current one-set-of-tables-per-dataset
-layout pays a 100x idle-storage floor, 36% more physical write bandwidth, saturates the
-server's file-handle cache, and needs 32x longer to expire old data.
+The one-line conclusion: **one unified table set for everyone, with dataset_id leading every
+primary key.** Retention in CLP is a background row-wise delete job keyed on each dataset's
+policy; its own cost is explicitly not a decision metric. On the axes that are -- storage,
+write amplification, query latency, and operational footprint -- `unified` wins every one.
+The current one-set-of-tables-per-dataset layout pays a 100x idle-storage floor, 36% more
+physical write bandwidth, and saturates the server's file-handle cache. Section 5.4 records
+what happens IF retention were executed by partition drops; under the row-wise model it
+decides nothing, and the `tiered` variant it motivates is kept only as a contingency.
 
 ---
 
@@ -43,16 +46,18 @@ is one index seek. Configurations whose tables hold exactly one dataset omit the
 it would be a constant.
 
 **Retention tier.** How long a user's data must be kept before deletion. Users differ: the
-benchmark assigns tiers of 24 h, 72 h, and 168 h round-robin across users. Retention is
-executed by dropping whole expired partitions (`ALTER TABLE ... DROP PARTITION`), which is a
-file deletion -- the row-count-independent way to delete.
+benchmark assigns tiers of 24 h, 72 h, and 168 h round-robin across users. The P3
+experiment executes retention by dropping whole expired partitions (`ALTER TABLE ... DROP
+PARTITION`) to expose the structural differences between topologies; CLP's operative model
+is a background row-wise delete job (see 5.4).
 
 **Rows past policy (over-retention).** After an expiry cycle, the number of rows still
 present whose owning dataset's retention says they should be gone. A table that holds only
 one tier can always drop its expired partitions, so it scores zero. A table that MIXES tiers
 cannot drop a partition until the LONGEST tier in it expires, so every shorter-tier tenant's
-rows in that partition are retained past policy. This is a compliance violation -- data kept
-beyond the contractual retention period -- not merely wasted disk.
+rows in that partition are retained past policy. This matters only under DROP-based
+retention: CLP's operative model is a background row-wise delete job, which meets every
+policy exactly in any topology, so this metric describes the drop-based alternative.
 
 **Logical payload.** The bytes the data itself represents: rows multiplied by their raw
 column widths, with zero storage overhead. For this run, 1,301.2 MB. It is the denominator
@@ -240,16 +245,20 @@ every one of those 2,400 partition touches competes for a saturated file-handle 
 | `unified`         |       0.00 |          0 |        0.0 |   **27,000,585** |
 | `tiered`          |      13.94 |        480 |    2,195.4 |                0 |
 
-This is the deciding table.
+This table describes the partition-drop retention model only. Under CLP's operative model
+-- a background row-wise delete whose cost is not a decision metric -- every configuration
+meets every policy exactly and nothing below disqualifies anything. It is recorded because
+it is the strongest structural difference between the topologies, and because it prices the
+`tiered` contingency should drop-based retention ever become a requirement.
 
 `unified` issues zero statements not because it is efficient but because it cannot legally
 drop anything: every hourly partition mixes 24 h, 72 h, and 168 h tenants, and a partition
 can only be dropped when its longest tier has expired. The result is 27,000,585 postings --
 exactly 50.0% of all data -- retained past their owners' policy. (The figure is arithmetic,
 not noise: 20 users round-robin over 3 tiers is a 7/7/6 split, and 0.35 x 144/168 + 0.35 x
-96/168 = 0.500.) Honoring the short tiers would require row-wise DELETEs, the exact cost
-partitioning exists to avoid. Pure `unified` is therefore disqualified on compliance
-despite winning nearly every other axis.
+96/168 = 0.500.) Honoring the short tiers under a drop-only model would require row-wise
+DELETEs -- which is what the operative retention model does anyway, so in practice this
+disqualifies nothing.
 
 `tiered` expires correctly with 480 statements in 13.9 s -- 32x faster than `per_dataset`'s
 440.8 s across 16,800 statements, with zero rows past policy. Grouping by retention tier is
@@ -298,17 +307,19 @@ designs.
 
 ## 7.0 Recommendation
 
-**One set of tables per retention tier, with dataset_id leading every primary key.** Table
-count K x R, where R is the number of retention contracts offered (assumed small).
+**One unified table set for everyone, with dataset_id leading every primary key.** Table
+count is K, independent of datasets, users, and retention policies. Retention stays what it
+operationally is: a background row-wise delete driven by each dataset's policy value in a
+config table -- which also makes retention arbitrary and mutable per dataset for free (a
+policy change is an UPDATE; the next delete cycle applies it, retroactively included).
 
-Compared with today's per-dataset layout, at this run's scale: ~33x fewer tables, partitions
-and files (with headroom under `innodb_open_files` instead of pinned saturation), 100x less
-idle allocation, 27% less physical write bandwidth for identical data, equal single-tenant
-query latency, ~1.4x faster cross-tenant queries warm (with the earlier round showing the
-gap exploding under memory pressure), and expiry in 14 s instead of 441 s -- all with zero
-rows past policy.
+Compared with today's per-dataset layout, at this run's scale: 100x fewer tables and files
+(344 open files with headroom instead of pinned saturation at the innodb_open_files cap),
+100x less idle allocation, 27% less physical write bandwidth for identical data, equal
+single-tenant query latency, and the fastest cross-tenant queries (with the earlier tenancy
+round showing that gap widening by an order of magnitude under memory pressure).
 
-The refactor must carry four invariants:
+The refactor must carry three invariants:
 
 1. **dataset_id is mandatory in every query.** It leads the key, so omitting it forfeits the
    index seek: the earlier tenancy round measured the omission at 25-50x. This belongs in
@@ -316,11 +327,13 @@ The refactor must carry four invariants:
 2. **Archive identity is (dataset_id, archive_id).** Every join additionally binds
    begin_timestamp (the ts-equality rule from the side-table rounds). Getting this wrong
    returns another tenant's rows, not a slow query.
-3. **Offboarding is retention.** A departed tenant's rows age out partition-by-partition at
-   zero marginal cost. Contractual immediate deletion is a batched DELETE walking partition
-   ranges -- rare, and priced separately.
-4. **Tier changes follow no-backfill semantics.** A tenant moving tiers writes new archives
-   to the new tier's tables; sealed archives age out under the old tier. No rewrites.
+3. **Offboarding is the same delete job.** A departed tenant is a retention policy of zero.
+
+Contingency: if drop-based retention ever becomes a requirement (e.g. a compliance regime
+that forbids relying on a delete job), section 5.4 shows `tiered` -- one table set per
+retention value in use -- is the cheap correct shape, and partitioning by expiration time
+instead of begin time achieves the same without table proliferation. Neither is part of
+this recommendation.
 
 The naming refactor alone (`schema_per_user`, or renaming tables by dataset id) is measured
 here as physically null: adopt it only as an interim step for SQL hygiene, never as the fix.
@@ -329,10 +342,11 @@ here as physically null: adopt it only as an interim step for SQL hygiene, never
 
 ## 8.0 Open questions
 
-1. **Is retention really tiered?** The whole design assumes R is a handful of contract
-   values. If every customer can choose an arbitrary retention period, `tiered` degenerates
-   toward per-user and the comparison must be redone with that distribution.
+1. **Delete-job interference.** The retention job's own cost is out of scope, but a
+   sustained background delete churns the buffer pool and purge, which can surface in
+   foreground query latency -- the one retention-adjacent effect that touches a metric we
+   care about. Unmeasured.
 2. The per_user anomalies (6.1) deserve one rerun before that configuration is described in
    any external document.
-3. The targeted cold pass on `unified` and `tiered` (6.2).
+3. The targeted cold pass on `unified` (6.2).
 4. The same matrix on MySQL 8, where partition-count costs are known to be larger.
