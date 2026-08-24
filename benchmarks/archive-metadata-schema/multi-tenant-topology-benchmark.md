@@ -134,7 +134,19 @@ round-robin by user (20 users over 3 tiers = a 7/7/6 split -- this matters in 5.
 **Data shape.** Each archive contributes 45 postings across 8 filter columns whose widths
 and cardinalities follow the same `c8` shape used in every earlier round (hosts at 1,000
 distinct values, envs at 12, severities at 40, modules at 300), so per-archive byte figures
-are comparable across rounds.
+are comparable across rounds. The 45 is a cardinality-WITHIN-archive assumption -- 3
+host-like columns at 1 distinct value each, 2 env-like at 3, 2 severity-like at 8, 1
+module-like at 20 -- not a size ceiling.
+
+**Where `c8` sits in the admissible range, which every absolute figure below depends on.**
+The service admits a filter configuration only if its payload stays under 0.1% of the
+compressed archive, which at 256 MB raw and 50x compression is 5,368 B per archive (see
+README). `c8` uses 577 B: about 11% of that allowance. The widest admissible shape, `wide`,
+is 340 values per archive at 5,117 B -- 8.9x more. So a deployment whose users configure to
+the policy limit would produce a side table roughly 8.9x larger than every size number in
+section 5.2, and the storage projections scale with it. The topology COMPARISON is
+unaffected, since all five configurations ran the identical shape; the absolute magnitudes
+are a conservative point in the admissible space, not an upper bound.
 
 **Write path.** 16 worker processes run concurrently, each owning a slice of the datasets,
 issuing per-archive INSERTs interleaved in timestamp order across their datasets. This
