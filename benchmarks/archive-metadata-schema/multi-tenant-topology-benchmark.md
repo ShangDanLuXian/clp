@@ -8,11 +8,14 @@ comes from the run recorded in `topology_results_20260824-010411.txt`.
 
 The one-line conclusion: **one unified table set for everyone, with dataset_id leading every
 primary key.** Retention in CLP is a background row-wise delete job keyed on each dataset's
-policy; its own cost is explicitly not a decision metric. On the axes that are -- storage,
-write amplification, query latency, and operational footprint -- `unified` wins every one.
-The current one-set-of-tables-per-dataset layout pays a 100x idle-storage floor, 36% more
-physical write bandwidth, and saturates the server's file-handle cache. Section 5.4 records
-what happens IF retention were executed by partition drops; under the row-wise model it
+policy; its own cost is explicitly not a decision metric. Neither is query latency, as it
+turns out: every query shape CLP actually serves is scoped to a single dataset, and on those
+shapes all five configurations tie. The decision is therefore made entirely on the builder
+and operational axes -- storage, write amplification, and footprint -- and `unified` wins
+every one of them. The current one-set-of-tables-per-dataset layout pays a 100x idle-storage
+floor, 36% more physical write bandwidth, and saturates the server's file-handle cache.
+Section 5.4 records what happens IF retention were executed by partition drops; under the
+row-wise model it
 decides nothing, and the `tiered` variant it motivates is kept only as a contingency.
 
 ---
@@ -156,7 +159,8 @@ differenced around each operation; partitions visited from `EXPLAIN PARTITIONS`.
   Q4 prefix wildcard; Q5 two-predicate AND (self-join binding archive_id AND
   begin_timestamp, per the ts-equality rule); Q6 join back to the archives table for
   metadata; Q7 archives-table time-range scan; Q8 the same lookup across ALL tenants
-  (an N-way UNION for per-table configs, one IN-list range for shared-table configs).
+  (an N-way UNION for per-table configs, one IN-list range for shared-table configs) --
+  a table-count DIAGNOSTIC, not a workload CLP serves; see section 5.3.
   Each records wall time, rows examined, physical reads, partitions visited, and
   table-cache misses.
 - **P3 retention**: one full expiry cycle under the heterogeneous tiers -- wall time,
@@ -218,8 +222,8 @@ identical rows examined (104 / 816 / 417 / 1,714), identical partitions visited 
 a single-tenant query nothing measurable: the dataset_id key prefix and partition pruning
 isolate it as effectively as a private table does.
 
-The cross-tenant shape (Q8: the same value looked up across all 100 datasets, ~11,000 rows)
-separates them:
+Q8 -- the same value looked up across all 100 datasets, ~11,000 rows -- is the only shape
+that separates them:
 
 | config            | Q8 warm (ms) | partitions visited |
 |-------------------|-------------:|-------------------:|
@@ -229,11 +233,21 @@ separates them:
 | `per_dataset`     |         29.9 |              2,400 |
 | `per_user`        |         66.6 |                480 |
 
-Per-table configurations must issue a 100-branch UNION visiting 2,400 partitions to answer
-what `unified` answers in one range over 24. The gap here (1.8x) is modest because the
-machine was otherwise idle and everything was cached; the earlier tenancy round measured the
-same shape at up to 59x under memory pressure, and the pinned `open_f` gauge explains why:
-every one of those 2,400 partition touches competes for a saturated file-handle cache.
+**Q8 is a diagnostic, not a workload, and it decides nothing.** CLP does not issue queries
+spanning multiple tenants: a query is scoped to its owner, and crossing that boundary is
+excluded by authorization before it is excluded by performance. Q8 was built as the widest
+possible fan-out to isolate one variable -- what it costs to answer a question from N tables
+instead of one -- and it does isolate it: per-table configurations must issue a 100-branch
+UNION visiting 2,400 partitions to answer what `unified` answers in one range over 24. But
+no user of the system asks that question, so this table is evidence about a mechanism, not
+about a workload, and the recommendation in section 7.0 does not rest on it.
+
+The shape the matrix does not cover is the middle: one tenant querying across the several
+datasets that tenant owns. Q1-Q7 all pin a single dataset; Q8 jumps to all 100. If that
+middle shape occurs in production it is worth measuring, because it is the one fan-out that
+survives the authorization boundary -- and under `per_dataset` it still requires a generated
+UNION over table names, at whatever width the tenant's dataset count happens to be. See
+section 8.0.
 
 ### 5.4 Retention under heterogeneous tiers (P3)
 
@@ -288,8 +302,8 @@ the matrix for `unified` and `tiered` only -- their 344 and 1,024 files reopen i
 The current design cannot be cold-benchmarked this way at all: restarting a server holding
 34,000 tablespace files takes minutes per restart, which is itself an operational finding.
 Single-tenant shapes tie warm across all configurations, so the open cold question affects
-only the cross-tenant comparison, where the file-count argument already favors few-table
-designs.
+only Q8 -- which section 5.3 excludes from the decision anyway. Nothing the recommendation
+rests on is waiting on a cold number.
 
 ### 6.3 Other limitations
 
@@ -315,9 +329,14 @@ policy change is an UPDATE; the next delete cycle applies it, retroactively incl
 
 Compared with today's per-dataset layout, at this run's scale: 100x fewer tables and files
 (344 open files with headroom instead of pinned saturation at the innodb_open_files cap),
-100x less idle allocation, 27% less physical write bandwidth for identical data, equal
-single-tenant query latency, and the fastest cross-tenant queries (with the earlier tenancy
-round showing that gap widening by an order of magnitude under memory pressure).
+100x less idle allocation, and 27% less physical write bandwidth for identical data.
+
+The case is entirely a builder-side and operational one. Query latency does not choose
+between these topologies: every shape CLP actually serves is scoped to one dataset, and on
+those shapes all five configurations tie at 2.5-4.1 ms. `unified` is not recommended because
+it queries faster -- it does not -- but because it is the only configuration whose file
+count, idle footprint, and table count stop growing with the number of tenants, while
+costing a single-tenant query nothing.
 
 The refactor must carry three invariants:
 
@@ -346,7 +365,13 @@ here as physically null: adopt it only as an interim step for SQL hygiene, never
    sustained background delete churns the buffer pool and purge, which can surface in
    foreground query latency -- the one retention-adjacent effect that touches a metric we
    care about. Unmeasured.
-2. The per_user anomalies (6.1) deserve one rerun before that configuration is described in
+2. **Same-tenant, multi-dataset fan-out.** Does a tenant ever query across the several
+   datasets it owns in one request? If so it is the only fan-out shape that survives the
+   authorization boundary, and the matrix has no measurement of it (5.3). Adding it is
+   small: Q8's structure at width `datasets-per-user` instead of width 100. The expected
+   result is a latency tie, leaving the generated-UNION construction cost as the only
+   difference -- but that is a prediction, not a measurement.
+3. The per_user anomalies (6.1) deserve one rerun before that configuration is described in
    any external document.
-3. The targeted cold pass on `unified` (6.2).
-4. The same matrix on MySQL 8, where partition-count costs are known to be larger.
+4. The targeted cold pass on `unified` (6.2).
+5. The same matrix on MySQL 8, where partition-count costs are known to be larger.
