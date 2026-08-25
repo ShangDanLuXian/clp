@@ -610,8 +610,17 @@ def main():
                  f"{samp:>10.2f}x{wamp:>10.2f}x")
             if r["errs"]:
                 line(f"    !! load errors: {r['errs'][0]}")
-        line(f"  logical payload = {res[cfgs[0]]['logical'] / 1048576:,.1f} MB "
-             f"(rows x raw column bytes, zero overhead)")
+        # Payload DIFFERS by config: only configs whose tables span more than one dataset
+        # carry dataset_id. Printing the first config's figure as if it were the run's is
+        # wrong -- it is the denominator of exactly one row of the table above.
+        lg = sorted({r["logical"] for r in res.values()})
+        if len(lg) == 1:
+            line(f"  logical payload = {lg[0] / 1048576:,.1f} MB "
+                 f"(rows x raw column bytes, zero overhead)")
+        else:
+            line("  logical payload = " + " / ".join(f"{v / 1048576:,.1f}" for v in lg)
+                 + " MB -- it differs by config, because only configs holding more than")
+            line("  one dataset carry dataset_id. Each amp figure uses ITS OWN denominator.")
         line("  space_amp = stored pages / logical.  write_amp = (data written + redo)")
         line("  / logical, i.e. bytes InnoDB actually pushed to storage per payload byte.")
         line("  empty_MB is measured after CREATE, before any row: 64 KB x partition count.")
