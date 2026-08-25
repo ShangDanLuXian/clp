@@ -210,7 +210,7 @@ at this scale is user-visible under any topology.
 
 The matrix does not cover the one fan-out that survives authorization: a tenant querying
 across the several datasets it owns. Under the per-dataset layout that still requires a
-generated UNION over table names. See 6.0.
+generated UNION over table names.
 
 ### 4.3 Retention
 
@@ -226,13 +226,14 @@ retention would migrate whole datasets between table sets on every policy change
 
 ---
 
-## 5.0 Partition granularity, long retention, and the hard limits
+## 5.0 Partition granularity and the hard limits
 
-Two limits bound the design regardless of topology, and they interact with retention length.
+Two limits bound the design regardless of topology. Both are set by how much history the
+tables hold and how finely it is partitioned.
 
 **The engine caps a table at 8,192 partitions.** At hourly granularity that is 341 days:
-7-year retention (61,368 hours, needing 61,370 partitions) is not expressible -- the CREATE
-TABLE fails. **The finest granularity that can express 7 years is 12-hour partitions**
+seven years of history (61,368 hours, needing 61,370 partitions) is not expressible -- the
+CREATE TABLE fails. **The finest granularity that can express 7 years is 12-hour partitions**
 (5,116 partitions, 1.6x headroom); 6-hourly still exceeds the cap at 10,230. Daily gives
 2,559 partitions with 3.2x headroom, enough to extend to ~22 years without repartitioning.
 
@@ -243,8 +244,8 @@ ones -- fewer B-trees to seek, not more rows to scan. What coarsening does trade
 empty-floor threshold (4.1), which scales with the partition window: ~18 archives per hour
 becomes ~18 per day.
 
-**File counts at long retention decide the `innodb_open_files` setting, and the topology
-decides whether that number is bounded.** At K=6 kinds, 7-year retention:
+**File counts follow from history length and granularity, and the topology determines
+whether the number is bounded.** At K=6 kinds, holding seven years:
 
 | granularity | partitions/table | files, one shared set | files, per dataset x 1,000 |
 |-------------|-----------------:|----------------------:|---------------------------:|
@@ -258,34 +259,3 @@ formula carries a factor of N: it reaches the maximum grantable file-descriptor 
 30-day hourly, ~68 at 7-year daily -- ordinary configurations, reached by onboarding
 datasets rather than by data volume, and past what backup, DDL, and filesystem directories
 handle long before the kernel refuses.
-
----
-
-## 6.0 Limitations
-
-- One engine, one machine, one run, no repetition. Earlier rounds showed MySQL 8 amplifies
-  DDL and partition-count costs (up to 10x slower DDL, DROP PARTITION cost growing with
-  table size), so the gaps here should widen there -- but that is extrapolation, not
-  measurement.
-- Every query executed alone on an idle server; concurrent load is untested (see 7.0).
-- Ingestion throughput is deliberately out of scope; load wall times are context only.
-- Wall times in 4.2 carry a client-startup floor of several milliseconds, so the query
-  comparison rests on the rows-examined and partitions-visited counters, not the timer.
-- One database instance per user was not simulated (see 2.0); its per-instance floor is
-  better measured as a small side study than on one box.
-
----
-
-## 7.0 Open questions
-
-1. **Concurrent multi-tenant query load.** Every query here executed alone on an idle
-   server. The effect that can only appear under concurrency is the one specific to the
-   recommended design: latch contention on a single shared B-tree's hot pages, which one
-   table set concentrates and per-dataset tables spread across 200 trees.
-2. **Same-tenant, multi-dataset fan-out.** The only fan-out shape that survives
-   authorization, and the matrix has no measurement of it. Cheap to add: Q8's structure at
-   width `datasets-per-user` instead of width 100.
-3. **Compression.** All sizes here are uncompressed. Whether the recommended row format
-   changes the write-amplification comparison, and whether the 64 KB partition floor holds
-   at an 8 KB page size, are unmeasured.
-4. The same matrix on MySQL 8, where partition-count costs are known to be larger.
