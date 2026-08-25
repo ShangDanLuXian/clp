@@ -224,9 +224,30 @@ def main():
 
     label, _, cmd = a.engine.partition("=")
     e = {"label": label or "db", "cmd": cmd or a.engine}
+    log_path = os.path.join(tempfile.gettempdir(), "query_probe_restart.log")
     rc, o, err = sh(e, "SELECT VERSION();")
+    if rc != 0 and a.restart_cmd:
+        # An aborted cold pass leaves the server STOPPED: systemd hit its start limit
+        # mid-restart and then refuses to start it again until that state is cleared.
+        # --restart-cmd already authorises restarts, so clear and start once rather than
+        # making every aborted run need manual repair.
+        print("server unreachable; --restart-cmd given, so clearing state and starting it")
+        subprocess.run(a.recover_cmd, shell=True, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, timeout=60)
+        with open(log_path, "w") as lf:
+            subprocess.run(a.restart_cmd, shell=True, stdin=subprocess.DEVNULL,
+                           stdout=lf, stderr=subprocess.STDOUT, timeout=300,
+                           start_new_session=True)
+        for _ in range(60):
+            rc, o, err = sh(e, "SELECT VERSION();")
+            if rc == 0:
+                break
+            time.sleep(2)
     if rc != 0:
-        sys.stderr.write(f"cannot reach server: {err.strip().splitlines()[-1][:70]}\n")
+        sys.stderr.write(f"cannot reach server: {err.strip().splitlines()[-1][:120]}\n")
+        sys.stderr.write("if it is stopped, systemd may be holding it down:\n"
+                         "  sudo systemctl reset-failed mariadb.service"
+                         " && sudo systemctl start mariadb\n")
         return 1
     print(f"server {o.strip().splitlines()[-1]}   probing dataset k={a.k}\n")
 
@@ -254,7 +275,6 @@ def main():
         return 1
     print()
 
-    log_path = os.path.join(tempfile.gettempdir(), "query_probe_restart.log")
     hdr = (f"  {'config':<14} {'query':<20} {'cold_ms':>9} {'c_phys':>7} "
            f"{'warm_min':>9} {'warm_med':>9} {'warm_max':>9} {'w_phys':>7}")
     print(hdr)

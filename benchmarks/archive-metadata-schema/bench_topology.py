@@ -170,8 +170,21 @@ def tier_of(cfg, k, a):
 
 
 def create(e, cfg, a):
+    """Build one configuration's tables.
+
+    Normally each configuration gets a clean database. Under --keep that would defeat the
+    point: every configuration here lives in the same schema, so dropping the database to
+    build the second one destroys the first, and nothing accumulates for query_probe.py to
+    compare. So --keep creates the schema if absent and drops only THIS configuration's own
+    tables, letting all of them coexist."""
     for s in schemas(cfg, a):
-        sh(e, f"DROP DATABASE IF EXISTS {s}; CREATE DATABASE {s};")
+        if a.keep:
+            sh(e, f"CREATE DATABASE IF NOT EXISTS {s};")
+        else:
+            sh(e, f"DROP DATABASE IF EXISTS {s}; CREATE DATABASE {s};")
+    if a.keep:
+        for schema, arch, side, _ in all_tables(cfg, a):
+            sh(e, f"DROP TABLE IF EXISTS {arch}, {side};", schema)
     for schema, arch, side, needs_ds in all_tables(cfg, a):
         ds = "dataset_id SMALLINT UNSIGNED NOT NULL, " if needs_ds else ""
         dsk = "dataset_id, " if needs_ds else ""
