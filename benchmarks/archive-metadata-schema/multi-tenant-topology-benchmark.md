@@ -261,7 +261,22 @@ handle long before the kernel refuses.
 
 ---
 
-## 6.0 Open questions
+## 6.0 Limitations
+
+- One engine, one machine, one run, no repetition. Earlier rounds showed MySQL 8 amplifies
+  DDL and partition-count costs (up to 10x slower DDL, DROP PARTITION cost growing with
+  table size), so the gaps here should widen there -- but that is extrapolation, not
+  measurement.
+- Every query executed alone on an idle server; concurrent load is untested (see 7.0).
+- Ingestion throughput is deliberately out of scope; load wall times are context only.
+- Wall times in 4.2 carry a client-startup floor of several milliseconds, so the query
+  comparison rests on the rows-examined and partitions-visited counters, not the timer.
+- One database instance per user was not simulated (see 2.0); its per-instance floor is
+  better measured as a small side study than on one box.
+
+---
+
+## 7.0 Open questions
 
 1. **Concurrent multi-tenant query load.** Every query here executed alone on an idle
    server. The effect that can only appear under concurrency is the one specific to the
