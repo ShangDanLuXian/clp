@@ -143,10 +143,14 @@ def go_cold(e, a, log_path):
       - The restart command's exit status and output are captured. They go to a FILE, never
         a pipe: the service starts a daemon that inherits the pipe and holds it open for
         its whole life, so waiting for EOF would hang forever. A file has no such problem.
-      - Uptime is compared across the restart. A server that never went down keeps counting
-        up, so `after >= before` proves no restart occurred -- which is what happens when
-        the restart needs root and was run without it."""
+      - Uptime after the restart is compared against ELAPSED WALL TIME, not against uptime
+        before it. A restarted server cannot have been up longer than we have been waiting
+        for it, so `after > elapsed` means it never went down. Comparing against `before`
+        fails both ways: right after a successful restart Uptime is 0, so the next restart
+        compares 1 >= 0 and falsely aborts; and with whole-second granularity a no-op
+        restart taking under a second leaves `after == before` and falsely passes."""
     sh(e, "SET GLOBAL innodb_buffer_pool_dump_at_shutdown=OFF;")
+    t_start = time.time()
     before = uptime(e)
     with open(log_path, "w") as lf:
         try:
@@ -169,11 +173,14 @@ def go_cold(e, a, log_path):
     else:
         return False, "server did not come back"
     after = uptime(e)
+    elapsed = time.time() - t_start
     if after is None:
         return False, "server came back but Uptime unreadable"
-    if before is not None and after >= before:
-        return False, (f"server never restarted (Uptime {before}s -> {after}s); "
-                       "the command probably needs root -- try prefixing it with sudo")
+    if after > elapsed + 2:
+        return False, (f"server never restarted (Uptime {before}s -> {after}s across "
+                       f"{elapsed:.0f}s of wall time; a restarted server cannot have been "
+                       f"up longer than that); the command probably needs root -- try "
+                       "prefixing it with sudo")
     return True, ""
 
 
