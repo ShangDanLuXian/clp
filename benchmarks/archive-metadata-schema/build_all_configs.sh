@@ -89,14 +89,20 @@ python3 - "$ENGINE" <<'PY'
 import shlex, subprocess, sys
 cmd = shlex.split(sys.argv[1].partition("=")[2] or sys.argv[1])
 q = ("SELECT table_name FROM information_schema.tables "
-     "WHERE table_schema='topo' AND table_name LIKE 'side%';")
+     "WHERE table_schema='topo';")
 out = subprocess.run(cmd + ["-N", "-B", "-e", q], capture_output=True, text=True).stdout
 names = out.split()
-groups = {"per_dataset": "side_d", "per_user": "side_u",
-          "unified": "side_all", "tiered": "side_t"}
-print("\nside tables now in `topo`:")
-for cfg, pfx in groups.items():
-    n = sum(1 for x in names if x.startswith(pfx))
-    print(f"  {cfg:<12} {n:>4} table(s)   {'OK' if n else 'MISSING'}")
+# Every configuration creates BOTH table kinds -- one `arch` (a row per archive) and one
+# `side` (the posting list) for each of its scopes. Counting only `side` made unified look
+# like it had a single table when it has one of each, which is the design.
+groups = {"per_dataset": "_d", "per_user": "_u", "unified": "_all", "tiered": "_t"}
+print("\ntables now in `topo`:")
+print(f"  {'config':<12} {'arch':>5} {'side':>5}")
+for cfg, sfx in groups.items():
+    a = sum(1 for x in names if x.startswith("arch" + sfx))
+    s = sum(1 for x in names if x.startswith("side" + sfx))
+    flag = "OK" if a and s and a == s else ("MISSING" if not (a or s) else "MISMATCH")
+    print(f"  {cfg:<12} {a:>5} {s:>5}   {flag}")
+print(f"  {'total':<12} {len(names):>11}")
 PY
 exit $rc
