@@ -66,41 +66,80 @@ def exists(e, schema, table):
     return o.strip().splitlines()[-1:] == ["1"]
 
 
-def queries(a, ds, at, st):
-    """The single-dataset shapes Q1-Q7, byte-identical to the benchmark's."""
+def own_datasets(a):
+    """The datasets belonging to the tenant that owns dataset a.k."""
+    u = a.k // a.dpu
+    return list(range(u * a.dpu, (u + 1) * a.dpu))
+
+
+def queries(a, ds, at, st, pairs):
+    """The shapes a single tenant actually issues.
+
+    Two tables carry them: `side`, the posting list of (column, value, archive) rows that
+    turns a filter predicate into candidate archive ids, and `arch`, one row per archive
+    with its time span and size. A real search needs BOTH -- side narrows, then arch is
+    joined to get what is needed to open the candidates -- so every filter shape here
+    includes that join. Q0 is the same lookup WITHOUT it, kept as the component baseline so
+    the join's own cost is visible rather than inferred.
+
+    `pairs` is the (arch, side) table list covering the tenant's own datasets: one entry
+    when the tables carry dataset_id, one per dataset when they are named per dataset. That
+    difference is the whole point of the cross-dataset shape -- an IN-list against one
+    table versus a generated UNION over several."""
     w24 = T0 + (a.hours - 24) * HOUR
     w7d = T0 + max(0, a.hours - 168) * HOUR
     wend = T0 + a.hours * HOUR
-    tw24 = f"begin_timestamp >= {w24} AND begin_timestamp < {wend}"
-    tw7d = f"begin_timestamp >= {w7d} AND begin_timestamp < {wend}"
     sel, hot, other = val("m0", 14, 7), val("e0", 8, 3), val("s0", 10, 3)
-    d = f"dataset_id={a.k} AND " if ds else ""
-    dx = f"x.dataset_id={a.k} AND " if ds else ""
-    dss = f"s.dataset_id={a.k} AND " if ds else ""
-    j = " AND y.dataset_id=x.dataset_id" if ds else ""
+    d = f"s.dataset_id={a.k} AND " if ds else ""
     ja = " AND a.dataset_id=s.dataset_id" if ds else ""
-    return [
-        ("Q1 point, 24h", f"SELECT COUNT(DISTINCT archive_id) FROM {st} "
-                          f"WHERE {d}column_id=7 AND value='{sel}' AND {tw24}"),
-        ("Q2 point, 7d", f"SELECT COUNT(DISTINCT archive_id) FROM {st} "
-                         f"WHERE {d}column_id=7 AND value='{sel}' AND {tw7d}"),
-        ("Q3 hot value, 24h", f"SELECT COUNT(DISTINCT archive_id) FROM {st} "
-                              f"WHERE {d}column_id=3 AND value='{hot}' AND {tw24}"),
-        ("Q4 prefix wildcard", f"SELECT COUNT(DISTINCT archive_id) FROM {st} "
-                               f"WHERE {d}column_id=7 AND value LIKE '{sel[:5]}%' AND {tw24}"),
-        ("Q5 two predicates", f"SELECT COUNT(*) FROM {st} x JOIN {st} y "
-                              f"ON y.archive_id=x.archive_id "
-                              f"AND y.begin_timestamp=x.begin_timestamp{j} "
-                              f"WHERE {dx}x.column_id=7 AND x.value='{sel}' "
-                              f"AND y.column_id=5 AND y.value='{other}' "
-                              f"AND x.begin_timestamp >= {w24} AND x.begin_timestamp < {wend}"),
-        ("Q6 join metadata", f"SELECT COUNT(*), MAX(a.size_bytes) FROM {st} s JOIN {at} a "
-                             f"ON a.archive_id=s.archive_id "
-                             f"AND a.begin_timestamp=s.begin_timestamp{ja} "
-                             f"WHERE {dss}s.column_id=7 AND s.value='{sel}' "
-                             f"AND s.begin_timestamp >= {w24} AND s.begin_timestamp < {wend}"),
-        ("Q7 archives range", f"SELECT COUNT(*), SUM(size_bytes) FROM {at} WHERE {d}{tw24}"),
+    win = f"s.begin_timestamp >= {{lo}} AND s.begin_timestamp < {wend}"
+
+    def joined(where, lo=w24):
+        return (f"SELECT COUNT(*), MAX(a.size_bytes) FROM {st} s JOIN {at} a "
+                f"ON a.archive_id=s.archive_id AND a.begin_timestamp=s.begin_timestamp{ja} "
+                f"WHERE {d}{where} AND " + win.format(lo=lo))
+
+    q = [
+        ("Q0 point, side only",
+         f"SELECT COUNT(DISTINCT archive_id) FROM {st} WHERE "
+         + (f"dataset_id={a.k} AND " if ds else "")
+         + f"column_id=7 AND value='{sel}' AND begin_timestamp >= {w24} "
+           f"AND begin_timestamp < {wend}"),
+        ("Q1 point, 24h", joined(f"s.column_id=7 AND s.value='{sel}'")),
+        ("Q2 point, 7d", joined(f"s.column_id=7 AND s.value='{sel}'", w7d)),
+        ("Q3 hot value, 24h", joined(f"s.column_id=3 AND s.value='{hot}'")),
+        ("Q4 prefix wildcard", joined(f"s.column_id=7 AND s.value LIKE '{sel[:5]}%'")),
     ]
+    jy = " AND y.dataset_id=s.dataset_id" if ds else ""
+    q.append(("Q5 two predicates",
+              f"SELECT COUNT(*), MAX(a.size_bytes) FROM {st} s "
+              f"JOIN {st} y ON y.archive_id=s.archive_id "
+              f"AND y.begin_timestamp=s.begin_timestamp{jy} "
+              f"JOIN {at} a ON a.archive_id=s.archive_id "
+              f"AND a.begin_timestamp=s.begin_timestamp{ja} "
+              f"WHERE {d}s.column_id=7 AND s.value='{sel}' "
+              f"AND y.column_id=5 AND y.value='{other}' AND " + win.format(lo=w24)))
+
+    # Cross-dataset, SAME TENANT: the one fan-out that survives authorization.
+    own = own_datasets(a)
+    if ds:
+        inlist = ",".join(str(x) for x in own)
+        cross = (f"SELECT COUNT(*), MAX(a.size_bytes) FROM {st} s JOIN {at} a "
+                 f"ON a.archive_id=s.archive_id AND a.begin_timestamp=s.begin_timestamp{ja} "
+                 f"WHERE s.dataset_id IN ({inlist}) AND s.column_id=7 "
+                 f"AND s.value='{sel}' AND " + win.format(lo=w24))
+    else:
+        br = [f"SELECT COUNT(*) c, MAX(a.size_bytes) m FROM {sx} s JOIN {ax} a "
+              f"ON a.archive_id=s.archive_id AND a.begin_timestamp=s.begin_timestamp "
+              f"WHERE s.column_id=7 AND s.value='{sel}' AND " + win.format(lo=w24)
+              for ax, sx in pairs]
+        cross = "SELECT SUM(c), MAX(m) FROM (" + " UNION ALL ".join(br) + ") u"
+    q.append((f"Q6 own {len(own)} datasets", cross))
+    q.append(("Q7 archives range",
+              f"SELECT COUNT(*), SUM(size_bytes) FROM {at} WHERE "
+              + (f"dataset_id={a.k} AND " if ds else "")
+              + f"begin_timestamp >= {w24} AND begin_timestamp < {wend}"))
+    return q
 
 
 def batch(e, schema, sql, reps):
@@ -251,15 +290,18 @@ def main():
         return 1
     print(f"server {o.strip().splitlines()[-1]}   probing dataset k={a.k}\n")
 
+    own = list(range(u * a.dpu, (u + 1) * a.dpu))
+    per_ds_pairs = [(f"arch_d{x:04d}", f"side_d{x:04d}") for x in own]
     candidates = [
-        ("per dataset", DB, f"arch_d{a.k:04d}", f"side_d{a.k:04d}", False),
-        ("per user", DB, f"arch_u{u:03d}", f"side_u{u:03d}", True),
-        ("shared", DB, "arch_all", "side_all", True),
-        ("per retention", DB, f"arch_t{tier}", f"side_t{tier}", True),
+        ("per dataset", DB, f"arch_d{a.k:04d}", f"side_d{a.k:04d}", False, per_ds_pairs),
+        ("per user", DB, f"arch_u{u:03d}", f"side_u{u:03d}", True, None),
+        ("shared", DB, "arch_all", "side_all", True, None),
+        ("per retention", DB, f"arch_t{tier}", f"side_t{tier}", True, None),
     ]
-    found = [(n, sc, at, st, ds) for n, sc, at, st, ds in candidates if exists(e, sc, st)]
-    for n, sc, at, st, ds in candidates:
-        mark = "found" if (n, sc, at, st, ds) in found else "absent"
+    found = [c for c in candidates if exists(e, c[1], c[3])]
+    for c in candidates:
+        n, sc, st = c[0], c[1], c[3]
+        mark = "found" if c in found else "absent"
         print(f"  {n:<14} {sc}.{st:<12} {mark}")
     if not found:
         print("\nNothing to probe: the benchmark drops each configuration when its cycle")
@@ -280,8 +322,8 @@ def main():
     print(hdr)
     print("  " + "-" * (len(hdr) - 2))
     out = [hdr.strip()]
-    for name, schema, at, st, ds in found:
-        for qname, sql in queries(a, ds, at, st):
+    for name, schema, at, st, ds, pairs in found:
+        for qname, sql in queries(a, ds, at, st, pairs):
             cold_s, cphys = "-", "-"
             if a.restart_cmd:
                 ok, why = go_cold(e, a, log_path)
