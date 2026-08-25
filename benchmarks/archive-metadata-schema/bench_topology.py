@@ -523,6 +523,10 @@ def main():
     ap.add_argument("--engine", action="append", default=[])
     ap.add_argument("--users", type=int, default=6)
     ap.add_argument("--datasets-per-user", type=int, dest="dpu", default=3)
+    ap.add_argument("--skip-retention", action="store_true", dest="skip_retention",
+                    help="skip the retention phase. It is the slowest phase after the "
+                         "load, it is not a decision metric, and it DROPs partitions -- "
+                         "so with --keep it would corrupt the dataset left for querying")
     ap.add_argument("--keep", action="store_true",
                     help="do not drop a configuration's databases when its cycle ends, so "
                          "query_probe.py can rerun queries against the surviving tables")
@@ -587,8 +591,14 @@ def main():
                         "openf": open_files(e)}
             sys.stderr.write(f"  [{e['label']}] {cfg}: query\n")
             res[cfg]["steps"] = steps(e, cfg, a)
-            sys.stderr.write(f"  [{e['label']}] {cfg}: retention\n")
-            res[cfg]["ret"] = retention(e, cfg, a, dtot)
+            # Retention DROPs expired partitions, so it mutates the tables it measures.
+            # Under --keep that would leave the probe reading a hollowed-out dataset, and
+            # it is the slowest phase besides the load. Skippable for that reason.
+            if a.skip_retention:
+                res[cfg]["ret"] = None
+            else:
+                sys.stderr.write(f"  [{e['label']}] {cfg}: retention\n")
+                res[cfg]["ret"] = retention(e, cfg, a, dtot)
             if not a.keep:
                 for s in schemas(cfg, a):
                     sh(e, f"DROP DATABASE IF EXISTS {s};")
@@ -656,6 +666,12 @@ def main():
                      f"{m['miss']:>9,}")
             line("  " + "-" * 92)
         line("  parts = partitions the optimizer visits (pruning, from EXPLAIN).")
+
+        if all(res[c]["ret"] is None for c in cfgs):
+            line("")
+            line("  P3 retention skipped (--skip-retention): it drops partitions, so it")
+            line("  would mutate the tables left behind for querying.")
+            continue
 
         line("")
         line("=" * 98)
