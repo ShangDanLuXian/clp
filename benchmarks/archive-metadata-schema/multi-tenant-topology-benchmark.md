@@ -141,13 +141,13 @@ stored bytes per posting, 64 KB is absorbed by ~18 archives per partition, and t
 datasets produce 71 per hour. It bites only with many near-empty datasets (~65 MB each at
 K=6), which is a hazard of creating empty datasets, not a cost of scale.
 
-**Open files**: the three many-table configurations sit pinned at the 2,000 cap, meaning
+**Open files**: the two many-table configurations sit pinned at the 2,000 cap, meaning
 more tablespaces exist than cache slots. `check_file_handles.sh` measured what that costs:
 an identical scan at 17x oversubscription -- the same ratio as 34,000 tablespaces against a
 2,000 cap -- runs about 11% slower from handle evict/reopen, with physical page reads equal.
 A modest tax, not a cliff. The real file-count problem is the ceiling in section 5.0.
 
-**Write amplification** is 36% higher for the per-dataset layouts (15.9x vs 11.7x):
+**Write amplification** is 36% higher for the per-dataset layout (15.9x vs 11.7x):
 identical rows, but flushing through 34,000 small partitions writes more partially-filled
 pages than flushing through 340. Converted to absolutes it stops mattering: the difference
 is 5,465 MB over the seven days the data represents, ~9 KB/s sustained, ~285 GB/year against
@@ -157,7 +157,7 @@ over-provisioned for its own ingest by ~1,500x.
 
 One structural note: the per-dataset layout stores slightly LESS than the shared ones
 (4,074.6 vs 4,166.2 MB side). Its rows genuinely omit the 2-byte `dataset_id`, and the 92 MB
-difference is exactly that column -- the shared design does not pack data better.
+difference is that column -- the shared design does not pack data better.
 
 ### 4.2 Query matrix
 
@@ -197,16 +197,16 @@ buried under that floor. Identical rows examined and partitions visited is the d
 evidence. Two counter details worth noting: the only nonzero table-cache miss in the matrix
 lands on Q5 for the 200-table layout (the self-join opens a second table reference, and only
 the layout with 200 tables misses the cache on it), and Q7 examines 24 more rows under it
-(1,738 vs 1,714), one per partition visited, from the different archives-table key layout.
+(1,738 vs 1,714) -- one per partition visited.
 
 **Q8 is a diagnostic, not a workload, and decides nothing.** CLP does not issue queries
 spanning tenants -- authorization excludes them before performance enters into it. The shape
 exists to isolate what answering from N tables costs versus one: the per-dataset layout
 needs a 100-branch UNION over 2,400 partitions (29.9 ms) where the shared table answers in
-one range over 24 (16.5 ms). Also relevant per-query cost: a metadata lookup is the candidate-
-generation prefix of a user query, and the user's wait is dominated by opening and searching
-each candidate archive (~200 ms per archive in earlier rounds), so no per-query difference
-at this scale is user-visible under any topology.
+one range over 24 (16.5 ms). Also relevant to any per-query cost: a metadata lookup is only
+the candidate-generation prefix of a user query, whose wait is dominated by opening and
+searching each candidate archive (~200 ms per archive in earlier rounds), so no per-query
+difference at this scale is user-visible under any topology.
 
 The matrix does not cover the one fan-out that survives authorization: a tenant querying
 across the several datasets it owns. Under the per-dataset layout that still requires a
