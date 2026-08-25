@@ -510,6 +510,9 @@ def main():
     ap.add_argument("--engine", action="append", default=[])
     ap.add_argument("--users", type=int, default=6)
     ap.add_argument("--datasets-per-user", type=int, dest="dpu", default=3)
+    ap.add_argument("--keep", action="store_true",
+                    help="do not drop a configuration's databases when its cycle ends, so "
+                         "query_probe.py can rerun queries against the surviving tables")
     ap.add_argument("--archives", type=int, default=100, help="archives per dataset")
     ap.add_argument("--hours", type=int, default=72, help="hourly partitions per table")
     ap.add_argument("--tiers", default="24,48,72",
@@ -573,8 +576,9 @@ def main():
             res[cfg]["steps"] = steps(e, cfg, a)
             sys.stderr.write(f"  [{e['label']}] {cfg}: retention\n")
             res[cfg]["ret"] = retention(e, cfg, a, dtot)
-            for s in schemas(cfg, a):
-                sh(e, f"DROP DATABASE IF EXISTS {s};")
+            if not a.keep:
+                for s in schemas(cfg, a):
+                    sh(e, f"DROP DATABASE IF EXISTS {s};")
 
         line("")
         line("=" * 98)
