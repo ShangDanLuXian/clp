@@ -125,31 +125,56 @@ def batch(e, schema, sql, reps):
     return ms, phys, None
 
 
-def go_cold(e, a):
+def uptime(e):
+    _, o, _ = sh(e, "SHOW GLOBAL STATUS LIKE 'Uptime';")
+    for ln in o.splitlines():
+        f = ln.split("\t")
+        if len(f) == 2 and f[1].strip().isdigit():
+            return int(f[1])
+    return None
+
+
+def go_cold(e, a, log_path):
     """Restart the server with the pool dump/reload off; optionally drop the OS cache.
 
-    NEVER capture_output on the restart: the service starts a daemon that inherits the
-    pipes, and waiting for EOF on them hangs forever. DEVNULL plus a new session keeps it
-    detached and bounded."""
+    Returns (ok, detail). Two failure modes are checked explicitly, because an earlier
+    version silently reported warm samples as cold when the restart never happened:
+
+      - The restart command's exit status and output are captured. They go to a FILE, never
+        a pipe: the service starts a daemon that inherits the pipe and holds it open for
+        its whole life, so waiting for EOF would hang forever. A file has no such problem.
+      - Uptime is compared across the restart. A server that never went down keeps counting
+        up, so `after >= before` proves no restart occurred -- which is what happens when
+        the restart needs root and was run without it."""
     sh(e, "SET GLOBAL innodb_buffer_pool_dump_at_shutdown=OFF;")
-    try:
-        subprocess.run(a.restart_cmd, shell=True, stdin=subprocess.DEVNULL,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                       timeout=300, start_new_session=True)
-    except subprocess.TimeoutExpired:
-        return False
-    if a.drop_caches:
+    before = uptime(e)
+    with open(log_path, "w") as lf:
         try:
-            subprocess.run("sync; echo 3 > /proc/sys/vm/drop_caches", shell=True,
-                           timeout=60)
-        except Exception:
-            pass
+            rc = subprocess.run(a.restart_cmd, shell=True, stdin=subprocess.DEVNULL,
+                                stdout=lf, stderr=subprocess.STDOUT,
+                                timeout=300, start_new_session=True).returncode
+        except subprocess.TimeoutExpired:
+            return False, "restart command timed out"
+    if rc != 0:
+        with open(log_path) as lf:
+            msg = " ".join(lf.read().split())[:90] or "no output"
+        return False, f"restart command exited {rc}: {msg}"
+    if a.drop_caches:
+        subprocess.run("sync; echo 3 > /proc/sys/vm/drop_caches", shell=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
     for _ in range(180):
-        rc, _, _ = sh(e, "SELECT 1;")
-        if rc == 0:
-            return True
+        if sh(e, "SELECT 1;")[0] == 0:
+            break
         time.sleep(2)
-    return False
+    else:
+        return False, "server did not come back"
+    after = uptime(e)
+    if after is None:
+        return False, "server came back but Uptime unreadable"
+    if before is not None and after >= before:
+        return False, (f"server never restarted (Uptime {before}s -> {after}s); "
+                       "the command probably needs root -- try prefixing it with sudo")
+    return True, ""
 
 
 def main():
@@ -194,8 +219,14 @@ def main():
     if not a.restart_cmd:
         print("\nno --restart-cmd: warm-only. Cold is a restart; online pool eviction")
         print("does not work on MariaDB 10.6 (shrink refused; scans do not evict).")
+    if a.drop_caches and not os.access("/proc/sys/vm/drop_caches", os.W_OK):
+        print("\n--drop-caches given but /proc/sys/vm/drop_caches is not writable (needs")
+        print("root). Rerun the whole probe under sudo, or drop the flag and accept an")
+        print("InnoDB-cold / OS-page-cache-warm measurement.")
+        return 1
     print()
 
+    log_path = os.path.join(tempfile.gettempdir(), "query_probe_restart.log")
     hdr = (f"  {'config':<14} {'query':<20} {'cold_ms':>9} {'c_phys':>7} "
            f"{'warm_min':>9} {'warm_med':>9} {'warm_max':>9} {'w_phys':>7}")
     print(hdr)
@@ -205,8 +236,10 @@ def main():
         for qname, sql in queries(a, ds, at, st):
             cold_s, cphys = "-", "-"
             if a.restart_cmd:
-                if not go_cold(e, a):
-                    print("  restart failed; aborting cold pass")
+                ok, why = go_cold(e, a, log_path)
+                if not ok:
+                    print(f"\n  COLD PASS ABORTED: {why}")
+                    print("  No cold numbers are reported rather than reporting warm ones.")
                     return 1
                 cms, cph, err = batch(e, schema, sql, 1)
                 if err:
