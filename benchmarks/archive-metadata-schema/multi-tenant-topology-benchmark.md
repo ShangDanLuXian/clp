@@ -25,7 +25,7 @@ from ratios to absolutes.
 ## 1.0 Terminology
 
 **Topology / configuration.** A rule for how many physical tables hold the metadata of N
-datasets, and what their primary key looks like. Five are compared (section 2.0); nothing
+datasets, and what their primary key looks like. Four are compared (section 2.0); nothing
 else varies -- same rows, same partitioning, same server.
 
 **Table kind (K).** The schema has several logical tables per dataset: the archives table,
@@ -61,12 +61,11 @@ describes the INSTANCE, never a query's time window.
 
 ---
 
-## 2.0 The five configurations
+## 2.0 The four configurations
 
 | configuration                | tables | dataset_id in key | what it models                     |
 |------------------------------|--------|-------------------|------------------------------------|
 | one set per dataset          | K x N  | no                | today's design, tables named by ds |
-| per dataset, schema per user | K x N  | no                | same tables, one SCHEMA per user   |
 | one set per user             | K x U  | yes               | tables scoped to the owner         |
 | one set for everything       | K      | yes               | a single shared table set          |
 | one set per retention period | K x R  | yes               | grouped by how long data lives     |
@@ -74,11 +73,10 @@ describes the INSTANCE, never a query's time window.
 N = datasets (100 here), U = users (20), R = distinct retention periods (3), K = table kinds
 (2 here; more in production, so table counts scale accordingly).
 
-**Per dataset, schema per user** is deliberately a placebo. It changes only namespacing,
-which fixes the SQL-construction problems of dataset-named tables -- identifiers built by
-string interpolation, the 64-character identifier limit, sanitization collisions -- while
-changing nothing physical. Its results test whether those problems can be fixed without the
-operational refactor.
+Not compared: one database instance per user holding a shared, dataset_id-keyed table set.
+Its per-instance behaviour is the shared configuration at U=1; what it adds -- a fixed
+per-instance floor (system tablespace, redo, buffer pool, monitoring) times U -- was not
+measured here.
 
 **One set per retention period** is included for completeness only. It is unworkable in
 practice: retention is a per-dataset, user-mutable setting, and under this grouping a policy
@@ -99,7 +97,7 @@ severities at 40, modules at 300. The 45 is a cardinality-WITHIN-archive assumpt
 size ceiling. `c8`'s payload is 577 B per archive, about 11% of the 5,368 B admission
 budget (0.1% of the compressed archive); the widest admissible shape is 8.9x larger, so the
 absolute sizes below are a conservative corner of the space. The comparison is unaffected --
-all five configurations ran identical data.
+all configurations ran identical data.
 
 **No compression.** Tables were created without `ROW_FORMAT` or `KEY_BLOCK_SIZE`, so
 everything ran at InnoDB's default uncompressed `DYNAMIC`. A separate round measured
@@ -127,7 +125,6 @@ examined from `Handler_read_*` after `FLUSH STATUS`; partitions visited from
 | configuration | tables | partitions | open files | empty MB | arch MB | side MB | space | write |
 |---------------|-------:|-----------:|-----------:|---------:|--------:|--------:|------:|------:|
 | per dataset   |    200 |     34,000 |  **2,000** |  2,125.0 |   265.6 | 4,074.6 | 3.34x | 15.91x |
-| schema/user   |    200 |     34,000 |  **2,000** |  2,125.0 |   265.6 | 4,074.6 | 3.34x | 16.21x |
 | per user      |     40 |      6,800 |  **2,000** |    425.0 |   158.1 | 5,093.1 | 3.73x | 12.64x |
 | shared        |      2 |        340 |        344 |     21.2 |   131.6 | 4,166.2 | 3.06x | 11.71x |
 | per retention |      6 |      1,020 |      1,024 |     63.8 |    96.7 | 4,276.5 | 3.11x | 11.99x |
@@ -135,7 +132,7 @@ examined from `Handler_read_*` after `FLUSH STATUS`; partitions visited from
 (Row labels abbreviate the configuration names of section 2.0; "space"/"write" are the two
 amplification figures.)
 
-Load wall times, informational: 396 s, 400 s, 263 s, 118 s, 119 s in table order.
+Load wall times, informational: 396 s, 263 s, 118 s, 119 s in table order.
 
 **Empty cost** is exactly 64 KB x partition count -- the initial allocation of a fresh
 tablespace. It is a steady-state floor (production reaches this partition count after one
@@ -158,15 +155,13 @@ SSD endurance measured in petabytes. Load wall times deflate the same way -- the
 archives represent 168 h of ingest loaded in 396 s, so even the slowest configuration is
 over-provisioned for its own ingest by ~1,500x.
 
-Two structural notes. The per-dataset layouts store slightly LESS than the shared ones
-(4,074.6 vs 4,166.2 MB side): their rows genuinely omit the 2-byte `dataset_id`, and the
-92 MB difference is exactly that column -- the shared design does not pack data better. And
-the schema-per-user variant matches one-set-per-dataset on every physical number, confirming
-it is naming-only: it fixes SQL construction and fixes nothing else.
+One structural note: the per-dataset layout stores slightly LESS than the shared ones
+(4,074.6 vs 4,166.2 MB side). Its rows genuinely omit the 2-byte `dataset_id`, and the 92 MB
+difference is exactly that column -- the shared design does not pack data better.
 
 ### 4.2 Query matrix
 
-Eight query shapes. Rows examined and partitions visited are identical across all five
+Eight query shapes. Rows examined and partitions visited are identical across all four
 configurations for Q1-Q7 (Q7 within 1.4%), which is the evidence that sharing a table with
 99 other tenants costs a single-dataset query nothing: the `dataset_id` key prefix and
 partition pruning isolate it as effectively as a private table.
@@ -184,38 +179,37 @@ partition pruning isolate it as effectively as a private table.
 
 Wall times per configuration, milliseconds:
 
-| query | per-dataset | schema/user | per-user | shared | per-retention |
-|-------|------------:|------------:|---------:|-------:|--------------:|
-| Q1    |         2.6 |         2.9 |      2.6 |    3.1 |           2.5 |
-| Q2    |         3.6 |         3.2 |      3.5 |    4.1 |           3.7 |
-| Q3    |         3.3 |         2.7 |      2.8 |    2.8 |           2.8 |
-| Q4    |         2.7 |         2.6 |      2.7 |    2.6 |           3.0 |
-| Q5    |         3.1 |         2.7 |      2.8 |    3.2 |           2.9 |
-| Q6    |         2.8 |         2.9 |      2.8 |    3.0 |           2.8 |
-| Q7    |         2.9 |         2.7 |      2.7 |    2.7 |           2.7 |
-| Q8    |        29.9 |        28.3 |     66.6 |   16.5 |          22.2 |
+| query | per-dataset | per-user | shared | per-retention |
+|-------|------------:|---------:|-------:|--------------:|
+| Q1    |         2.6 |      2.6 |    3.1 |           2.5 |
+| Q2    |         3.6 |      3.5 |    4.1 |           3.7 |
+| Q3    |         3.3 |      2.8 |    2.8 |           2.8 |
+| Q4    |         2.7 |      2.7 |    2.6 |           3.0 |
+| Q5    |         3.1 |      2.8 |    3.2 |           2.9 |
+| Q6    |         2.8 |      2.8 |    3.0 |           2.8 |
+| Q7    |         2.9 |      2.7 |    2.7 |           2.7 |
+| Q8    |        29.9 |     66.6 |   16.5 |          22.2 |
 
 Read the Q1-Q7 comparison from the counters, not the timer: each query runs as a fresh
 `mysql -e` subprocess, so every wall time carries several milliseconds of client startup and
 connection before the server does any work, and server-side execution for these shapes is
 buried under that floor. Identical rows examined and partitions visited is the direct
-evidence. Two counter details worth noting: the only nonzero table-cache misses in the
-matrix land on Q5 for the two 200-table layouts (the self-join opens a second table
-reference, and only the layouts with 200 tables miss the cache on it), and Q7 examines 24
-more rows under the per-dataset layouts (1,738 vs 1,714), one per partition visited, from
-the different archives-table key layout.
+evidence. Two counter details worth noting: the only nonzero table-cache miss in the matrix
+lands on Q5 for the 200-table layout (the self-join opens a second table reference, and only
+the layout with 200 tables misses the cache on it), and Q7 examines 24 more rows under it
+(1,738 vs 1,714), one per partition visited, from the different archives-table key layout.
 
 **Q8 is a diagnostic, not a workload, and decides nothing.** CLP does not issue queries
 spanning tenants -- authorization excludes them before performance enters into it. The shape
-exists to isolate what answering from N tables costs versus one: per-table layouts need a
-100-branch UNION over 2,400 partitions (29.9 ms) where the shared table answers in one range
-over 24 (16.5 ms). Also relevant per-query cost: a metadata lookup is the candidate-
+exists to isolate what answering from N tables costs versus one: the per-dataset layout
+needs a 100-branch UNION over 2,400 partitions (29.9 ms) where the shared table answers in
+one range over 24 (16.5 ms). Also relevant per-query cost: a metadata lookup is the candidate-
 generation prefix of a user query, and the user's wait is dominated by opening and searching
 each candidate archive (~200 ms per archive in earlier rounds), so no per-query difference
 at this scale is user-visible under any topology.
 
 The matrix does not cover the one fan-out that survives authorization: a tenant querying
-across the several datasets it owns. Under the per-dataset layouts that still requires a
+across the several datasets it owns. Under the per-dataset layout that still requires a
 generated UNION over table names. See 6.0.
 
 ### 4.3 Retention
