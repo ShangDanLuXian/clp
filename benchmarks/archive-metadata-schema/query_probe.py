@@ -152,17 +152,32 @@ def go_cold(e, a, log_path):
     sh(e, "SET GLOBAL innodb_buffer_pool_dump_at_shutdown=OFF;")
     t_start = time.time()
     before = uptime(e)
-    with open(log_path, "w") as lf:
-        try:
-            rc = subprocess.run(a.restart_cmd, shell=True, stdin=subprocess.DEVNULL,
-                                stdout=lf, stderr=subprocess.STDOUT,
-                                timeout=300, start_new_session=True).returncode
-        except subprocess.TimeoutExpired:
-            return False, "restart command timed out"
+
+    def attempt():
+        with open(log_path, "w") as lf:
+            try:
+                return subprocess.run(a.restart_cmd, shell=True, stdin=subprocess.DEVNULL,
+                                      stdout=lf, stderr=subprocess.STDOUT,
+                                      timeout=300, start_new_session=True).returncode
+            except subprocess.TimeoutExpired:
+                return 124
+        return 1
+
+    rc = attempt()
+    if rc != 0:
+        # systemd rate-limits restarts (StartLimitBurst, 5 by default) and then refuses
+        # with "Start request repeated too quickly" until the failure state is cleared.
+        # One cold pass per query trips this partway through a matrix, so clear it and
+        # retry once rather than abandoning a run that was working.
+        subprocess.run(a.recover_cmd, shell=True, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, timeout=60)
+        time.sleep(2)
+        rc = attempt()
     if rc != 0:
         with open(log_path) as lf:
             msg = " ".join(lf.read().split())[:90] or "no output"
-        return False, f"restart command exited {rc}: {msg}"
+        return False, (f"restart command exited {rc} after a recovery retry: {msg}"
+                       " -- if this is systemd's start limit, widen --recover-cmd")
     if a.drop_caches:
         subprocess.run("sync; echo 3 > /proc/sys/vm/drop_caches", shell=True,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
@@ -192,6 +207,12 @@ def main():
                     "without it the cold pass is skipped, and nothing cold is reported")
     ap.add_argument("--drop-caches", action="store_true",
                     help="also flush the OS page cache after each restart (needs root)")
+    ap.add_argument("--recover-cmd",
+                    default="systemctl reset-failed mariadb.service mysql.service "
+                            "mariadb mysql 2>/dev/null || true",
+                    help="run once and retry when a restart fails; clears systemd's "
+                         "start-limit state, which a per-query cold pass trips after "
+                         "about five restarts")
     ap.add_argument("--hours", type=int, default=168)
     ap.add_argument("--users", type=int, default=20)
     ap.add_argument("--datasets-per-user", type=int, dest="dpu", default=5)
