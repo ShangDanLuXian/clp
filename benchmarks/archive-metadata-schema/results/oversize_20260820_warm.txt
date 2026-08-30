@@ -1,0 +1,80 @@
+ OVERSIZED VALUES  2026-08-20 05:05:09
+   cap=1024 B, oversized value=3000 B, 4 share each CAP-prefix, pool=200, 8 postings/archive
+   mariadb   10.11.14-MariaDB-0ubuntu0.24.04.1
+
+==================================================================================================
+ O1  correctness: truth must be a SUBSET of candidates  [mariadb]
+==================================================================================================
+  query shape                       policy      truth   cands  missing   extra  run1_ms  warm_ms  verdict
+  --------------------------------------------------------------------------------------------------------
+  equality, short term              trunc         796     796        0       0     57.3     13.4  pass
+  equality, short term              marker        796  11,923        0  11,127     71.9     20.8  pass
+  equality, short term              ltab          796     873        0      77     25.8     13.4  pass
+  equality, short term              naive         796     796        0       0     34.0     11.9  pass
+  --------------------------------------------------------------------------------------------------------
+  equality, term > cap              trunc         826   3,101        0   2,275     46.8     15.5  pass
+  equality, term > cap              marker        826  11,535        0  10,709     70.9     20.4  pass
+  equality, term > cap              ltab          826     892        0      66    252.7    176.8  pass
+  equality, term > cap              naive         826       0      826       0     20.3     12.7  FALSE NEGATIVES
+  --------------------------------------------------------------------------------------------------------
+  prefix  'host-000%'               trunc      19,941  19,941        0       0    146.5     86.2  pass
+  prefix  'host-000%'               marker     19,941  19,993        0      52    159.3     97.6  pass
+  prefix  'host-000%'               ltab       19,941  19,943        0       2    277.6     95.4  pass
+  prefix  'host-000%'               naive      19,941  19,941        0       0    143.8     85.0  pass
+  --------------------------------------------------------------------------------------------------------
+  infix   '%svc%' (short vals)      trunc      20,000  20,000        0       0    379.9    162.4  pass
+  infix   '%svc%' (short vals)      marker     20,000  20,000        0       0    176.3    150.3  pass
+  infix   '%svc%' (short vals)      ltab       20,000  20,000        0       0    730.4    619.1  pass
+  infix   '%svc%' (short vals)      naive      20,000  20,000        0       0    194.1    138.9  pass
+  --------------------------------------------------------------------------------------------------------
+  infix   '%ZZTAG0000%' (past cap)  trunc         826  11,535        0  10,709    303.3    128.8  pass
+  infix   '%ZZTAG0000%' (past cap)  marker        826  11,535        0  10,709    129.3    113.6  pass
+  infix   '%ZZTAG0000%' (past cap)  ltab          826     892        0      66    685.9    566.6  pass
+  infix   '%ZZTAG0000%' (past cap)  naive         826       0      826       0    150.3     92.9  FALSE NEGATIVES
+  --------------------------------------------------------------------------------------------------------
+  trunc + marker + ltab: ALL CORRECT    naive: false negatives above are the expected demonstration of why
+  dropping an oversized posting without recording anything cannot be shipped.
+
+==================================================================================================
+ O2/O3  cost of the cap-length rule as oversized values get more common  [mariadb]
+==================================================================================================
+  oversized  trunc_MB mark_MB ltab_MB  eq tr  eq mk  eq lt  ifx tr  ifx mk  ifx lt
+  ------------------------------------------------------------------------------------
+  0%             13.3    13.3    21.3  1.00x  1.00x  1.00x   1.00x   1.00x   1.00x
+  0.5%           14.6    13.4    23.7  1.00x  1.98x  1.00x   1.98x   1.98x   1.00x
+  1%             17.2    13.3    28.8  1.00x  2.93x  1.00x   2.93x   2.93x   1.00x
+  2%             23.4    13.3    39.5  1.00x  4.78x  1.00x   4.78x   4.78x   1.00x
+  5%             29.9    13.3    62.7  1.00x  9.30x  1.01x   9.30x   9.30x   1.01x
+  10%*           42.9    13.4    99.3  1.00x 14.98x  1.10x  14.98x  14.98x   1.10x
+
+ O4  side-table query latency  [mariadb]
+  run1 (first issue after build -- pays first-touch, not fully disk-cold):
+  oversized    eq tr   eq mk   eq lt   ifx tr   ifx mk   ifx lt
+  --------------------------------------------------------------
+  0%            13.4    14.7    12.8    104.8    101.8    106.0
+  0.5%          13.1    14.7    12.4    115.8    100.7    108.1
+  1%            13.1    15.1    18.6    108.1    104.1    111.8
+  2%            13.1    22.6    23.5    109.5     98.7    122.2
+  5%            39.2    53.1    26.4    319.4    111.6    229.9
+  10%*          59.6    65.3    43.9    381.3    151.2    795.6
+  warm (same statement re-issued immediately):
+  oversized    eq tr   eq mk   eq lt   ifx tr   ifx mk   ifx lt
+  --------------------------------------------------------------
+  0%            14.3    13.1    11.7    107.9    102.1    107.8
+  0.5%          11.6    12.8    14.2    111.4    101.2    108.6
+  1%            11.1    12.9    11.4    109.8    101.5    113.1
+  2%            10.7    15.3    12.1    107.6    100.2    114.2
+  5%            12.8    18.9    12.4    121.9    100.9    132.8
+  10%*          13.9    21.2    12.5    139.0    100.9    604.3
+  (this is ONLY the SQL side of the query. The dominating cost of a bad
+   policy is downstream: every extra candidate is an archive OPENED and
+   searched for nothing -- which is what the ratio table above counts.)
+
+  (ratios are archives-opened / archives-that-actually-match, on SELECTIVE
+   probes. 1.00x is perfect pruning. ltab = short postings + long values
+   stored WHOLE in a side table + rejection markers for archives with more
+   than 3 oversized values in this column: its only over-match is
+   those rejected archives. The starred row is outside the budget-reachable
+   regime -- failure-shape reference only.)
+
+written to /tmp/claude-0/-home-user/0e0cc592-c6fd-57bf-b728-a9ef7b56769f/scratchpad/ov6.txt
