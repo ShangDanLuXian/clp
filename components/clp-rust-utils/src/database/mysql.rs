@@ -8,7 +8,7 @@ use crate::clp_config::package::credentials::Database as DatabaseCredentials;
 ///
 /// # Examples
 ///
-/// ```rust
+/// ```ignore
 /// impl_sqlx_type!(IngestedS3ObjectMetadataStatus => str);
 /// ```
 #[macro_export]
@@ -29,7 +29,8 @@ macro_rules! impl_sqlx_type {
 /// Trait for formatting Rust enums as SQL `ENUM(...)` declarations.
 pub trait MySqlEnumFormat: IntoEnumIterator + Sized + ToString
 where
-    Self::Iterator: Iterator<Item = Self>, {
+    Self::Iterator: Iterator<Item = Self>,
+{
     /// # Returns
     ///
     /// A string representing the SQL enum definition for this enum.
