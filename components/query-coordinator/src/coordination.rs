@@ -48,6 +48,7 @@ use tokio_util::sync::CancellationToken;
 use tonic::transport::Endpoint;
 
 use crate::Error;
+use crate::cancellation_monitor::CancellationMonitor;
 use crate::job_handle::ArchiveSelectionOptions;
 use crate::job_handle::QueryJobHandle;
 use crate::job_handle::QueryJobHandleContext;
@@ -169,6 +170,9 @@ impl Coordinator {
 
     /// Runs the coordinator's poll loop until cancelled.
     ///
+    /// A [`CancellationMonitor`] is spawned alongside the poll loop to relay query job
+    /// cancellations to Spider, and is stopped by the same cancellation token.
+    ///
     /// On each iteration, this method fetches the pending query jobs, spawns a detached handle to
     /// drive each one, and then sleeps until the next poll or until the cancellation token is
     /// triggered. The jobs dispatched in the iteration are marked once the sleep elapses, so their
@@ -182,6 +186,11 @@ impl Coordinator {
     /// * Forwards [`Self::mark_jobs_dispatched`]'s return values on failure.
     pub async fn run(mut self) -> Result<(), Error> {
         let cancellation_token = self.cancellation_token.clone();
+        let cancellation_monitor_handle = tokio::spawn(
+            self.create_cancellation_monitor()
+                .run(cancellation_token.clone()),
+        );
+
         loop {
             let now = Instant::now();
 
@@ -212,7 +221,22 @@ impl Coordinator {
         }
 
         tracing::info!("Coordinator shutting down.");
+        if let Err(e) = cancellation_monitor_handle.await {
+            tracing::error!(error = % e, "Failed to join the cancellation monitor.");
+        }
         Ok(())
+    }
+
+    /// # Returns
+    ///
+    /// A newly created [`CancellationMonitor`] that shares the coordinator's database pool and
+    /// Spider client, and polls at the coordinator's job polling interval.
+    fn create_cancellation_monitor(&self) -> CancellationMonitor<SpiderClient> {
+        CancellationMonitor::new(
+            self.db_pool.clone(),
+            self.spider_client.clone(),
+            self.job_polling_interval,
+        )
     }
 
     /// Spawns a detached handle to drive each query job that a previous coordinator instance had
