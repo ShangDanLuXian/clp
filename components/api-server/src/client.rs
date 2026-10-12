@@ -373,7 +373,8 @@ impl Client {
                 QueryJobStatus::Failed
                 | QueryJobStatus::Cancelled
                 | QueryJobStatus::Killed
-                | QueryJobStatus::CancelRequested => {
+                | QueryJobStatus::CancelRequested
+                | QueryJobStatus::Cancelling => {
                     return Err(ClientError::QueryNotSucceeded);
                 }
                 QueryJobStatus::Running | QueryJobStatus::Pending => {

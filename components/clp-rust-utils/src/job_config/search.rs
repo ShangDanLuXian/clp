@@ -59,9 +59,12 @@ pub enum QueryJobStatus {
     Running = 1,
     Succeeded = 2,
     Failed = 3,
+    /// The user requested a cancellation that hasn't yet been relayed to the query scheduler.
     CancelRequested = 4,
-    Cancelled = 5,
-    Killed = 6,
+    /// The cancellation has been relayed to the query scheduler, which is winding the job down.
+    Cancelling = 5,
+    Cancelled = 6,
+    Killed = 7,
 }
 
 impl QueryJobStatus {
