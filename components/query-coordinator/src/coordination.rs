@@ -3,23 +3,22 @@
 //! The coordinator is responsible for the query jobs in the `query_jobs` table that are in one of
 //! the following states:
 //!
-//! | `status`   | `spider_id` | `dispatch_time` | Description                                   |
-//! |------------|-------------|-----------------|-----------------------------------------------|
-//! | PENDING    | NULL        | NULL            | New jobs awaiting dispatch.                   |
-//! | PENDING    | NULL        | NOT NULL        | Jobs dispatched, not yet submitted to Spider. |
-//! | RUNNING    | NOT NULL    | NOT NULL        | Jobs submitted to Spider.                     |
-//! | CANCELLING | ANY         | ANY             | Jobs the API server has requested to cancel.  |
+//! | `status`           | `spider_id` | `dispatch_time` | Description                     |
+//! |--------------------|-------------|-----------------|---------------------------------|
+//! | PENDING            | NULL        | NULL            | New jobs awaiting dispatch.     |
+//! | PENDING            | NULL        | NOT NULL        | Dispatched, not yet submitted.  |
+//! | RUNNING            | NOT NULL    | NOT NULL        | Submitted to Spider.            |
+//! | `CANCEL_REQUESTED` | ANY         | ANY             | Requested to cancel.            |
+//! | CANCELLING         | NOT NULL    | NOT NULL        | Cancellation relayed to Spider. |
 //!
 //! NOTE:
 //!
 //! * These are the only legal states for a job that hasn't terminated.
 //! * A non-NULL `dispatch_time` indicates that the coordinator has picked up the job and granted it
 //!   permission to run under the concurrency limit.
-//! * CANCELLING is non-terminal and is reachable from both PENDING and RUNNING.
-//!
-//! TODO: Handle CANCELLING jobs in the coordinator: a background coroutine that cancels the Spider
-//! job of any job sitting in CANCELLING, and a restart sweep that drives CANCELLING jobs to
-//! CANCELLED.
+//! * `CANCEL_REQUESTED` is non-terminal and is reachable from both PENDING and RUNNING.
+//! * CANCELLING is non-terminal and is reachable only from `CANCEL_REQUESTED`, through the
+//!   [`CancellationMonitor`] after it has cancelled the job's Spider job.
 
 use std::num::NonZeroU64;
 use std::sync::Arc;
