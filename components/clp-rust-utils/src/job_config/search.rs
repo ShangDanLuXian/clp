@@ -59,7 +59,7 @@ pub enum QueryJobStatus {
     Running = 1,
     Succeeded = 2,
     Failed = 3,
-    Cancelling = 4,
+    CancelRequested = 4,
     Cancelled = 5,
     Killed = 6,
 }
