@@ -80,6 +80,47 @@ impl<SubmitterType: QueryJobSubmitter> CancellationMonitor<SubmitterType> {
         tracing::info!("Cancellation monitor shutting down.");
     }
 
+    /// Terminates every query job in [`QueryJobStatus::CancelRequested`] that has no recorded
+    /// Spider job as [`QueryJobStatus::Cancelled`].
+    ///
+    /// This is meant to run once at startup, before the coordinator dispatches or recovers any job.
+    ///
+    /// A job that fails to be terminated is logged and skipped, since [`Self::run`] retries it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    ///
+    /// * Forwards [`sqlx::query::QueryScalar::fetch_all`]'s return values on failure.
+    pub async fn sweep_unsubmitted_jobs(&self) -> Result<(), Error> {
+        const QUERY: &str = formatcp!(
+            "SELECT `id` FROM `{QUERY_JOBS_TABLE_NAME}` WHERE `type` = ? AND `status` = ? AND \
+             `spider_id` IS NULL ORDER BY `id` ASC"
+        );
+
+        let query_job_ids = sqlx::query_scalar::<_, QueryJobId>(QUERY)
+            .bind(QueryJobType::SearchOrAggregation)
+            .bind(QueryJobStatus::CancelRequested)
+            .fetch_all(&self.db_pool)
+            .await?;
+
+        for query_job_id in query_job_ids {
+            tracing::info!(
+                query_job_id = % query_job_id,
+                "Cancelling a query job that was never submitted.",
+            );
+            if let Err(e) = self.cancel_unsubmitted_job(query_job_id).await {
+                tracing::error!(
+                    error = % e,
+                    query_job_id = % query_job_id,
+                    "Failed to cancel a query job that was never submitted. Skipping.",
+                );
+            }
+        }
+
+        Ok(())
+    }
+
     /// Relays the cancellation of the oldest query job in [`QueryJobStatus::CancelRequested`], if
     /// any.
     ///
