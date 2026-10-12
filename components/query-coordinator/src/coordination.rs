@@ -70,9 +70,10 @@ pub struct Coordinator {
 impl Coordinator {
     /// Factory function.
     ///
-    /// On construction, this recovers query jobs that a previous coordinator instance had already
-    /// submitted to Spider (those still [`QueryJobStatus::Running`] with a Spider job ID) by
-    /// spawning a detached handle to drive each one to completion.
+    /// On construction, this first cancels the query jobs whose cancellation was requested before
+    /// they were submitted to Spider. It then recovers query jobs that a previous coordinator
+    /// instance had already submitted to Spider (those still [`QueryJobStatus::Running`] with a
+    /// Spider job ID) by spawning a detached handle to drive each one to completion.
     ///
     /// # Returns
     ///
@@ -90,6 +91,7 @@ impl Coordinator {
     /// * Forwards [`SpiderClient::builder`]'s connection return values on failure.
     /// * Forwards [`ExternalResourceGroupCredentials::from_env`]'s return values on failure.
     /// * Forwards [`SpiderClient::add_or_verify_resource_group`]'s return values on failure.
+    /// * Forwards [`CancellationMonitor::sweep_unsubmitted_jobs`]'s return values on failure.
     /// * Forwards [`Self::recover_submitted_jobs`]'s return values on failure.
     pub async fn new(
         coordinator_config: &CoordinatorConfig,
@@ -163,6 +165,10 @@ impl Coordinator {
             job_handler_permits: Arc::new(Semaphore::new(max_concurrent_jobs)),
         };
 
+        coordinator
+            .create_cancellation_monitor()
+            .sweep_unsubmitted_jobs()
+            .await?;
         coordinator.recover_submitted_jobs().await?;
 
         Ok((coordinator, cancellation_token))
