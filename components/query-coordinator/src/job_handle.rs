@@ -422,8 +422,10 @@ impl<SubmitterType: QueryJobSubmitter> QueryJobHandle<SubmitterType> {
     ///   [`QueryJobStatus::Running`]. From [`QueryJobStatus::CancelRequested`] and
     ///   [`QueryJobStatus::Cancelling`], the job is terminated as [`QueryJobStatus::Cancelled`]
     ///   instead, since a cancellation wins over a success.
-    /// * [`QueryJobOutcome::Cancelled`] is permitted only from [`QueryJobStatus::CancelRequested`]
-    ///   and [`QueryJobStatus::Cancelling`].
+    /// * [`QueryJobOutcome::Cancelled`] is permitted from [`QueryJobStatus::CancelRequested`] and
+    ///   [`QueryJobStatus::Cancelling`]. From [`QueryJobStatus::Running`], the job is terminated as
+    ///   [`QueryJobStatus::Failed`] instead, since its Spider job was cancelled by something other
+    ///   than a cancellation request.
     /// * [`QueryJobOutcome::Failed`] is permitted from any non-terminal status, since a failure
     ///   wins over both a success and a cancellation.
     ///
@@ -444,6 +446,8 @@ impl<SubmitterType: QueryJobSubmitter> QueryJobHandle<SubmitterType> {
         const CANCELLED_AFTER_COMPLETION_MESSAGE: &str =
             "The query job completed, but it had already been requested to be cancelled.";
         const CANCELLED_MESSAGE: &str = "The query job was cancelled.";
+        const CANCELLED_EXTERNALLY_MESSAGE: &str =
+            "The query job's Spider job was cancelled without a cancellation request.";
 
         let mut tx = self.context.db_pool.begin().await?;
         let current_status = self.lock_and_get_status(&mut tx).await?;
@@ -457,6 +461,16 @@ impl<SubmitterType: QueryJobSubmitter> QueryJobHandle<SubmitterType> {
                 QueryJobOutcome::Cancelled,
                 QueryJobStatus::CancelRequested | QueryJobStatus::Cancelling,
             ) => (to, Some(CANCELLED_MESSAGE.to_owned())),
+            (QueryJobOutcome::Cancelled, QueryJobStatus::Running) => {
+                tracing::warn!(
+                    query_job_id = % self.query_job_id,
+                    "{CANCELLED_EXTERNALLY_MESSAGE}",
+                );
+                (
+                    QueryJobStatus::Failed,
+                    Some(CANCELLED_EXTERNALLY_MESSAGE.to_owned()),
+                )
+            }
             (
                 QueryJobOutcome::Succeeded,
                 QueryJobStatus::CancelRequested | QueryJobStatus::Cancelling,
