@@ -9,6 +9,7 @@ use clp_rust_utils::job_config::QueryJobType;
 use const_format::formatcp;
 use spider_core::types::id::JobId as SpiderJobId;
 use sqlx::MySqlPool;
+use tokio_util::sync::CancellationToken;
 
 use crate::Error;
 use crate::query_job_submitter::QueryJobSubmitter;
@@ -41,6 +42,63 @@ impl<SubmitterType: QueryJobSubmitter> CancellationMonitor<SubmitterType> {
             job_submitter,
             polling_interval,
         }
+    }
+
+    /// Runs the monitor until `cancellation_token` is triggered.
+    ///
+    /// On each iteration, this method relays the cancellation of at most one query job. It sleeps
+    /// for the polling interval only when there is no cancellation to relay or the relay failed,
+    /// so a backlog of cancellations is drained without delay.
+    ///
+    /// Jobs are processed one at a time by design, since cancellations are expected to be rare.
+    /// Errors are logged and never terminate the monitor.
+    pub async fn run(self, cancellation_token: CancellationToken) {
+        use tokio::select;
+
+        loop {
+            let result = select! {
+                () = cancellation_token.cancelled() => break,
+                result = self.relay_next_cancellation() => result,
+            };
+
+            let has_relayed = result.unwrap_or_else(|e| {
+                tracing::error!(error = % e, "Failed to relay a query job cancellation.");
+                false
+            });
+            if has_relayed {
+                continue;
+            }
+
+            if tokio::time::timeout(self.polling_interval, cancellation_token.cancelled())
+                .await
+                .is_ok()
+            {
+                break;
+            }
+        }
+
+        tracing::info!("Cancellation monitor shutting down.");
+    }
+
+    /// Relays the cancellation of the oldest query job in [`QueryJobStatus::CancelRequested`], if
+    /// any.
+    ///
+    /// # Returns
+    ///
+    /// Whether a cancellation was relayed on success.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    ///
+    /// * Forwards [`Self::fetch_next_cancel_requested_job`]'s return values on failure.
+    /// * Forwards [`Self::relay_cancellation`]'s return values on failure.
+    async fn relay_next_cancellation(&self) -> Result<bool, Error> {
+        let Some(job) = self.fetch_next_cancel_requested_job().await? else {
+            return Ok(false);
+        };
+        self.relay_cancellation(job).await?;
+        Ok(true)
     }
 
     /// Fetches the oldest query job in [`QueryJobStatus::CancelRequested`].
