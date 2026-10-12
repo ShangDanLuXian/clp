@@ -419,10 +419,11 @@ impl<SubmitterType: QueryJobSubmitter> QueryJobHandle<SubmitterType> {
     /// persist from the locked status as follows:
     ///
     /// * [`QueryJobOutcome::Succeeded`] is permitted from [`QueryJobStatus::Pending`] and
-    ///   [`QueryJobStatus::Running`]. From [`QueryJobStatus::CancelRequested`], the job is
-    ///   terminated as [`QueryJobStatus::Cancelled`] instead, since a cancellation wins over a
-    ///   success.
-    /// * [`QueryJobOutcome::Cancelled`] is permitted only from [`QueryJobStatus::CancelRequested`].
+    ///   [`QueryJobStatus::Running`]. From [`QueryJobStatus::CancelRequested`] and
+    ///   [`QueryJobStatus::Cancelling`], the job is terminated as [`QueryJobStatus::Cancelled`]
+    ///   instead, since a cancellation wins over a success.
+    /// * [`QueryJobOutcome::Cancelled`] is permitted only from [`QueryJobStatus::CancelRequested`]
+    ///   and [`QueryJobStatus::Cancelling`].
     /// * [`QueryJobOutcome::Failed`] is permitted from any non-terminal status, since a failure
     ///   wins over both a success and a cancellation.
     ///
@@ -452,10 +453,14 @@ impl<SubmitterType: QueryJobSubmitter> QueryJobHandle<SubmitterType> {
             (QueryJobOutcome::Succeeded, QueryJobStatus::Pending | QueryJobStatus::Running) => {
                 (to, None)
             }
-            (QueryJobOutcome::Cancelled, QueryJobStatus::CancelRequested) => {
-                (to, Some(CANCELLED_MESSAGE.to_owned()))
-            }
-            (QueryJobOutcome::Succeeded, QueryJobStatus::CancelRequested) => {
+            (
+                QueryJobOutcome::Cancelled,
+                QueryJobStatus::CancelRequested | QueryJobStatus::Cancelling,
+            ) => (to, Some(CANCELLED_MESSAGE.to_owned())),
+            (
+                QueryJobOutcome::Succeeded,
+                QueryJobStatus::CancelRequested | QueryJobStatus::Cancelling,
+            ) => {
                 tracing::info!(
                     query_job_id = % self.query_job_id,
                     "{CANCELLED_AFTER_COMPLETION_MESSAGE}",
