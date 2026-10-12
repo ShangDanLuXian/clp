@@ -72,6 +72,59 @@ impl<SubmitterType: QueryJobSubmitter> CancellationMonitor<SubmitterType> {
             .await?)
     }
 
+    /// Relays the cancellation of `job` to Spider.
+    ///
+    /// * If no Spider job is recorded for `job`, there is nothing to cancel, so the job is
+    ///   terminated as [`QueryJobStatus::Cancelled`] directly.
+    /// * Otherwise, its Spider job is cancelled and the job is moved to
+    ///   [`QueryJobStatus::Cancelling`]. The job handle waiting on the Spider job then terminates
+    ///   the query job.
+    ///
+    /// On a failure, the job stays in [`QueryJobStatus::CancelRequested`], so the cancellation is
+    /// retried.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    ///
+    /// * Forwards [`Self::cancel_unsubmitted_job`]'s return values on failure.
+    /// * Forwards [`QueryJobSubmitter::cancel_query_job`]'s return values on failure.
+    /// * Forwards [`Self::transition_from_cancel_requested`]'s return values on failure.
+    async fn relay_cancellation(&self, job: CancelRequestedJobRowProjection) -> Result<(), Error> {
+        let Some(spider_job_id) = job.spider_job_id else {
+            return self.cancel_unsubmitted_job(job.id).await;
+        };
+
+        self.job_submitter.cancel_query_job(spider_job_id).await?;
+        tracing::info!(
+            query_job_id = % job.id,
+            spider_job_id = % spider_job_id,
+            "Relayed the query job cancellation to Spider.",
+        );
+
+        self.transition_from_cancel_requested(job.id, QueryJobStatus::Cancelling, None)
+            .await
+    }
+
+    /// Terminates the query job identified by `query_job_id`, which has no recorded Spider job, as
+    /// [`QueryJobStatus::Cancelled`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    ///
+    /// * Forwards [`Self::transition_from_cancel_requested`]'s return values on failure.
+    async fn cancel_unsubmitted_job(&self, query_job_id: QueryJobId) -> Result<(), Error> {
+        const CANCELLED_MESSAGE: &str = "The query job was cancelled before it was submitted.";
+
+        self.transition_from_cancel_requested(
+            query_job_id,
+            QueryJobStatus::Cancelled,
+            Some(CANCELLED_MESSAGE),
+        )
+        .await
+    }
+
     /// Transitions the query job identified by `query_job_id` from
     /// [`QueryJobStatus::CancelRequested`] to `to`, in a transaction that locks the job's row.
     ///
