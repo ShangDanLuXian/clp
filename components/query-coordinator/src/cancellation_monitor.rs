@@ -71,6 +71,61 @@ impl<SubmitterType: QueryJobSubmitter> CancellationMonitor<SubmitterType> {
             .fetch_optional(&self.db_pool)
             .await?)
     }
+
+    /// Transitions the query job identified by `query_job_id` from
+    /// [`QueryJobStatus::CancelRequested`] to `to`, in a transaction that locks the job's row.
+    ///
+    /// If the job is no longer in [`QueryJobStatus::CancelRequested`], for example because its job
+    /// handle has already terminated it, nothing is persisted.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    ///
+    /// * [`Error::QueryJobMetadataCorrupted`] if the query job's row no longer exists.
+    /// * Forwards [`sqlx::Pool::begin`]'s return values on failure.
+    /// * Forwards [`sqlx::query::QueryScalar::fetch_optional`]'s return values on failure.
+    /// * Forwards [`sqlx::query::Query::execute`]'s return values on failure.
+    /// * Forwards [`sqlx::Transaction::commit`]'s return values on failure.
+    async fn transition_from_cancel_requested(
+        &self,
+        query_job_id: QueryJobId,
+        to: QueryJobStatus,
+        status_msg: Option<&str>,
+    ) -> Result<(), Error> {
+        const SELECT_QUERY: &str =
+            formatcp!("SELECT `status` FROM `{QUERY_JOBS_TABLE_NAME}` WHERE `id` = ? FOR UPDATE");
+        const UPDATE_QUERY: &str = formatcp!(
+            "UPDATE `{QUERY_JOBS_TABLE_NAME}` SET `status` = ?, `status_msg` = ? WHERE `id` = ?"
+        );
+
+        let mut tx = self.db_pool.begin().await?;
+        let observed_status = sqlx::query_scalar::<_, QueryJobStatus>(SELECT_QUERY)
+            .bind(query_job_id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or(Error::QueryJobMetadataCorrupted(query_job_id))?;
+        if QueryJobStatus::CancelRequested != observed_status {
+            tracing::info!(
+                query_job_id = % query_job_id,
+                observed_status = ? observed_status,
+                to = ? to,
+                "Skipping the cancellation transition: the query job is no longer in \
+                 `CancelRequested`.",
+            );
+            return Ok(());
+        }
+
+        sqlx::query(UPDATE_QUERY)
+            .bind(to)
+            .bind(status_msg)
+            .bind(query_job_id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+
+        Ok(())
+    }
 }
 
 /// A projection of the columns read from a [`QueryJobStatus::CancelRequested`] query job row.
