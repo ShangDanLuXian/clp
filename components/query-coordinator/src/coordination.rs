@@ -72,8 +72,8 @@ impl Coordinator {
     ///
     /// On construction, this first cancels the query jobs whose cancellation was requested before
     /// they were submitted to Spider. It then recovers query jobs that a previous coordinator
-    /// instance had already submitted to Spider (those still [`QueryJobStatus::Running`] with a
-    /// Spider job ID) by spawning a detached handle to drive each one to completion.
+    /// instance had already submitted to Spider (those still live with a Spider job ID) by
+    /// spawning a detached handle to drive each one to completion.
     ///
     /// # Returns
     ///
@@ -512,8 +512,12 @@ impl Coordinator {
         Ok(rows)
     }
 
-    /// Fetches jobs that are still in [`QueryJobStatus::Running`] and were previously submitted by
-    /// the query coordinator.
+    /// Fetches jobs that were previously submitted to Spider by the query coordinator and are still
+    /// in [`QueryJobStatus::Running`], [`QueryJobStatus::CancelRequested`], or
+    /// [`QueryJobStatus::Cancelling`].
+    ///
+    /// A job in [`QueryJobStatus::CancelRequested`] is recovered like a running one, since the
+    /// [`CancellationMonitor`] relays its cancellation to Spider independently of its handle.
     ///
     /// A running job whose config cannot be deserialized is marked [`QueryJobStatus::Failed`] and
     /// skipped.
@@ -531,7 +535,7 @@ impl Coordinator {
         const QUERY: &str = formatcp!(
             "SELECT `id`, `spider_id`, `job_config`, CAST(UNIX_TIMESTAMP(`creation_time`) * 1000 \
              AS SIGNED) AS `job_creation_timestamp_millisecs` FROM `{table}` WHERE `type` = ? AND \
-             `status` = ? AND `spider_id` IS NOT NULL;",
+             `status` IN (?, ?, ?) AND `spider_id` IS NOT NULL;",
             table = QUERY_JOBS_TABLE_NAME,
         );
 
@@ -539,6 +543,8 @@ impl Coordinator {
         for row in sqlx::query_as::<_, RunningJobRowProjection>(QUERY)
             .bind(QueryJobType::SearchOrAggregation)
             .bind(QueryJobStatus::Running)
+            .bind(QueryJobStatus::CancelRequested)
+            .bind(QueryJobStatus::Cancelling)
             .fetch_all(&self.db_pool)
             .await?
         {
