@@ -255,7 +255,7 @@ impl Coordinator {
     ///
     /// Returns an error if:
     ///
-    /// * Forwards [`Self::fetch_submitted_running_jobs`]'s return values on failure.
+    /// * Forwards [`Self::fetch_submitted_jobs`]'s return values on failure.
     async fn recover_submitted_jobs(&self) -> Result<(), Error> {
         // NOTE: The current implementation does not enforce concurrency limits for recovered jobs
         // since they were already submitted to Spider. See #2472.
@@ -264,7 +264,7 @@ impl Coordinator {
             spider_job_id,
             search_job_config,
             job_creation_timestamp_millisecs,
-        } in self.fetch_submitted_running_jobs().await?
+        } in self.fetch_submitted_jobs().await?
         {
             tracing::info!(
                 job_id = % job_id,
@@ -519,19 +519,19 @@ impl Coordinator {
     /// A job in [`QueryJobStatus::CancelRequested`] is recovered like a running one, since the
     /// [`CancellationMonitor`] relays its cancellation to Spider independently of its handle.
     ///
-    /// A running job whose config cannot be deserialized is marked [`QueryJobStatus::Failed`] and
+    /// A submitted job whose config cannot be deserialized is marked [`QueryJobStatus::Failed`] and
     /// skipped.
     ///
     /// # Returns
     ///
-    /// A vector of [`SubmittedJob`]s on success, each represents a running query job to recover.
+    /// A vector of [`SubmittedJob`]s on success, each represents a submitted query job to recover.
     ///
     /// # Errors
     ///
     /// Returns an error if:
     ///
     /// * Forwards [`sqlx::query::QueryAs::fetch_all`]'s return values on failure.
-    async fn fetch_submitted_running_jobs(&self) -> Result<Vec<SubmittedJob>, Error> {
+    async fn fetch_submitted_jobs(&self) -> Result<Vec<SubmittedJob>, Error> {
         const QUERY: &str = formatcp!(
             "SELECT `id`, `spider_id`, `job_config`, CAST(UNIX_TIMESTAMP(`creation_time`) * 1000 \
              AS SIGNED) AS `job_creation_timestamp_millisecs` FROM `{table}` WHERE `type` = ? AND \
@@ -540,7 +540,7 @@ impl Coordinator {
         );
 
         let mut recovery_context = Vec::new();
-        for row in sqlx::query_as::<_, RunningJobRowProjection>(QUERY)
+        for row in sqlx::query_as::<_, SubmittedJobRowProjection>(QUERY)
             .bind(QueryJobType::SearchOrAggregation)
             .bind(QueryJobStatus::Running)
             .bind(QueryJobStatus::CancelRequested)
@@ -556,7 +556,7 @@ impl Coordinator {
                     tracing::error!(
                         error = % e,
                         job_id = % row.id,
-                        "Failed to deserialize search job config of a running job. The database \
+                        "Failed to deserialize search job config of a submitted job. The database \
                          might be corrupted. Skipping."
                     );
                     self.mark_job_failed(
@@ -599,9 +599,9 @@ struct PendingJobRowProjection {
     job_creation_timestamp_millisecs: i64,
 }
 
-/// A projection of the columns read from a [`QueryJobStatus::Running`] query job row.
+/// A projection of the columns read from a query job row that was submitted to Spider.
 #[derive(Debug, sqlx::FromRow)]
-struct RunningJobRowProjection {
+struct SubmittedJobRowProjection {
     id: QueryJobId,
     #[sqlx(rename = "spider_id")]
     spider_job_id: SpiderJobId,
