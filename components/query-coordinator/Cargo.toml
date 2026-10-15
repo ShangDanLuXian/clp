@@ -29,3 +29,6 @@ tokio = { workspace = true, features = ["macros", "signal"] }
 tokio-util = { workspace = true }
 tonic = { workspace = true }
 tracing = { workspace = true }
+
+[dev-dependencies]
+api-server = { path = "../api-server" }

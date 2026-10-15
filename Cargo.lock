@@ -3276,6 +3276,7 @@ name = "query-coordinator"
 version = "0.13.1-dev"
 dependencies = [
  "anyhow",
+ "api-server",
  "async-trait",
  "clap",
  "clp-rust-utils",
