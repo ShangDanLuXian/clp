@@ -127,11 +127,11 @@ public:
 
     std::string_view get_archive_id() { return m_archive_id; }
 
-    std::shared_ptr<VariableDictionaryReader> get_variable_dictionary() { return m_var_dict; }
+    std::shared_ptr<VariableDictionaryReader> get_variable_dictionary() const { return m_var_dict; }
 
-    std::shared_ptr<LogTypeDictionaryReader> get_log_type_dictionary() { return m_log_dict; }
+    std::shared_ptr<LogTypeDictionaryReader> get_log_type_dictionary() const { return m_log_dict; }
 
-    std::shared_ptr<LogTypeDictionaryReader> get_array_dictionary() { return m_array_dict; }
+    std::shared_ptr<LogTypeDictionaryReader> get_array_dictionary() const { return m_array_dict; }
 
     std::shared_ptr<TimestampDictionaryReader> get_timestamp_dictionary() {
         return m_archive_reader_adaptor->get_timestamp_dictionary();
