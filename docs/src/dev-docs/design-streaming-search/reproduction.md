@@ -29,8 +29,9 @@ rows below are marked accordingly.
 | `cargo nextest run --workspace`                               | 140 passed, 6 skipped | **140 passed, 6 skipped** (see note 1) |
 | `stream_query_tests` repeated 20 times                        | 10/10 passed every time | **10/10 passed in all 20 runs** |
 | `cargo nextest run -p search-result-listener --run-ignored all` without `CLP_S_BINARY` | the real-clp-s test skips | **36 passed, 0 skipped**; the clp-s test logs "Skipping the test since `CLP_S_BINARY` isn't set." and passes |
-| Real-clp-s listener test (`CLP_S_BINARY` set)                 | 143 results, 286 duplicates dropped, 0 protocol errors | TBD |
-| clp-s builds from the merged tree                             | builds               | TBD |
+| Real-clp-s listener test (`CLP_S_BINARY` set)                 | 143 results, 286 duplicates dropped, 0 protocol errors | **passes** (see note 4); the full listener suite with the binary: 36 passed, 0 skipped |
+| clp-s and clo build from the merged tree                      | build                | **build** (Release, shared libs; `clp-s` in 2 m 28 s on 4 cores, see note 5) |
+| Wire protocol v1 from the built clp-s (not in the reports)    | n/a                  | **as designed** (see note 6) |
 | `impl_sqlx_type!` doctest (`cargo test --doc -p clp-rust-utils`) | known failure, pre-existing | **fails** the same way: "cannot find macro `impl_sqlx_type` in this scope" |
 | Package correctness, fault injection, benchmarks              | see reports          | not reproducible here (no Docker daemon) |
 
@@ -55,3 +56,51 @@ rows below are marked accordingly.
    additionally downloads googletest from a GitHub archive when `ANTLR_BUILD_CPP_TESTS` is on (its
    default), which fails the same way, so that option was switched off locally for the build. The
    other 11 dependencies built unchanged.
+4. `search-result-listener::clp_s::clp_s_attempts_of_one_task_emit_each_result_once` compresses
+   1,000 JSON records (every 7th says "Transmitted"), searches `*Transmitted*` to stdout as the
+   reference, then streams the same search to a listener three times concurrently under task index
+   0, plus a no-result query under task index 1, plus one more attempt under task index 0 after the
+   first three finish. It asserts that the listener emits exactly the reference messages with
+   `num_results_emitted = N`, `num_duplicates_dropped = 2N`, `num_protocol_errors = 0`. The
+   reference has 143 messages (1,000 / 7 rounded up), so the passing assertion is the report's
+   "143 results, 286 duplicates dropped, 0 protocol errors". The run took 0.12 s. Running the same
+   data through the built binary by hand also gives 143 lines on stdout.
+5. The core build used `-DCMAKE_BUILD_TYPE=Release -DCLP_USE_STATIC_LIBS=OFF` with the system
+   libarchive, libcurl, MariaDB client and OpenSSL, and the dependency build's libraries for the
+   rest. The repo's `FindLibLZMA` module takes the version from pkg-config, so
+   `PKG_CONFIG_PATH` had to point at the dependency build's `liblzma.pc`; otherwise the system
+   5.4.5 header is reported against the 5.8.1 library and configuration fails. Only the `clp-s`
+   and `clo` targets were built, not `unitTest`.
+6. A small msgpack decoder was put in front of `clp-s s ... network --host 127.0.0.1 --port P
+   --session-token T --task-index 0` on the archive from note 4:
+   * The first frame is `[1, "<T>", 0, "<archive id>"]`: version 1, the session token and the task
+     index exactly as given, and the archive ID of the archive searched.
+   * It is followed by 143 result frames `[result_index, timestamp, message]`, with
+     `result_index` contiguous from 0 to 142, each `timestamp` equal to the record's `ts`, and
+     each `message` the record's JSON with a trailing newline (the API report's reason for
+     stripping it).
+   * A query with no results (`msg: absent`) under task index 1 makes no connection at all within a
+     5 s accept timeout and `clp-s` exits 0, which is the lazy-connect behaviour the design
+     specifies.
+
+## Not reproduced
+
+* Everything that needs a running package: the 607-archive benchmark (3.805 s vs 10.958 s),
+  the fault injections (SIGKILL of `clp-s`, `docker kill` of a worker), the API server's
+  time-to-first-result waterfall, the disconnect timings, the concurrency run, and the regression
+  checks. They need Docker Compose, Spider, MariaDB, MongoDB, and the 211 GB dataset.
+* Mutation testing (19/19 and 18/18 injected defects caught). The injected defects are not
+  recorded in the reports, so there is nothing to re-run.
+* The report's end-to-end handler script (26/26) and the clang-format check; the script is not
+  on the branch.
+* The stalled-client experiment proposed in [backpressure](backpressure.md): a 90 s stall on a
+  small archive to confirm whether Spider's hard timeout kills the task. It needs Spider.
+
+## Conclusion
+
+Every check that can run without a deployment reproduces the reports' results exactly: the merged
+tree lints clean, all 140 workspace tests pass, the route tests are stable over 20 runs, the
+pre-existing doctest failure is still there, `clp-s` builds, and the real-clp-s listener test
+passes with the expected statistics. The built `clp-s` speaks protocol v1 as designed, including
+lazy connect. The package-level numbers (speedups, fault tolerance, first-result latency) remain
+as reported by the prototype and would need a Docker-capable host to confirm.
