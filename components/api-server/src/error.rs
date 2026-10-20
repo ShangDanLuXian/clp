@@ -45,6 +45,12 @@ pub enum ClientError {
 
     #[error(transparent)]
     Telemetry(#[from] opentelemetry_otlp::ExporterBuildError),
+
+    #[error("`search_result_listener::Error`: {0}")]
+    ResultListener(#[from] search_result_listener::Error),
+
+    #[error("`tokio::task::JoinError`: {0}")]
+    TaskJoin(#[from] tokio::task::JoinError),
 }
 
 /// Empty trait to mark errors that indicate malformed data.
@@ -86,7 +92,8 @@ impl From<clp_rust_utils::Error> for ClientError {
             clp_rust_utils::Error::MsgpackEncode(_)
             | clp_rust_utils::Error::MsgpackDecode(_)
             | clp_rust_utils::Error::SerdeYaml(_)
-            | clp_rust_utils::Error::Zstd(_) => Self::MalformedData,
+            | clp_rust_utils::Error::Zstd(_)
+            | clp_rust_utils::Error::QueryJobIdOutOfRange(_) => Self::MalformedData,
             clp_rust_utils::Error::UnsupportedS3Endpoint(_) => {
                 Self::InvalidInput(value.to_string())
             }

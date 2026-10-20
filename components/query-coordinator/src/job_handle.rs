@@ -40,7 +40,12 @@ pub struct SpiderOption {
 
 /// Options for selecting the archives to search.
 pub struct ArchiveSelectionOptions {
+    /// The archive retention period, or `None` if archives are retained indefinitely. Archives
+    /// that ended earlier than this period before a job's creation are excluded from that job.
     pub archive_retention_period_millisecs: Option<NonZeroU64>,
+
+    /// The maximum number of distinct datasets a single query job may search, or `None` to accept
+    /// any number of them.
     pub max_datasets_per_query: Option<NonZeroUsize>,
 }
 
@@ -50,6 +55,7 @@ pub struct QueryJobHandleContext {
     pub db_config: Database,
     pub archive_selection_options: ArchiveSelectionOptions,
     pub spider_option: SpiderOption,
+    pub results_cache_uri: NonEmptyString,
 }
 
 /// Handles the asynchronous submission of a query job and the retrieval of its result.
@@ -65,22 +71,28 @@ pub struct QueryJobHandle<SubmitterType: QueryJobSubmitter> {
     search_job_config: SearchJobConfig,
     clp_s_query_option: ClpSQueryOption,
     output_handle: OutputHandle,
-    archive_end_ts_lower_bound_millisecs: Option<i64>,
+    archive_end_timestamp_lower_bound_millisecs: Option<i64>,
 }
 
 impl<SubmitterType: QueryJobSubmitter> QueryJobHandle<SubmitterType> {
     /// Factory function.
     ///
+    /// Only plain search jobs whose results are returned through the results cache or streamed to
+    /// a network output can be driven by this handle; any other job config is rejected so that the
+    /// caller can fail the job instead of leaving it unhandled.
+    ///
     /// # Returns
     ///
-    /// A newly created [`QueryJobHandle`] for the given query job, with the `clp-s`
-    /// query options derived from `search_job_config`.
+    /// A newly created [`QueryJobHandle`] for the given query job, with the `clp-s` query options
+    /// and the output handle derived from `search_job_config`.
     ///
     /// # Errors
     ///
     /// Returns an error if:
     ///
     /// * [`Error::InvalidQueryJobConfig`] if:
+    ///   * The job carries an aggregation config.
+    ///   * The job asks for its results to be written to files.
     ///   * The query string is empty.
     ///   * The begin timestamp exceeds the end timestamp.
     pub fn new(
@@ -89,9 +101,22 @@ impl<SubmitterType: QueryJobSubmitter> QueryJobHandle<SubmitterType> {
         job_submitter: SubmitterType,
         resource_group_id: ResourceGroupId,
         search_job_config: SearchJobConfig,
-        output_handle: OutputHandle,
         job_creation_timestamp_millisecs: i64,
     ) -> Result<Self, Error> {
+        if search_job_config.aggregation_config.is_some() {
+            return Err(Error::InvalidQueryJobConfig(
+                "aggregation jobs are not supported".to_owned(),
+            ));
+        }
+
+        if search_job_config.write_to_file {
+            return Err(Error::InvalidQueryJobConfig(
+                "writing query results to files is not supported; resubmit the query with its \
+                 results buffered in the results cache"
+                    .to_owned(),
+            ));
+        }
+
         let query_string = NonEmptyString::try_from(search_job_config.query_string.clone())
             .map_err(|_| {
                 Error::InvalidQueryJobConfig("query string must not be empty".to_owned())
@@ -107,7 +132,7 @@ impl<SubmitterType: QueryJobSubmitter> QueryJobHandle<SubmitterType> {
             )));
         }
 
-        let archive_end_ts_lower_bound_millisecs = context
+        let archive_end_timestamp_lower_bound_millisecs = context
             .archive_selection_options
             .archive_retention_period_millisecs
             .map(|period| job_creation_timestamp_millisecs.saturating_sub_unsigned(period.get()));
@@ -120,6 +145,13 @@ impl<SubmitterType: QueryJobSubmitter> QueryJobHandle<SubmitterType> {
             ignore_case: search_job_config.ignore_case,
         };
 
+        let output_handle = search_job_config.network_output.clone().map_or_else(
+            || OutputHandle::ResultsCache {
+                uri: context.results_cache_uri.clone(),
+            },
+            OutputHandle::from,
+        );
+
         Ok(Self {
             context,
             query_job_id,
@@ -128,7 +160,7 @@ impl<SubmitterType: QueryJobSubmitter> QueryJobHandle<SubmitterType> {
             search_job_config,
             clp_s_query_option,
             output_handle,
-            archive_end_ts_lower_bound_millisecs,
+            archive_end_timestamp_lower_bound_millisecs,
         })
     }
 
@@ -255,7 +287,8 @@ impl<SubmitterType: QueryJobSubmitter> QueryJobHandle<SubmitterType> {
         ArchiveSelector {
             context: &self.context,
             search_job_config: &self.search_job_config,
-            archive_end_ts_lower_bound_millisecs: self.archive_end_ts_lower_bound_millisecs,
+            archive_end_timestamp_lower_bound_millisecs: self
+                .archive_end_timestamp_lower_bound_millisecs,
         }
         .select()
         .await
@@ -501,7 +534,7 @@ impl From<&QueryJobOutcome> for QueryJobStatus {
 struct ArchiveSelector<'job_handle_lifetime> {
     context: &'job_handle_lifetime QueryJobHandleContext,
     search_job_config: &'job_handle_lifetime SearchJobConfig,
-    archive_end_ts_lower_bound_millisecs: Option<i64>,
+    archive_end_timestamp_lower_bound_millisecs: Option<i64>,
 }
 
 impl ArchiveSelector<'_> {
@@ -537,11 +570,14 @@ impl ArchiveSelector<'_> {
         }
         selected_archives.sort_by_key(|archive| Reverse(archive.end_timestamp));
 
+        let query_task_max_retry = self.context.spider_option.query_task_max_retry;
         Ok(selected_archives
             .into_iter()
             .map(|archive| {
-                let execution_policy =
-                    self.compute_query_task_execution_policy(archive.uncompressed_size);
+                let execution_policy = compute_query_task_execution_policy(
+                    archive.uncompressed_size,
+                    query_task_max_retry,
+                );
                 (archive, execution_policy)
             })
             .collect())
@@ -624,7 +660,7 @@ impl ArchiveSelector<'_> {
     ) -> Result<(), Error> {
         let datasets_table = self.context.db_config.datasets_table_name();
         let mut query_builder = sqlx::QueryBuilder::<sqlx::MySql>::new(format!(
-            "SELECT COUNT(*) FROM `{datasets_table}` WHERE CAST(`name` AS BINARY) IN ("
+            "SELECT COUNT(*) FROM `{datasets_table}` WHERE `name` IN ("
         ));
         let mut separated_datasets = query_builder.separated(", ");
         for dataset in datasets {
@@ -677,7 +713,7 @@ impl ArchiveSelector<'_> {
                 .push(" AND `end_timestamp` >= ")
                 .push_bind(begin_timestamp);
         }
-        if let Some(lower_bound) = self.archive_end_ts_lower_bound_millisecs {
+        if let Some(lower_bound) = self.archive_end_timestamp_lower_bound_millisecs {
             query_builder
                 .push(" AND (`end_timestamp` >= ")
                 .push_bind(lower_bound)
@@ -697,48 +733,6 @@ impl ArchiveSelector<'_> {
             })
             .collect())
     }
-
-    /// Derives the execution policy of the query task that searches an archive whose uncompressed
-    /// size is `archive_uncompressed_size` bytes.
-    ///
-    /// The soft timeout is an aggressive estimate of the task's execution time, whereas the hard
-    /// timeout is a conservative deadline that assumes the entire archive is extracted.
-    ///
-    /// # Returns
-    ///
-    /// The query task's execution policy.
-    fn compute_query_task_execution_policy(
-        &self,
-        archive_uncompressed_size: u64,
-    ) -> ExecutionPolicy {
-        const BYTES_PER_MIB: u64 = 1024 * 1024;
-        const SOFT_TIMEOUT_MILLISECS_PER_MIB: u64 = 10;
-        const HARD_TIMEOUT_MILLISECS_PER_MIB: u64 = 2 * 1000;
-
-        /// The minimum timeout accepted by Spider, in milliseconds.
-        const MIN_TIMEOUT_MILLISECS: u64 = 100;
-
-        /// The maximum timeout accepted by Spider, in milliseconds (24 hours).
-        const MAX_TIMEOUT_MILLISECS: u64 = 1000 * 60 * 60 * 24;
-
-        let hard_timeout_ms = (archive_uncompressed_size
-            .saturating_mul(HARD_TIMEOUT_MILLISECS_PER_MIB)
-            / BYTES_PER_MIB)
-            .clamp(MIN_TIMEOUT_MILLISECS + 1, MAX_TIMEOUT_MILLISECS);
-        let soft_timeout_ms = (archive_uncompressed_size
-            .saturating_mul(SOFT_TIMEOUT_MILLISECS_PER_MIB)
-            / BYTES_PER_MIB)
-            .clamp(MIN_TIMEOUT_MILLISECS, hard_timeout_ms - 1);
-
-        ExecutionPolicy {
-            max_num_retry: self.context.spider_option.query_task_max_retry,
-            timeout_policy: TimeoutPolicy {
-                soft_timeout_ms,
-                hard_timeout_ms,
-            },
-            ..ExecutionPolicy::default()
-        }
-    }
 }
 
 /// Columns projected from an archives table.
@@ -751,4 +745,268 @@ struct ArchiveRowProjection {
     #[sqlx(try_from = "i64")]
     uncompressed_size: u64,
     end_timestamp: i64,
+}
+
+/// Derives the execution policy of the query task that searches an archive of
+/// `archive_uncompressed_size` bytes, retried at most `max_num_retry` times.
+///
+/// Each timeout is the sum of a size-independent base, which covers the task executor's startup
+/// and the archive's open, and a term proportional to the archive's uncompressed size. The soft
+/// timeout assumes the throughput `clp-s` is expected to sustain, whereas the hard timeout, after
+/// which Spider kills the task, assumes the worst-case throughput of a fully contended worker.
+///
+/// # Returns
+///
+/// The query task's execution policy.
+fn compute_query_task_execution_policy(
+    archive_uncompressed_size: u64,
+    max_num_retry: u32,
+) -> ExecutionPolicy {
+    const BYTES_PER_MIB: u64 = 1024 * 1024;
+
+    /// The size-independent base of the soft timeout, in milliseconds.
+    const SOFT_TIMEOUT_BASE_MILLISECS: u64 = 10 * 1000;
+
+    /// The soft timeout's per-MiB term, derived from an expected search throughput of 50MiB of
+    /// uncompressed data per second.
+    const SOFT_TIMEOUT_MILLISECS_PER_UNCOMPRESSED_MIB: u64 = 20;
+
+    /// The size-independent base of the hard timeout, in milliseconds.
+    const HARD_TIMEOUT_BASE_MILLISECS: u64 = 60 * 1000;
+
+    /// The hard timeout's per-MiB term, derived from a worst-case search throughput of 2MiB of
+    /// uncompressed data per second.
+    const HARD_TIMEOUT_MILLISECS_PER_UNCOMPRESSED_MIB: u64 = 500;
+
+    /// The maximum timeout accepted by Spider, in milliseconds (24 hours).
+    const MAX_TIMEOUT_MILLISECS: u64 = 1000 * 60 * 60 * 24;
+
+    let archive_uncompressed_mib = archive_uncompressed_size / BYTES_PER_MIB;
+    let hard_timeout_ms = archive_uncompressed_mib
+        .saturating_mul(HARD_TIMEOUT_MILLISECS_PER_UNCOMPRESSED_MIB)
+        .saturating_add(HARD_TIMEOUT_BASE_MILLISECS)
+        .min(MAX_TIMEOUT_MILLISECS);
+    let soft_timeout_ms = archive_uncompressed_mib
+        .saturating_mul(SOFT_TIMEOUT_MILLISECS_PER_UNCOMPRESSED_MIB)
+        .saturating_add(SOFT_TIMEOUT_BASE_MILLISECS)
+        .min(hard_timeout_ms - 1);
+
+    ExecutionPolicy {
+        max_num_retry,
+        timeout_policy: TimeoutPolicy {
+            soft_timeout_ms,
+            hard_timeout_ms,
+        },
+        ..ExecutionPolicy::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::num::NonZeroU16;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use async_trait::async_trait;
+    use clp_rust_utils::clp_config::package::config::Database;
+    use clp_rust_utils::job_config::NetworkOutput;
+    use clp_rust_utils::job_config::QueryJobId;
+    use clp_rust_utils::job_config::SearchJobConfig;
+    use clp_rust_utils::task_io::query::ClpSQueryOption;
+    use clp_rust_utils::task_io::query::OutputHandle;
+    use clp_rust_utils::types::non_empty_string::ExpectedNonEmpty;
+    use non_empty_string::NonEmptyString;
+    use spider_core::task::ExecutionPolicy;
+    use spider_core::types::id::JobId as SpiderJobId;
+    use spider_core::types::id::ResourceGroupId;
+
+    use super::ArchiveSelectionOptions;
+    use super::QueryJobHandle;
+    use super::QueryJobHandleContext;
+    use super::SpiderOption;
+    use super::compute_query_task_execution_policy;
+    use crate::Error;
+    use crate::query_job_submitter::ArchiveMetadata;
+    use crate::query_job_submitter::QueryJobOutcome;
+    use crate::query_job_submitter::QueryJobSubmitter;
+
+    const BYTES_PER_MIB: u64 = 1024 * 1024;
+    const MAX_NUM_RETRY: u32 = 1;
+
+    /// The minimum timeout accepted by Spider, in milliseconds.
+    const MIN_TIMEOUT_MILLISECS: u64 = 100;
+
+    /// The maximum timeout accepted by Spider, in milliseconds (24 hours).
+    const MAX_TIMEOUT_MILLISECS: u64 = 1000 * 60 * 60 * 24;
+
+    const RESULTS_CACHE_URI: &str = "mongodb://results-cache:27017/clp-query-results";
+
+    /// A submitter for tests that only construct job handles and never submit or run a job.
+    #[derive(Clone)]
+    struct UnreachableSubmitter;
+
+    #[async_trait]
+    impl QueryJobSubmitter for UnreachableSubmitter {
+        async fn submit_query_job(
+            &self,
+            _query_job_id: QueryJobId,
+            _resource_group_id: ResourceGroupId,
+            _clp_s_query_option: ClpSQueryOption,
+            _output_handle: OutputHandle,
+            _archives_to_search: Vec<(ArchiveMetadata, ExecutionPolicy)>,
+        ) -> Result<SpiderJobId, Error> {
+            unreachable!("the test never submits a query job")
+        }
+
+        async fn run_query_job_to_completion(
+            &self,
+            _spider_job_id: SpiderJobId,
+            _poll_interval: Duration,
+        ) -> Result<QueryJobOutcome, Error> {
+            unreachable!("the test never runs a query job")
+        }
+    }
+
+    /// # Returns
+    ///
+    /// A handle for a plain search job with the given network output.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the handle can't be created.
+    fn new_search_job_handle(
+        network_output: Option<NetworkOutput>,
+    ) -> QueryJobHandle<UnreachableSubmitter> {
+        let context = Arc::new(QueryJobHandleContext {
+            db_pool: sqlx::mysql::MySqlPoolOptions::new()
+                .connect_lazy("mysql://localhost/clp-db")
+                .expect("a lazy pool with a valid URL should be created"),
+            db_config: Database::default(),
+            archive_selection_options: ArchiveSelectionOptions {
+                archive_retention_period_millisecs: None,
+                max_datasets_per_query: None,
+            },
+            spider_option: SpiderOption {
+                poll_interval: Duration::from_millis(100),
+                query_task_max_retry: 1,
+            },
+            results_cache_uri: NonEmptyString::from_static_str(RESULTS_CACHE_URI),
+        });
+        let search_job_config = SearchJobConfig {
+            datasets: Some(vec!["default".to_owned()]),
+            query_string: "*Transmitted*".to_owned(),
+            network_output,
+            ..SearchJobConfig::default()
+        };
+
+        QueryJobHandle::new(
+            context,
+            42,
+            UnreachableSubmitter,
+            ResourceGroupId::random(),
+            search_job_config,
+            0,
+        )
+        .expect("a plain search job config should be accepted")
+    }
+
+    #[tokio::test]
+    async fn job_with_network_output_streams_to_it() {
+        let network_output = NetworkOutput {
+            host: NonEmptyString::from_static_str("10.0.0.7"),
+            port: NonZeroU16::new(40_123).expect("40,123 is nonzero"),
+            session_token: "6f1d3b52-8a4e-4c1b-9f6e-2d7a5c0b9e13"
+                .parse()
+                .expect("valid session token UUID"),
+        };
+
+        let job_handle = new_search_job_handle(Some(network_output.clone()));
+
+        assert_eq!(
+            job_handle.output_handle,
+            OutputHandle::Network {
+                host: network_output.host,
+                port: network_output.port,
+                session_token: network_output.session_token,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn job_without_network_output_writes_to_the_results_cache() {
+        let job_handle = new_search_job_handle(None);
+
+        assert_eq!(
+            job_handle.output_handle,
+            OutputHandle::ResultsCache {
+                uri: NonEmptyString::from_static_str(RESULTS_CACHE_URI),
+            }
+        );
+    }
+
+    #[test]
+    fn sub_mib_archive_gets_the_base_timeouts() {
+        let policy = compute_query_task_execution_policy(BYTES_PER_MIB - 1, MAX_NUM_RETRY);
+
+        assert_eq!(policy.max_num_retry, MAX_NUM_RETRY);
+        assert_eq!(policy.timeout_policy.soft_timeout_ms, 10_000);
+        assert_eq!(policy.timeout_policy.hard_timeout_ms, 60_000);
+    }
+
+    #[test]
+    fn timeouts_grow_with_the_uncompressed_size() {
+        let policy = compute_query_task_execution_policy(256 * BYTES_PER_MIB, MAX_NUM_RETRY);
+
+        assert_eq!(policy.timeout_policy.soft_timeout_ms, 10_000 + 256 * 20);
+        assert_eq!(policy.timeout_policy.hard_timeout_ms, 60_000 + 256 * 500);
+    }
+
+    #[test]
+    fn oversized_archive_clamps_the_timeouts_to_spiders_maximum() {
+        let policy = compute_query_task_execution_policy(u64::MAX, MAX_NUM_RETRY);
+
+        assert_eq!(
+            policy.timeout_policy.soft_timeout_ms,
+            MAX_TIMEOUT_MILLISECS - 1
+        );
+        assert_eq!(policy.timeout_policy.hard_timeout_ms, MAX_TIMEOUT_MILLISECS);
+    }
+
+    #[test]
+    fn every_archive_size_yields_a_policy_spider_accepts() {
+        for uncompressed_size in [
+            0,
+            1,
+            BYTES_PER_MIB - 1,
+            BYTES_PER_MIB,
+            256 * BYTES_PER_MIB,
+            u64::MAX,
+        ] {
+            let timeout_policy =
+                compute_query_task_execution_policy(uncompressed_size, MAX_NUM_RETRY)
+                    .timeout_policy;
+
+            assert!(
+                (MIN_TIMEOUT_MILLISECS..=MAX_TIMEOUT_MILLISECS)
+                    .contains(&timeout_policy.soft_timeout_ms),
+                "soft timeout {} is out of Spider's accepted range for an archive of \
+                 {uncompressed_size} uncompressed bytes",
+                timeout_policy.soft_timeout_ms,
+            );
+            assert!(
+                (MIN_TIMEOUT_MILLISECS..=MAX_TIMEOUT_MILLISECS)
+                    .contains(&timeout_policy.hard_timeout_ms),
+                "hard timeout {} is out of Spider's accepted range for an archive of \
+                 {uncompressed_size} uncompressed bytes",
+                timeout_policy.hard_timeout_ms,
+            );
+            assert!(
+                timeout_policy.soft_timeout_ms < timeout_policy.hard_timeout_ms,
+                "soft timeout {} is not less than hard timeout {} for an archive of \
+                 {uncompressed_size} uncompressed bytes",
+                timeout_policy.soft_timeout_ms,
+                timeout_policy.hard_timeout_ms,
+            );
+        }
+    }
 }

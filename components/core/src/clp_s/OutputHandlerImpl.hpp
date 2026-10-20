@@ -5,6 +5,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <cstdint>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -19,6 +20,7 @@
 #include <mongocxx/client.hpp>
 #include <mongocxx/collection.hpp>
 #include <mongocxx/options/insert.hpp>
+#include <msgpack.hpp>
 
 #include <clp_s/AggregationSink.hpp>
 #include <clp_s/aggregators.hpp>
@@ -96,12 +98,11 @@ public:
                 : TraceableException(error_code, filename, line_number) {}
     };
 
+    // Constants
+    static constexpr uint8_t cProtocolVersion{1};
+
     // Constructors
-    explicit NetworkOutputHandler(
-            std::string const& host,
-            int port,
-            bool should_output_metadata = false
-    );
+    NetworkOutputHandler(std::string host, int port, std::string session_token, uint64_t task_idx);
 
     // Destructor
     ~NetworkOutputHandler() override {
@@ -110,20 +111,62 @@ public:
         }
     }
 
+    // Delete copy & move constructors and assignment operators
+    NetworkOutputHandler(NetworkOutputHandler const&) = delete;
+    NetworkOutputHandler(NetworkOutputHandler&&) = delete;
+    auto operator=(NetworkOutputHandler const&) -> NetworkOutputHandler& = delete;
+    auto operator=(NetworkOutputHandler&&) -> NetworkOutputHandler& = delete;
+
     // Methods inherited from OutputHandler
-    void write(
+    /**
+     * Sends a result to the network destination.
+     *
+     * @param message
+     * @param timestamp
+     * @param archive_id
+     * @param log_event_idx Unused.
+     * @throw OperationFailed if connecting or sending to the network destination fails.
+     */
+    auto write(
             std::string_view message,
             epochtime_t timestamp,
             std::string_view archive_id,
             int64_t log_event_idx
-    ) override;
+    ) -> void override;
 
-    void write(std::string_view message) override { write(message, 0, {}, 0); }
+    /**
+     * Unsupported, since every result must carry its timestamp and archive ID.
+     *
+     * @param message
+     * @throw OperationFailed unconditionally.
+     */
+    auto write(std::string_view message) -> void override;
 
 private:
+    // Methods
+    /**
+     * Connects to the network destination.
+     *
+     * @throw OperationFailed if the connection fails.
+     */
+    auto connect() -> void;
+
+    /**
+     * Sends the serialized messages in the buffer to the network destination, and then clears the
+     * buffer.
+     *
+     * @throw OperationFailed if sending fails.
+     */
+    auto send_buffer() -> void;
+
+    // Variables
     std::string m_host;
     std::string m_port;
-    int m_socket_fd;
+    std::string m_session_token;
+    uint64_t m_task_idx{};
+    uint64_t m_next_result_idx{};
+    int m_socket_fd{-1};
+    msgpack::sbuffer m_buffer;
 };
 
 /**
