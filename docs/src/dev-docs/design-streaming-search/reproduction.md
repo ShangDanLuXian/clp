@@ -51,4 +51,7 @@ rows below are marked accordingly.
    URLs, so `task deps:core` fails at the first of them (`utfcpp`). To build clp-s here, each of
    those dependencies was cloned at its pinned tag or commit with git, packed into a local tarball
    with `git archive`, and the deps taskfile was pointed at the local tarballs for the duration of
-   the build (an uncommitted, local-only change).
+   the build (an uncommitted, local-only change). The ANTLR C++ runtime's CMake configuration
+   additionally downloads googletest from a GitHub archive when `ANTLR_BUILD_CPP_TESTS` is on (its
+   default), which fails the same way, so that option was switched off locally for the build. The
+   other 11 dependencies built unchanged.
