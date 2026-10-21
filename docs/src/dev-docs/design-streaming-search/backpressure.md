@@ -156,6 +156,45 @@ cannot be right at once.**
 * **Retries make it worse.** The default is one retry, and the retry changes nothing about the
   consumer, so the second attempt almost always fails the same way. Retrying is ineffective here.
 
+## What the experiment showed (2026-10-21)
+
+Setup: a local WSL2 machine (i7-13700K), this branch, 8 archives of 40 MiB (hard timeout 80 s,
+soft 10.8 s), 4 general-pool worker slots, query `*Transmitted*` with 659,677 results, a client
+that reads one result and then stops reading for the stall length. Raw data and write-ups:
+`tools/scripts/streaming-search-experiments/results/`.
+
+| Stall  | Retries | What happened                                                                                              |
+|--------|---------|------------------------------------------------------------------------------------------------------------|
+| 40 s   | 1       | Control. No timeout, SUCCEEDED at 43.5 s, 0 duplicates.                                                    |
+| 125 s  | 1       | The 4 streaming tasks hit the hard timeout at 80 s. Retries queued behind the 4 unstarted tasks. SUCCEEDED 2.6 s after the resume; 328,619 duplicates dropped. |
+| 200 s  | 1       | All 8 first attempts timed out, in two waves (80 s, 160 s). SUCCEEDED after the resume; 659,677 duplicates dropped. |
+| 270 s  | 1       | **FAILED at 160.9 s.** One task finished from the buffers at once, which freed a slot; task 1's retry started at 80 s and timed out at 160 s. The client still received every result (from the orphans, see below) and then `end: Failed`. |
+| 270 s  | 3       | SUCCEEDED 3.7 s after the resume; 12 hard timeouts; 987,204 duplicates dropped.                           |
+
+So the analysis above holds, with two corrections:
+
+1. **The failure point is later than "twice the hard timeout" when the job has more tasks than
+   slots.** A failed task goes to the back of the queue, behind the tasks that have not started,
+   so its retry starts one wave later: the job fails at about `(1 + waves) × hard timeout`,
+   160 s when a slot was free and 240 s when none was. A job with fewer tasks than slots fails
+   at 2 × hard timeout with one retry.
+2. **Spider's hard timeout does not kill `clp-s`.** It frees the executor and fails the task
+   instance, but the `clp-s` process is orphaned to the container's PID 1, keeps its socket,
+   finishes streaming once the client resumes, and stays a zombie. This is
+   [issue 20](issues.md). It means the retry and the orphan both stream the whole archive (one
+   archive's results dropped as duplicates per timeout), the "stale attempt" case is the normal
+   case, and a job that Spider reports as FAILED can still deliver a complete result set.
+
+Two more measurements: the buffers between `clp-s` and the SSE client (socket buffers plus the
+listener's channel) absorbed about one archive's results, 82,000 results or roughly 15 MB, before
+backpressure reached `clp-s` (task 1 finished in 0.46 s while the client was already stalled);
+and no soft-timeout re-dispatch appeared in any run, so nothing in the timeline above about the
+soft timeout was observed.
+
+The disconnect runs confirm the other half of the slot problem: closing the socket marked the job
+CANCELLING within 0.14 s, but every task ran to the end and 659,319 results were discarded by the
+API server. Cancellation frees nothing today.
+
 ## Options
 
 The one requirement: a task's run time must again depend only on the archive and the cluster, and a

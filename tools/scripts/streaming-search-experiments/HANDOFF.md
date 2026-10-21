@@ -78,10 +78,13 @@ docker images clp-spider-worker    # note the newest tag
 docker tag clp-spider-worker:dev-<user>-<id> ghcr.io/y-scope/clp/clp-spider-worker:main
 ```
 
-Check: `ls build/clp-package/bin/clp-s build/clp-package/sbin/streaming-search.sh` and
-`cat build/clp-package/clp-package-image.id` all succeed. The tag step matters: the Spider
-compose file defaults to the `ghcr.io/...:main` reference and would pull a worker image that
-lacks this branch's `clp-s`.
+Check: `ls build/core/clp-s build/clp-package/sbin/streaming-search.sh` and
+`cat build/clp-package/clp-package-image.id` all succeed (`task package` puts `clp-s` into the
+image only; the harness uses `build/core/clp-s` on the host, which is the same binary). The tag
+step alone is not enough: the vendored Spider compose file sets
+`pull_policy: ${SPIDER_PULL_POLICY:-always}`, so the workers must be recreated with
+`SPIDER_PULL_POLICY=missing` after the first start (step 3.4). Verify afterwards that the worker
+containers run the image built here (`docker inspect --format '{{.Image}}'`).
 
 ### 3.3 Configure Spider mode
 
@@ -99,10 +102,21 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3001/health   # 200
 docker compose -p "$(docker compose ls --format json | python3 -c 'import json,sys;print([p["Name"] for p in json.load(sys.stdin) if p["Name"].startswith("clp-package")][0])')" ps
 ```
 
+`start-clp.sh` ends with a `docker compose up --wait` failure when `logs_input` is `fs`:
+`compression-coordinator` exits ("only supports S3 logs inputs") and
+`spider-worker-compression` then cannot register its resource group. Neither is used by the
+experiments. Bring the rest up on the local worker image:
+
+```shell
+PROJECT=$(docker compose ls --format json | python3 -c 'import json,sys;print([p["Name"] for p in json.load(sys.stdin) if p["Name"].startswith("clp-package")][0])')
+(cd build/clp-package && SPIDER_PULL_POLICY=missing docker compose --project-name "$PROJECT" --file docker-compose-spider.yaml up --detach)
+docker compose -p "$PROJECT" ps
+```
+
 The `ps` output must show `query-coordinator`, `api-server`, `spider-scheduler`,
-`spider-storage`, `spider-worker` (several replicas) and `spider-worker-compression` up.
-If `start-clp.sh` fails, read its message: the usual causes are a `null` Spider section, a
-missing worker image (the tag step), or a port already in use.
+`spider-storage` and `spider-worker` (several replicas) up; `compression-coordinator` and
+`spider-worker-compression` may be down. Other causes of a failed start: a `null` Spider section,
+or a port already in use (a host MariaDB on 3306: set `database.port: 3307` in the config).
 
 ### 3.5 Run the experiments
 

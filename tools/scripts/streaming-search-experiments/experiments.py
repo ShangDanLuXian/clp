@@ -628,8 +628,8 @@ def phase_latency(ctx: Ctx) -> dict:
 
 def phase_disconnect(ctx: Ctx) -> dict:
     out = {"runs": []}
+    since = utc_now_iso()  # the logs must cover every run, not only the last one
     for i in range(ctx.args.runs):
-        since = utc_now_iso()
         stream = SseStream(ctx, "POST", "/query/stream", stream_query_body(ctx))
         if stream.status != 200:
             raise RuntimeError(f"POST /query/stream -> {stream.status}: {stream.error_body}")

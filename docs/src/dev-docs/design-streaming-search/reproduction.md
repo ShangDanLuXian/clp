@@ -83,24 +83,40 @@ rows below are marked accordingly.
      5 s accept timeout and `clp-s` exits 0, which is the lazy-connect behaviour the design
      specifies.
 
+## Package-level results (local WSL2 machine, 2026-10-21)
+
+The package-level experiments were then run on a WSL2 machine with Docker (i7-13700K, 24
+threads) by the harness in `tools/scripts/streaming-search-experiments/`, against this branch's
+package in Spider mode with 8 synthetic archives of 40 MiB and the query `*Transmitted*`
+(659,677 results). Full write-ups: `tools/scripts/streaming-search-experiments/results/`.
+
+| Check                                            | Reported (607 archives, 1,071 results) | Measured here (8 archives, 659,677 results) |
+|--------------------------------------------------|----------------------------------------|---------------------------------------------|
+| Stream vs results cache vs `clp-s` result sets   | byte-identical                          | **byte-identical**, 3 stream runs + 1 results-cache run |
+| Time to first result, `POST /query/stream`       | 207.8 ms                                | **85.3 ms** median                          |
+| Time to first result, `POST /query` + `GET /query_results` | 3,115 ms                     | **3,112 ms** (the whole job must finish first) |
+| Time to first byte, `sbin/streaming-search.sh`   | 1,021 ms                                | **862 ms** (about 0.8 s is the runtime container start) |
+| Disconnect → CANCELLING                          | 3.2 ms                                  | **0.12-0.14 s** (the harness polls the DB through `docker exec` every 0.2 s) |
+| SIGKILL `clp-s` mid-stream, one retry            | nothing lost or duplicated              | **identical**; 8 kills, 280,778 duplicates dropped, 0 protocol errors |
+| 4 SIGKILLs per task with one retry               | not run                                 | job FAILED at 16.9 s, `end: Failed`, 167,875 results delivered |
+| Client stall longer than the hard timeout        | not run ("refuted")                     | **job FAILED** at 160.9 s for a 270 s stall; see [backpressure](backpressure.md) |
+
 ## Not reproduced
 
-* Everything that needs a running package: the 607-archive benchmark (3.805 s vs 10.958 s),
-  the fault injections (SIGKILL of `clp-s`, `docker kill` of a worker), the API server's
-  time-to-first-result waterfall, the disconnect timings, the concurrency run, and the regression
-  checks. They need Docker Compose, Spider, MariaDB, MongoDB, and the 211 GB dataset.
+* The reports' exact numbers on their 607-archive, 211 GB dataset: the benchmark (3.805 s vs
+  10.958 s), the `docker kill` of a worker, the API server's waterfall, and the concurrency
+  run. The ratios above come from a smaller dataset on a faster machine.
 * Mutation testing (19/19 and 18/18 injected defects caught). The injected defects are not
   recorded in the reports, so there is nothing to re-run.
 * The report's end-to-end handler script (26/26) and the clang-format check; the script is not
   on the branch.
-* The stalled-client experiment proposed in [backpressure](backpressure.md): a 90 s stall on a
-  small archive to confirm whether Spider's hard timeout kills the task. It needs Spider.
-
 ## Conclusion
 
 Every check that can run without a deployment reproduces the reports' results exactly: the merged
 tree lints clean, all 140 workspace tests pass, the route tests are stable over 20 runs, the
 pre-existing doctest failure is still there, `clp-s` builds, and the real-clp-s listener test
 passes with the expected statistics. The built `clp-s` speaks protocol v1 as designed, including
-lazy connect. The package-level numbers (speedups, fault tolerance, first-result latency) remain
-as reported by the prototype and would need a Docker-capable host to confirm.
+lazy connect. The package-level runs on a local machine reproduce the reports' qualitative
+results (identical result sets, a first result tens of times sooner than the results-cache path,
+exactly-once delivery across SIGKILLs) and add the two findings the reports lacked: a stalled
+client fails the job through Spider's hard timeout, and the hard timeout does not kill `clp-s`.

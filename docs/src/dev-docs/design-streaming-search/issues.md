@@ -29,10 +29,25 @@ under the same conditions, is killed again, and the job is FAILED although nothi
 the data or the cluster. The results-cache path has no such coupling, so this is a failure mode
 that streaming introduces. See [backpressure](backpressure.md) for the full analysis and the options.
 
-The API report records "a stalled client makes the job FAIL by pushing tasks past their hard
-timeout" as refuted, without a reason. No test in either report stalls longer than the smallest
-hard timeout (60 s): the longest stalls were 25 s (prototype job 15) and 5 s (API disconnect test).
-The refutation should be re-checked with a 90 s stall on a small archive.
+**Confirmed by measurement (2026-10-21, WSL2, 8 archives of 40 MiB, hard timeout 80 s, 4 worker
+slots; `tools/scripts/streaming-search-experiments/results/`).** A client that reads one result
+and then stops reading:
+
+| Stall  | `query_task_max_retry` | Hard timeouts | Job                          | Results after the resume |
+|--------|------------------------|---------------|------------------------------|--------------------------|
+| 40 s   | 1                      | 0             | SUCCEEDED                    | identical, 0 duplicates  |
+| 125 s  | 1                      | 4             | SUCCEEDED                    | identical, 328,619 duplicates dropped |
+| 200 s  | 1                      | 8             | SUCCEEDED                    | identical, 659,677 duplicates dropped |
+| 270 s  | 1                      | 11            | **FAILED at 160.9 s** ("hard timeout (80000 ms) exceeded") | identical, `end: Failed` |
+| 270 s  | 3                      | 12            | SUCCEEDED                    | identical, 987,204 duplicates dropped |
+
+Every task that was streaming when the client stalled hit the hard timeout 80 s after it
+started; nothing was wrong with any of them. The job fails once a task's retry also times out,
+which is about `(1 + waves of unstarted tasks ahead of the retry) × hard timeout` into the job:
+160 s here when a slot was free, 240 s when none was. The API report's refutation was wrong
+because no test had stalled longer than the smallest hard timeout. See
+[backpressure](backpressure.md) for the timelines and for a second finding from the same runs:
+Spider's hard timeout frees the slot but does not kill `clp-s` (issue 20).
 
 **Direction.** Cut the backpressure chain before it reaches the worker: a bounded buffer at the
 listener, after which the job is cancelled and the client told why (option A in the backpressure
@@ -85,6 +100,11 @@ The API report measured it: "one stalled stream held all 8 worker slots, so anot
 This is the other face of issue 1. Once backpressure reaches the workers, the scheduler's capacity
 is handed to the slowest client. The API server is multi-tenant, so this will happen.
 
+*Measured 2026-10-21:* during the 125 s stall all 4 general-pool slots were held by blocked tasks
+for the whole stall; after the hard timeout the slots went to the retries of the same job, which
+blocked in turn. Because the timed-out `clp-s` processes are not killed (issue 20), the worker's
+CPU and memory stay with the orphans as well.
+
 **Direction.** Per-session quotas: a memory cap and a no-progress timeout, after which the job is
 cancelled and the client receives `error`.
 
@@ -101,6 +121,10 @@ cancelled and the client receives `error`.
   window between the coordinator's fetch of a PENDING job and its PENDING→RUNNING transition leaves
   the Spider job in `Ready` forever (#17).
 
+*Measured 2026-10-21:* after the client closed its socket, the job was CANCELLING within
+0.12-0.14 s and CANCELLED 0.3 s later, but every task ran to the end; the API server discarded
+659,319 of the 659,677 results (`num_results_discarded`). Cancelling stopped no work.
+
 **Direction.** Promote "the coordinator actually cancels the Spider job" from future work to a
 prerequisite. Implement a global `max_num_results` in the listener: cancel the job once N results
 have been emitted.
@@ -116,6 +140,46 @@ have been emitted.
 
 **Direction.** One shared poller per listener (`SELECT id, status FROM query_jobs WHERE id IN
 (...)`), or better, have the coordinator notify terminal status (it already knows).
+
+### 20. Spider's hard timeout frees the slot but does not kill `clp-s`
+
+Found by the stall experiments (`results/*/stall.clp-s-processes.txt`, sampled every 2 s inside
+the worker containers). When a task hits the hard timeout, the worker logs `Executor time out
+triggered` and `Task hit the hard timeout`, respawns the executor, and reports the task instance
+as failed. The `clp-s` child is not killed: it is reparented to the container's PID 1
+(`spider-execution-manager`), keeps its socket to the listener, keeps streaming once the client
+resumes, and then stays a zombie because PID 1 never reaps it. No `clp-s exited on failure` and
+no `Connection ended abnormally` was logged for any hard timeout, whereas every SIGKILL in the
+fault runs produced both. Peak counts: 8 orphans + 4 live children after a 200 s stall, 12 + 4
+after a 270 s stall; zombies grew 4 → 12 → 23 across runs and were cleared only by a restart.
+
+Consequences:
+
+* **Every hard timeout creates the "stale attempt overlapping its retry" case** that the design
+  treats as a rare race and that the prototype could never reproduce. It is the normal outcome.
+  The cursor handled it correctly in every run (identical result sets, 0 protocol errors), but
+  the orphan and the retry both stream the whole archive, so the duplicates dropped equal one
+  archive's results per timeout (328,619 ≈ 4 × 82,000; 987,204 ≈ 12 × 82,000).
+* **A FAILED job still delivers all its results.** In the 270 s run the job failed at 160.9 s,
+  yet the client, resuming at 270 s, received all 659,677 results from the orphans, followed by
+  `end: {"status": "Failed"}`. The job status and the stream disagree about what happened.
+* **Resources leak.** Each orphan holds a worker process, its memory (the 113 MiB buffer the API
+  report measured), a listener connection, and socket buffers until the client drains it;
+  zombies accumulate until the container restarts. Spider also keeps dispatching the queued
+  retries of an already-failed job until they time out (`Failed to report task outcome to
+  storage. Dropping the report. err=CacheStale("cache stale: job no longer running")`).
+* The listener's drain grace is what eventually cuts an orphan off after the job ends, so the
+  design's "stale attempt" handling is load-bearing, not defensive.
+
+This is behaviour of the Spider worker and execution manager (pinned at `278d06f`), not of the
+listener, so the fix belongs there: kill the task's process tree on a hard timeout and reap
+children. Until then, the streaming design must assume that a timed-out attempt keeps running.
+
+Also noted in the same runs: no soft-timeout re-dispatch was observed in any stall (no log line
+mentions the soft timeout, and no task had two live instances before its hard timeout), although
+the soft timeout (10.8 s) was exceeded by every stalled task. Whether Spider's
+`resource_group_round_robin` policy implements soft-timeout re-dispatch at this revision should be
+checked before the design relies on it either way.
 
 ## P1
 
@@ -182,7 +246,7 @@ not chosen.
 |----|-------------------------------------------------------------------------------------------------------|
 | 13 | What is sent as the timestamp for an event without a timestamp column? The design does not say.      |
 | 14 | Output formats differ: the CLI keeps the message's trailing newline, the API strips it; `end.status` uses `Succeeded` while the DB uses `SUCCEEDED`. Suggest NDJSON by default for the CLI, with `--raw` printing only the message. |
-| 15 | A FAILED job prints a pile of partial results and then exits non-zero. The docs should say the output may be partial. |
+| 15 | A FAILED job prints a pile of partial results and then exits non-zero. The docs should say the output may be partial. *Measured:* 4 SIGKILLs with one retry failed the job at 16.9 s after 167,875 of 659,677 results, then `end: Failed`; conversely a job failed by hard timeouts delivered all results (issue 20). The stream's `end.status` is the only reliable signal. |
 | 16 | An index gap closes the connection, which fails the task, which is retried, which hits the same gap. A bug is amplified into N retries. The second identical gap should fail the job directly. |
 | 17 | Every job with a stale attempt pays up to the 5 s drain grace at the end.                             |
 | 18 | An unsupported version closes the connection with no way for `clp-s` to fall back. Acceptable, but record it. |

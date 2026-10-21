@@ -40,8 +40,11 @@ each experiment exists.
    task docker-images:spider-worker   # clp-spider-worker:dev-<user>-<id>
    ```
 
-   The package's compose file pulls `ghcr.io/y-scope/clp/clp-spider-worker:main` unless that
-   tag exists locally, so point the tag at the image just built:
+   The package's compose files reference `ghcr.io/y-scope/clp/clp-spider-worker:main`, and the
+   vendored Spider compose file sets `pull_policy: ${SPIDER_PULL_POLICY:-always}`, so a plain
+   start pulls the upstream worker image (without this branch's `clp-s`) even when a local image
+   carries that tag. Tag the image just built and, after `start-clp.sh` (step 4), recreate the
+   workers with the pull policy overridden:
 
    ```shell
    docker tag "$(docker images clp-spider-worker --format '{{.Repository}}:{{.Tag}}' | head -1)" \
@@ -89,17 +92,28 @@ each experiment exists.
 
    `logs_input` can stay at its default (`type: fs`, `directory: /`), which is what
    `sbin/compress.sh` uses. Compression in Spider mode still runs on the Celery compression
-   workers, which the Spider compose file includes.
+   workers, which the Spider compose file includes. The `compression-coordinator` service only
+   supports S3 input and exits with `fs`, which also keeps `spider-worker-compression` from
+   registering; neither is needed for these experiments, but it makes `start-clp.sh`'s
+   `docker compose up --wait` report a failure (see step 4). If the host already runs a
+   database on 3306, set `database.port` to another port in the same config.
 
 4. Start the package and check it is up:
 
    ```shell
-   build/clp-package/sbin/start-clp.sh
+   build/clp-package/sbin/start-clp.sh    # may end with a --wait failure from compression-coordinator; that is expected with fs input
    docker compose ls                 # a running clp-package-* project
+   PROJECT=$(docker compose ls --format json | python3 -c 'import json,sys;print([p["Name"] for p in json.load(sys.stdin) if p["Name"].startswith("clp-package")][0])')
+   (cd build/clp-package && SPIDER_PULL_POLICY=missing docker compose --project-name "$PROJECT" --file docker-compose-spider.yaml up --detach)
+   docker compose -p "$PROJECT" ps   # query-coordinator, api-server, spider-scheduler, spider-storage, spider-worker x N up
    curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3001/health   # 200
    ```
 
-   The credentials file `etc/credentials.yaml` is generated on the first start.
+   The second `up` reuses the `.env` that `start-clp.sh` generated and recreates the worker
+   containers on the local image instead of the pulled one. Check with
+   `docker inspect --format '{{.Image}}' <a spider-worker container>` that the image ID is the
+   one built in step 2. The credentials file `etc/credentials.yaml` is generated on the first
+   start.
 
 ## Run
 
