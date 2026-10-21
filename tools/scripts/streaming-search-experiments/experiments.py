@@ -112,7 +112,10 @@ class Ctx:
 
     # ----- processes -----
     def run(self, cmd: list[str], check: bool = True, timeout: float | None = None, **kw) -> subprocess.CompletedProcess:
-        self.log("$ " + " ".join(cmd))
+        logged = " ".join(cmd)
+        if self.db_pass:
+            logged = logged.replace(self.db_pass, "<masked>")
+        self.log("$ " + logged)
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, **kw)
         if proc.returncode != 0:
             self.log(f"  rc={proc.returncode} stderr={proc.stderr.strip()[-2000:]}")
