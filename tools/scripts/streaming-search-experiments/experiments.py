@@ -358,7 +358,8 @@ def read_results_cache(ctx: Ctx, job_id: int) -> dict:
         if name is None:
             if out["t_first_result"] is None:
                 out["t_first_result"] = time.monotonic()
-            out["messages"].append(json.loads(data)["message"].rstrip("\n"))
+            # Each event's data is the result's log line itself (trimmed), not a JSON wrapper.
+            out["messages"].append(data.rstrip("\n"))
     out["t_end"] = time.monotonic()
     stream.close()
     return out
