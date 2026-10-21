@@ -1,0 +1,160 @@
+{
+  "archives": [
+    {
+      "id": "414244bf-e4ff-4023-ae2a-962a3f34c4a7",
+      "size": 7845582,
+      "table": "clp_default_archives",
+      "uncompressed_size": 41943182
+    },
+    {
+      "id": "afd68f71-c6e6-4484-8996-6f803606df1d",
+      "size": 7572596,
+      "table": "clp_default_archives",
+      "uncompressed_size": 41943164
+    },
+    {
+      "id": "8ab6b2fa-91fc-4038-9a64-f8b1d291d7b6",
+      "size": 7611471,
+      "table": "clp_default_archives",
+      "uncompressed_size": 41943114
+    },
+    {
+      "id": "69220d09-d14a-4ce9-be0d-298bd217b1a1",
+      "size": 7598894,
+      "table": "clp_default_archives",
+      "uncompressed_size": 41943117
+    },
+    {
+      "id": "24ff0875-9cb2-4ed3-8f1c-dc40ef402333",
+      "size": 7602086,
+      "table": "clp_default_archives",
+      "uncompressed_size": 41943166
+    },
+    {
+      "id": "750bec68-dd10-46f4-be13-f1be22fd0b6d",
+      "size": 7548909,
+      "table": "clp_default_archives",
+      "uncompressed_size": 41943046
+    },
+    {
+      "id": "e779766d-7ae8-408c-99b7-a8c1557376b2",
+      "size": 7533976,
+      "table": "clp_default_archives",
+      "uncompressed_size": 41943100
+    },
+    {
+      "id": "df888026-957a-4e4d-bfef-7b56694cdd13",
+      "size": 7534616,
+      "table": "clp_default_archives",
+      "uncompressed_size": 41943125
+    }
+  ],
+  "jobs": [
+    {
+      "path": "/home/xuhuichen/streaming-search/clp/tools/scripts/streaming-search-experiments/results/20261021T012838Z/logs/experiment-00.jsonl",
+      "rc": 0,
+      "secs": 2.31,
+      "stderr_tail": " Container clp-package-clp-runtime-run-c287fe29dcaa Creating \n Container clp-package-clp-runtime-run-c287fe29dcaa Created \n2026-10-21T01:28:50.223 INFO [compress] Compression job 1 submitted.\n"
+    },
+    {
+      "path": "/home/xuhuichen/streaming-search/clp/tools/scripts/streaming-search-experiments/results/20261021T012838Z/logs/experiment-01.jsonl",
+      "rc": 0,
+      "secs": 2.31,
+      "stderr_tail": " Container clp-package-clp-runtime-run-da1ff89c31b6 Creating \n Container clp-package-clp-runtime-run-da1ff89c31b6 Created \n2026-10-21T01:28:52.536 INFO [compress] Compression job 2 submitted.\n"
+    },
+    {
+      "path": "/home/xuhuichen/streaming-search/clp/tools/scripts/streaming-search-experiments/results/20261021T012838Z/logs/experiment-02.jsonl",
+      "rc": 0,
+      "secs": 2.33,
+      "stderr_tail": " Container clp-package-clp-runtime-run-881cc87ad2e5 Creating \n Container clp-package-clp-runtime-run-881cc87ad2e5 Created \n2026-10-21T01:28:54.872 INFO [compress] Compression job 3 submitted.\n"
+    },
+    {
+      "path": "/home/xuhuichen/streaming-search/clp/tools/scripts/streaming-search-experiments/results/20261021T012838Z/logs/experiment-03.jsonl",
+      "rc": 0,
+      "secs": 1.75,
+      "stderr_tail": " Container clp-package-clp-runtime-run-a2996c2242f9 Creating \n Container clp-package-clp-runtime-run-a2996c2242f9 Created \n2026-10-21T01:28:57.138 INFO [compress] Compression job 4 submitted.\n"
+    },
+    {
+      "path": "/home/xuhuichen/streaming-search/clp/tools/scripts/streaming-search-experiments/results/20261021T012838Z/logs/experiment-04.jsonl",
+      "rc": 0,
+      "secs": 2.3,
+      "stderr_tail": " Container clp-package-clp-runtime-run-a53a3aa4f0cf Creating \n Container clp-package-clp-runtime-run-a53a3aa4f0cf Created \n2026-10-21T01:28:58.933 INFO [compress] Compression job 5 submitted.\n"
+    },
+    {
+      "path": "/home/xuhuichen/streaming-search/clp/tools/scripts/streaming-search-experiments/results/20261021T012838Z/logs/experiment-05.jsonl",
+      "rc": 0,
+      "secs": 1.8,
+      "stderr_tail": " Container clp-package-clp-runtime-run-e884975f4882 Creating \n Container clp-package-clp-runtime-run-e884975f4882 Created \n2026-10-21T01:29:01.227 INFO [compress] Compression job 6 submitted.\n"
+    },
+    {
+      "path": "/home/xuhuichen/streaming-search/clp/tools/scripts/streaming-search-experiments/results/20261021T012838Z/logs/experiment-06.jsonl",
+      "rc": 0,
+      "secs": 1.76,
+      "stderr_tail": " Container clp-package-clp-runtime-run-deb7bf4e0184 Creating \n Container clp-package-clp-runtime-run-deb7bf4e0184 Created \n2026-10-21T01:29:02.981 INFO [compress] Compression job 7 submitted.\n"
+    },
+    {
+      "path": "/home/xuhuichen/streaming-search/clp/tools/scripts/streaming-search-experiments/results/20261021T012838Z/logs/experiment-07.jsonl",
+      "rc": 0,
+      "secs": 1.77,
+      "stderr_tail": " Container clp-package-clp-runtime-run-3de63203fa22 Creating \n Container clp-package-clp-runtime-run-3de63203fa22 Created \n2026-10-21T01:29:04.754 INFO [compress] Compression job 8 submitted.\n"
+    }
+  ],
+  "new_archives": [
+    {
+      "id": "414244bf-e4ff-4023-ae2a-962a3f34c4a7",
+      "size": 7845582,
+      "table": "clp_default_archives",
+      "uncompressed_size": 41943182
+    },
+    {
+      "id": "afd68f71-c6e6-4484-8996-6f803606df1d",
+      "size": 7572596,
+      "table": "clp_default_archives",
+      "uncompressed_size": 41943164
+    },
+    {
+      "id": "8ab6b2fa-91fc-4038-9a64-f8b1d291d7b6",
+      "size": 7611471,
+      "table": "clp_default_archives",
+      "uncompressed_size": 41943114
+    },
+    {
+      "id": "69220d09-d14a-4ce9-be0d-298bd217b1a1",
+      "size": 7598894,
+      "table": "clp_default_archives",
+      "uncompressed_size": 41943117
+    },
+    {
+      "id": "24ff0875-9cb2-4ed3-8f1c-dc40ef402333",
+      "size": 7602086,
+      "table": "clp_default_archives",
+      "uncompressed_size": 41943166
+    },
+    {
+      "id": "750bec68-dd10-46f4-be13-f1be22fd0b6d",
+      "size": 7548909,
+      "table": "clp_default_archives",
+      "uncompressed_size": 41943046
+    },
+    {
+      "id": "e779766d-7ae8-408c-99b7-a8c1557376b2",
+      "size": 7533976,
+      "table": "clp_default_archives",
+      "uncompressed_size": 41943100
+    },
+    {
+      "id": "df888026-957a-4e4d-bfef-7b56694cdd13",
+      "size": 7534616,
+      "table": "clp_default_archives",
+      "uncompressed_size": 41943125
+    }
+  ],
+  "timeouts": {
+    "hard_timeout_secs_max": 80.0,
+    "hard_timeout_secs_min": 80.0,
+    "max_archive_mib": 40,
+    "min_archive_mib": 40,
+    "num_archives": 8,
+    "soft_timeout_secs_max": 10.8
+  }
+}

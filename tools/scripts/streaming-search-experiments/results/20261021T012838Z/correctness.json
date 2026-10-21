@@ -1,0 +1,83 @@
+{
+  "all_identical": true,
+  "query": "*Transmitted*",
+  "reference_count": 659677,
+  "reference_sha256": "9c92d9a6d86516dd0ef568dba175a1cb302c457a55de7ea0fa7a628142acc2ef",
+  "results_cache": {
+    "final_db_status": "SUCCEEDED",
+    "job_id": 8,
+    "vs_clp_s": {
+      "count": 659677,
+      "identical_multiset": true,
+      "name": "results-cache",
+      "reference_count": 659677,
+      "reference_sha256": "9c92d9a6d86516dd0ef568dba175a1cb302c457a55de7ea0fa7a628142acc2ef",
+      "sha256": "9c92d9a6d86516dd0ef568dba175a1cb302c457a55de7ea0fa7a628142acc2ef"
+    }
+  },
+  "runs": [
+    {
+      "archive_ids_seen": null,
+      "end": {
+        "num_duplicates_dropped": 0,
+        "num_protocol_errors": 0,
+        "num_results_emitted": 659677,
+        "status": "Succeeded"
+      },
+      "error": null,
+      "final_db_status": "SUCCEEDED",
+      "job_id": 5,
+      "run": 0,
+      "stream_vs_clp_s": {
+        "count": 659677,
+        "identical_multiset": true,
+        "name": "stream",
+        "reference_count": 659677,
+        "reference_sha256": "9c92d9a6d86516dd0ef568dba175a1cb302c457a55de7ea0fa7a628142acc2ef",
+        "sha256": "9c92d9a6d86516dd0ef568dba175a1cb302c457a55de7ea0fa7a628142acc2ef"
+      }
+    },
+    {
+      "archive_ids_seen": null,
+      "end": {
+        "num_duplicates_dropped": 0,
+        "num_protocol_errors": 0,
+        "num_results_emitted": 659677,
+        "status": "Succeeded"
+      },
+      "error": null,
+      "final_db_status": "SUCCEEDED",
+      "job_id": 6,
+      "run": 1,
+      "stream_vs_clp_s": {
+        "count": 659677,
+        "identical_multiset": true,
+        "name": "stream",
+        "reference_count": 659677,
+        "reference_sha256": "9c92d9a6d86516dd0ef568dba175a1cb302c457a55de7ea0fa7a628142acc2ef",
+        "sha256": "9c92d9a6d86516dd0ef568dba175a1cb302c457a55de7ea0fa7a628142acc2ef"
+      }
+    },
+    {
+      "archive_ids_seen": null,
+      "end": {
+        "num_duplicates_dropped": 0,
+        "num_protocol_errors": 0,
+        "num_results_emitted": 659677,
+        "status": "Succeeded"
+      },
+      "error": null,
+      "final_db_status": "SUCCEEDED",
+      "job_id": 7,
+      "run": 2,
+      "stream_vs_clp_s": {
+        "count": 659677,
+        "identical_multiset": true,
+        "name": "stream",
+        "reference_count": 659677,
+        "reference_sha256": "9c92d9a6d86516dd0ef568dba175a1cb302c457a55de7ea0fa7a628142acc2ef",
+        "sha256": "9c92d9a6d86516dd0ef568dba175a1cb302c457a55de7ea0fa7a628142acc2ef"
+      }
+    }
+  ]
+}

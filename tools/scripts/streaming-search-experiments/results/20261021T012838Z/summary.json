@@ -1,0 +1,170 @@
+{
+  "args": {
+    "api_host": "127.0.0.1",
+    "api_port": 3001,
+    "dataset": "default",
+    "disconnect_wait_secs": 180.0,
+    "fault_kills": 2,
+    "fault_stall_secs": 8.0,
+    "file_size_mb": 40,
+    "logs_dir": "/home/xuhuichen/streaming-search/clp/tools/scripts/streaming-search-experiments/results/20261021T012838Z/logs",
+    "num_files": 8,
+    "package_dir": "build/clp-package",
+    "phases": [
+      "correctness",
+      "latency",
+      "disconnect",
+      "fault",
+      "stall",
+      "collect"
+    ],
+    "project": null,
+    "query": "*Transmitted*",
+    "results_cache_limit": 1000000,
+    "results_dir": "tools/scripts/streaming-search-experiments/results/20261021T012838Z",
+    "runs": 3,
+    "seed": 20261021,
+    "skip_compress_if_archives": false,
+    "stall_secs": null,
+    "timestamp_key": "ts"
+  },
+  "finished": "2026-10-21T01:34:19Z",
+  "phases": {
+    "collect": {
+      "ok": true,
+      "secs": 2.1
+    },
+    "compress": {
+      "ok": true,
+      "secs": 16.9
+    },
+    "correctness": {
+      "highlights": {
+        "all_identical": true,
+        "reference_count": 659677
+      },
+      "ok": true,
+      "secs": 24.8
+    },
+    "disconnect": {
+      "highlights": {
+        "final": [
+          "CANCELLED",
+          "CANCELLED",
+          "CANCELLED"
+        ],
+        "secs_to_cancelling": [
+          0.121,
+          0.144,
+          0.132
+        ]
+      },
+      "ok": true,
+      "secs": 11.4
+    },
+    "fault": {
+      "highlights": {
+        "end": {
+          "num_duplicates_dropped": 280778,
+          "num_protocol_errors": 0,
+          "num_results_emitted": 659677,
+          "status": "Succeeded"
+        },
+        "error": null,
+        "final_db_status": "SUCCEEDED",
+        "identical": true,
+        "status_timeline": [
+          {
+            "status": "RUNNING",
+            "t_secs": 0.206
+          },
+          {
+            "status": "SUCCEEDED",
+            "t_secs": 20.263
+          }
+        ]
+      },
+      "ok": true,
+      "secs": 22.1
+    },
+    "gen-logs": {
+      "ok": true,
+      "secs": 8.2
+    },
+    "latency": {
+      "highlights": {
+        "median_total_ms": {
+          "cli": 2684.9,
+          "results_cache": 5395.7,
+          "stream": 3549.8
+        },
+        "median_ttfr_ms": {
+          "cli_ttfb": 862.1,
+          "results_cache": 3112.1,
+          "stream": 85.3
+        }
+      },
+      "ok": true,
+      "secs": 52.9
+    },
+    "preflight": {
+      "ok": true,
+      "secs": 0.5
+    },
+    "stall": {
+      "highlights": {
+        "end": {
+          "num_duplicates_dropped": 328619,
+          "num_protocol_errors": 0,
+          "num_results_emitted": 659677,
+          "status": "Succeeded"
+        },
+        "error": null,
+        "final_db_status": "SUCCEEDED",
+        "identical": true,
+        "status_timeline": [
+          {
+            "status": "RUNNING",
+            "t_secs": 0.196
+          },
+          {
+            "status": "SUCCEEDED",
+            "t_secs": 127.69
+          }
+        ]
+      },
+      "ok": true,
+      "secs": 131.1
+    }
+  },
+  "previous_invocations": [
+    {
+      "args": {
+        "api_host": "127.0.0.1",
+        "api_port": 3001,
+        "dataset": "default",
+        "disconnect_wait_secs": 180.0,
+        "fault_kills": 2,
+        "fault_stall_secs": 8.0,
+        "file_size_mb": 40,
+        "logs_dir": "/home/xuhuichen/streaming-search/clp/tools/scripts/streaming-search-experiments/results/20261021T012838Z/logs",
+        "num_files": 8,
+        "package_dir": "build/clp-package",
+        "phases": [
+          "all"
+        ],
+        "project": null,
+        "query": "*Transmitted*",
+        "results_cache_limit": 1000000,
+        "results_dir": "/home/xuhuichen/streaming-search/clp/tools/scripts/streaming-search-experiments/results/20261021T012838Z",
+        "runs": 3,
+        "seed": 20261021,
+        "skip_compress_if_archives": false,
+        "stall_secs": null,
+        "timestamp_key": "ts"
+      },
+      "started": "2026-10-21T01:28:38Z"
+    }
+  ],
+  "started": "2026-10-21T01:30:04Z"
+}

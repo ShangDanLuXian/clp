@@ -1,0 +1,95 @@
+{
+  "cli": [
+    {
+      "count": 659677,
+      "rc": 0,
+      "stderr_tail": " Container clp-package-clp-runtime-run-e67c323f3c18 Creating \n Container clp-package-clp-runtime-run-e67c323f3c18 Created \n",
+      "total_ms": 2699.1,
+      "ttfb_ms": 862.1
+    },
+    {
+      "count": 659677,
+      "rc": 0,
+      "stderr_tail": " Container clp-package-clp-runtime-run-0d598b8d7aae Creating \n Container clp-package-clp-runtime-run-0d598b8d7aae Created \n",
+      "total_ms": 2673.1,
+      "ttfb_ms": 839.1
+    },
+    {
+      "count": 659677,
+      "rc": 0,
+      "stderr_tail": " Container clp-package-clp-runtime-run-8f9692df0a2f Creating \n Container clp-package-clp-runtime-run-8f9692df0a2f Created \n",
+      "total_ms": 2684.9,
+      "ttfb_ms": 866.0
+    }
+  ],
+  "median_total_ms": {
+    "cli": 2684.9,
+    "results_cache": 5395.7,
+    "stream": 3549.8
+  },
+  "median_ttfr_ms": {
+    "cli_ttfb": 862.1,
+    "results_cache": 3112.1,
+    "stream": 85.3
+  },
+  "query": "*Transmitted*",
+  "results_cache": [
+    {
+      "count": 659677,
+      "job_id": 10,
+      "total_ms": 5377.2,
+      "ttfr_ms": 3110.5
+    },
+    {
+      "count": 659677,
+      "job_id": 13,
+      "total_ms": 5395.7,
+      "ttfr_ms": 3113.0
+    },
+    {
+      "count": 659677,
+      "job_id": 16,
+      "total_ms": 5396.5,
+      "ttfr_ms": 3112.1
+    }
+  ],
+  "runs": 3,
+  "stream": [
+    {
+      "count": 659677,
+      "end": {
+        "num_duplicates_dropped": 0,
+        "num_protocol_errors": 0,
+        "num_results_emitted": 659677,
+        "status": "Succeeded"
+      },
+      "job_id": 9,
+      "total_ms": 3528.4,
+      "ttfr_ms": 119.3
+    },
+    {
+      "count": 659677,
+      "end": {
+        "num_duplicates_dropped": 0,
+        "num_protocol_errors": 0,
+        "num_results_emitted": 659677,
+        "status": "Succeeded"
+      },
+      "job_id": 12,
+      "total_ms": 3558.6,
+      "ttfr_ms": 77.3
+    },
+    {
+      "count": 659677,
+      "end": {
+        "num_duplicates_dropped": 0,
+        "num_protocol_errors": 0,
+        "num_results_emitted": 659677,
+        "status": "Succeeded"
+      },
+      "job_id": 15,
+      "total_ms": 3549.8,
+      "ttfr_ms": 85.3
+    }
+  ]
+}

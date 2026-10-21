@@ -1,0 +1,55 @@
+{
+  "runs": [
+    {
+      "disconnected_after_first_result": true,
+      "final_db_status": "CANCELLED",
+      "job_id": 18,
+      "run": 0,
+      "secs_to_cancelling_after_shutdown": 0.121,
+      "status_timeline": [
+        {
+          "status": "CANCELLING",
+          "t_secs": 0.121
+        },
+        {
+          "status": "CANCELLED",
+          "t_secs": 0.432
+        }
+      ]
+    },
+    {
+      "disconnected_after_first_result": true,
+      "final_db_status": "CANCELLED",
+      "job_id": 19,
+      "run": 1,
+      "secs_to_cancelling_after_shutdown": 0.144,
+      "status_timeline": [
+        {
+          "status": "CANCELLING",
+          "t_secs": 0.144
+        },
+        {
+          "status": "CANCELLED",
+          "t_secs": 0.446
+        }
+      ]
+    },
+    {
+      "disconnected_after_first_result": true,
+      "final_db_status": "CANCELLED",
+      "job_id": 20,
+      "run": 2,
+      "secs_to_cancelling_after_shutdown": 0.132,
+      "status_timeline": [
+        {
+          "status": "CANCELLING",
+          "t_secs": 0.132
+        },
+        {
+          "status": "CANCELLED",
+          "t_secs": 0.458
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,51 @@
+{
+  "end": {
+    "num_duplicates_dropped": 280778,
+    "num_protocol_errors": 0,
+    "num_results_emitted": 659677,
+    "status": "Succeeded"
+  },
+  "error": null,
+  "final_db_status": "SUCCEEDED",
+  "job_id": 21,
+  "kills": [
+    {
+      "killed_per_container": {
+        "1cb5000673e6": "1",
+        "56b104247783": "1",
+        "98ad8dae87b5": "1",
+        "a77b3aa6aa6e": "1"
+      },
+      "t_secs": 8.44
+    },
+    {
+      "killed_per_container": {
+        "1cb5000673e6": "1",
+        "56b104247783": "1",
+        "98ad8dae87b5": "1",
+        "a77b3aa6aa6e": "1"
+      },
+      "t_secs": 16.777
+    }
+  ],
+  "status_timeline": [
+    {
+      "status": "RUNNING",
+      "t_secs": 0.206
+    },
+    {
+      "status": "SUCCEEDED",
+      "t_secs": 20.263
+    }
+  ],
+  "stream_vs_clp_s": {
+    "count": 659677,
+    "identical_multiset": true,
+    "name": "fault-stream",
+    "reference_count": 659677,
+    "reference_sha256": "9c92d9a6d86516dd0ef568dba175a1cb302c457a55de7ea0fa7a628142acc2ef",
+    "sha256": "9c92d9a6d86516dd0ef568dba175a1cb302c457a55de7ea0fa7a628142acc2ef"
+  },
+  "t_first_result_secs": 0.089,
+  "total_secs": 20.62
+}

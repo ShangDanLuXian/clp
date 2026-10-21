@@ -1,0 +1,38 @@
+{
+  "files": [
+    {
+      "bytes": 41943182,
+      "path": "/home/xuhuichen/streaming-search/clp/tools/scripts/streaming-search-experiments/results/20261021T012838Z/logs/experiment-00.jsonl"
+    },
+    {
+      "bytes": 41943164,
+      "path": "/home/xuhuichen/streaming-search/clp/tools/scripts/streaming-search-experiments/results/20261021T012838Z/logs/experiment-01.jsonl"
+    },
+    {
+      "bytes": 41943114,
+      "path": "/home/xuhuichen/streaming-search/clp/tools/scripts/streaming-search-experiments/results/20261021T012838Z/logs/experiment-02.jsonl"
+    },
+    {
+      "bytes": 41943117,
+      "path": "/home/xuhuichen/streaming-search/clp/tools/scripts/streaming-search-experiments/results/20261021T012838Z/logs/experiment-03.jsonl"
+    },
+    {
+      "bytes": 41943166,
+      "path": "/home/xuhuichen/streaming-search/clp/tools/scripts/streaming-search-experiments/results/20261021T012838Z/logs/experiment-04.jsonl"
+    },
+    {
+      "bytes": 41943046,
+      "path": "/home/xuhuichen/streaming-search/clp/tools/scripts/streaming-search-experiments/results/20261021T012838Z/logs/experiment-05.jsonl"
+    },
+    {
+      "bytes": 41943100,
+      "path": "/home/xuhuichen/streaming-search/clp/tools/scripts/streaming-search-experiments/results/20261021T012838Z/logs/experiment-06.jsonl"
+    },
+    {
+      "bytes": 41943125,
+      "path": "/home/xuhuichen/streaming-search/clp/tools/scripts/streaming-search-experiments/results/20261021T012838Z/logs/experiment-07.jsonl"
+    }
+  ],
+  "logs_dir": "/home/xuhuichen/streaming-search/clp/tools/scripts/streaming-search-experiments/results/20261021T012838Z/logs",
+  "total_records": 2196937
+}
