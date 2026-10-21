@@ -183,10 +183,12 @@ class Ctx:
         return with_dataset if with_dataset.is_dir() else base
 
     def clp_s_bin(self) -> Path:
-        path = self.package_dir / "bin" / "clp-s"
-        if not path.exists():
-            raise RuntimeError(f"clp-s binary not found at {path}")
-        return path
+        # The package ships clp-s only inside its image; fall back to the core build it came from.
+        candidates = [self.package_dir / "bin" / "clp-s", Path(__file__).resolve().parents[3] / "build" / "core" / "clp-s"]
+        for path in candidates:
+            if path.exists():
+                return path
+        raise RuntimeError(f"clp-s binary not found at any of {[str(p) for p in candidates]}")
 
     def worker_containers(self) -> list[str]:
         proc = self.run([
@@ -454,8 +456,7 @@ def phase_preflight(ctx: Ctx) -> dict:
     out["archives"] = ctx.archives()
     out["timeouts"] = ctx.timeouts()
     out["worker_containers"] = ctx.worker_containers()
-    out["clp_s_bin"] = str(ctx.package_dir / "bin" / "clp-s")
-    out["clp_s_bin_exists"] = (ctx.package_dir / "bin" / "clp-s").exists()
+    out["clp_s_bin"] = str(ctx.clp_s_bin())
     out["git_head"] = ctx.run(["git", "rev-parse", "HEAD"], check=False, cwd=Path(__file__).resolve().parents[3]).stdout.strip()
     ctx.save("preflight.json", out)
     return out
