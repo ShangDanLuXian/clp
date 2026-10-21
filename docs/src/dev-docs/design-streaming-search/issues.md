@@ -171,9 +171,34 @@ Consequences:
 * The listener's drain grace is what eventually cuts an orphan off after the job ends, so the
   design's "stale attempt" handling is load-bearing, not defensive.
 
-This is behaviour of the Spider worker and execution manager (pinned at `278d06f`), not of the
-listener, so the fix belongs there: kill the task's process tree on a hard timeout and reap
-children. Until then, the streaming design must assume that a timed-out attempt keeps running.
+**Where it comes from (verified in the sources, not in the prototype).** Three pre-existing
+pieces combine:
+
+* Spider's execution manager (`components/spider-execution-manager/src/process_pool.rs` at
+  `278d06f`) spawns each executor process with `tokio::process::Command` and
+  `kill_on_drop(true)`, in the manager's own process group. On a hard timeout it drops the
+  handle, which SIGKILLs the executor process only (`Outcome::Timeout`: "The pool has
+  `SIGKILL`-ed the process"). Nothing kills the executor's children. Spider's docs say the task
+  "will be terminated"; the implementation terminates the executor. Upstream Spider `main`
+  (`6e85c90`, 2026-10) has the same code.
+* `clp-tdl-package`'s `run_clp_s_search` (`src/task/query/search.rs`, from #2512 on `main`,
+  before the prototype) spawns `clp-s` with `std::process::Command::spawn()` and `wait()`: no
+  process group, no `PR_SET_PDEATHSIG`, no cleanup. The prototype only changed the arguments.
+  The compression tasks spawn `clp-s`, the log converter and the indexer the same way
+  (`src/task/compression/compress.rs`), so a compression hard timeout orphans them too.
+* The worker container runs `spider-execution-manager` as PID 1 (no `tini`, no `init: true`),
+  and the manager never `waitpid`s children it did not spawn, so the orphans become zombies.
+
+Nobody saw it before because with results-cache output an orphaned `clp-s` just finishes its
+MongoDB upserts (deduplicated by `_id`) and exits; only streaming gives the orphan a connection
+to keep, and no earlier test stalled past the hard timeout.
+
+**Fix.** In Spider: spawn executors in their own process group (`Command::process_group`) and
+kill the group on timeout or crash, and reap reparented children (or run the worker under an
+init). Defensively in `clp-tdl-package`, independent of Spider: `pre_exec` with
+`prctl(PR_SET_PDEATHSIG, SIGKILL)` on every spawned `clp-s`, so it dies with its executor. Until
+one of these lands, the streaming design must assume that a timed-out attempt keeps running.
+Neither fix changes issue 1: the hard timeout still kills a task that is merely blocked.
 
 Also noted in the same runs: no soft-timeout re-dispatch was observed in any stall (no log line
 mentions the soft timeout, and no task had two live instances before its hard timeout), although
