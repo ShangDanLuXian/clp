@@ -1,0 +1,2 @@
+# Generated input logs are large; only the measurements are committed.
+results/*/logs/
