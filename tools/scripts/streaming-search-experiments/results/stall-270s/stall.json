@@ -1,0 +1,43 @@
+{
+  "end": {
+    "num_duplicates_dropped": 328083,
+    "num_protocol_errors": 0,
+    "num_results_emitted": 659677,
+    "status": "Failed"
+  },
+  "error": null,
+  "final_db_status": "FAILED",
+  "job_id": 25,
+  "read_error": null,
+  "stall_secs": 270.0,
+  "status_timeline": [
+    {
+      "status": "RUNNING",
+      "t_secs": 0.22
+    },
+    {
+      "status": "FAILED",
+      "t_secs": 160.869
+    }
+  ],
+  "stream_closed_cleanly": true,
+  "stream_vs_clp_s": {
+    "count": 659677,
+    "identical_multiset": true,
+    "name": "stall-stream",
+    "reference_count": 659677,
+    "reference_sha256": "9c92d9a6d86516dd0ef568dba175a1cb302c457a55de7ea0fa7a628142acc2ef",
+    "sha256": "9c92d9a6d86516dd0ef568dba175a1cb302c457a55de7ea0fa7a628142acc2ef"
+  },
+  "t_first_result_secs": 0.107,
+  "t_resume_secs": 270.139,
+  "timeouts": {
+    "hard_timeout_secs_max": 80.0,
+    "hard_timeout_secs_min": 80.0,
+    "max_archive_mib": 40,
+    "min_archive_mib": 40,
+    "num_archives": 8,
+    "soft_timeout_secs_max": 10.8
+  },
+  "total_secs": 274.171
+}

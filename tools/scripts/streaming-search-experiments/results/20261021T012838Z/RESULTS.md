@@ -163,8 +163,10 @@ Job 22 (`stall.json`, `stall.logs.*.txt`). Stall **125 s** (the default: the 80.
 * `identical_multiset: true` (659,677 against 659,677) after the resume.
 * First result at 0.081 s, resume at 125.089 s, total 129.1 s.
 
-What happened, from the worker and storage logs (job 22 started 01:32:02.26, 8 tasks, 4 slots;
-the client stalled from about 01:32:02.3 until it resumed at about 01:34:07.3):
+What happened, from the worker and storage logs. Job 22 started at 01:32:02.26, with 8 tasks on 4
+slots. The client stalled from 01:32:02 until it resumed at 01:34:13 by the log clock. That is
+125 s on the monotonic clock: log timestamps run about 5% fast on this host (see the clock note
+in section 7).
 
 ```
 01:32:02.286 spider-worker-2/4/1/3  clp-s query task started. task 0, 2, 3, 1
@@ -192,28 +194,27 @@ Findings:
 
 1. **The suspected flaw is real.** The 4 tasks that were running when the client stalled
    (0, 2, 3, 4) were killed by Spider's hard timeout although nothing was wrong with them. Each
-   used up its one retry. The kill came 84.37 s after each task started (80 s configured): task
-   2 started at 01:32:02.286 and timed out at 01:33:26.651, task 4 at 01:32:02.747 and
-   01:33:27.113.
-2. **It did not fail the job here, for a reason specific to this setup.** A failed task goes to
-   the back of the queue, behind the tasks that had not started (8 tasks on 4 slots). So the
-   second attempts started late. Task 0's retry started at 85 s, and tasks 2, 3 and 4 only
-   retried after the client resumed, at 131.5 to 131.9 s. The first attempts of tasks 5, 6, 7
-   and task 0's retry started at 84.4 to 85 s, so their own 80 s timers would have fired at
-   about 169 s. The client resumed at 125 s, before that. A 125 s stall is shorter than the
-   hard timeout of these second attempts plus the time they waited, so the default stall
-   (hard + 45 s) cannot exhaust `query_task_max_retry: 1` in this layout. Extrapolating from
-   these timestamps (not measured), a stall longer than about 170 s would have hard-killed
-   task 0's retry and failed the job.
+   used up its one retry. By the log clock the kill came 84.37 s after each task started (task 2
+   started at 01:32:02.286 and timed out at 01:33:26.651, task 4 at 01:32:02.747 and
+   01:33:27.113). That is the configured 80 s on the monotonic clock.
+2. **It did not fail the job here, because of how the retries were queued.** A failed task goes
+   to the back of the queue, behind the tasks that had not started (8 tasks on 4 slots). So the
+   second attempts started late. Task 0's retry started one hard timeout into the job, and the
+   retries of tasks 2, 3 and 4 started only after the client resumed. The second attempts would
+   have timed out about 2 × 80 = 160 s (monotonic) into the job. The client resumed at 125 s.
+   Follow-ups B and C (section 8) measure where the job actually fails: it depends on whether one
+   task finished from the buffers, which leaves a free slot for a retry in the first wave.
 3. No soft-timeout re-dispatch: no log line mentions the soft timeout, and no task had two live
    instances while the client stalled. No `UnknownSession` and no protocol errors.
-4. After a hard timeout the worker logs `Executor time out triggered` and respawns the executor,
-   but logs no `clp-s exited on failure`. That line does appear for every SIGKILL in the fault
-   phase. The API server logged no `Connection ended abnormally` for job 22 either, although
-   four `clp-s` were stopped mid-stream. Possibly the timed-out `clp-s` processes were not killed
-   with the executor and finished their streams after the resume, which would also fit the
-   328,619 duplicates (about 4 archives' worth, 4 × 82,460). The logs cannot show which.
-   Follow-up B samples the processes during a stall to settle it.
+4. **A hard timeout does not kill `clp-s`.** The worker logs `Executor time out triggered` and
+   respawns the executor, but no `clp-s exited on failure`, which every SIGKILL in the fault
+   phase produces. The API server logged no `Connection ended abnormally` for job 22 either.
+   Process sampling in follow-up B confirms it. The timed-out `clp-s` is reparented to the
+   worker's PID 1 (`spider-execution-manager`) and keeps its socket. It keeps streaming after
+   the client resumes and then stays a zombie, because PID 1 does not reap it. The 4 zombies
+   present when follow-up B started sampling are the 4 `clp-s` from job 22. The 328,619
+   duplicates are these orphans and the retries both sending the same 4 archives (4 × 82,460 ≈
+   329,840).
 5. Task 1 finished in 0.46 s while the client was already stalled. The buffers between `clp-s`
    and the SSE client (socket buffers plus the listener's channel) held about one archive's
    results (82,000 results, about 15 MB) before backpressure reached `clp-s`.
@@ -280,3 +281,67 @@ Package and setup:
   noted in the design review. `docker stats` was not sampled.
 * Results directory size: 22 MB, of which `collect.logs.txt` is 15 MB and `stall.logs.txt` is
   5.2 MB (debug-level Spider storage logs).
+* **Clock note.** On this WSL2 host, wall-clock time (the timestamps in `experiments.log` and in
+  the container logs) advances about 5% faster than the monotonic clock that the harness's
+  `time.sleep` and Spider's timeouts use. Stalls of 40, 125, 200 and 270 s (monotonic) span 43,
+  131, 210 and 284 s between the harness's `stalling`/`resuming` log lines. The 80 s hard
+  timeout shows up 84.37 to 84.46 s after the task start in the log timestamps. All the
+  `*_secs` values in the JSON files are monotonic, as are the stall and timeout lengths, so the
+  stall-versus-timeout comparisons are consistent. Only log-timestamp differences carry the ×1.05.
+
+## 8. Follow-ups (section 3.8 of the handoff, plus two longer stalls)
+
+Each follow-up is in its own directory under `results/`, with its own `RESULTS.md`. They ran
+against the same package and the same 8 archives as this run. Stall lengths and times are on the
+monotonic clock.
+
+| Directory | Varied | Job | Hard timeouts (tasks × count) | Final status | `end` | Duplicates dropped | Identical |
+|---|---|---|---|---|---|---|---|
+| `stall-control-40s` | stall 40 s | 23 | none | SUCCEEDED at 43.5 s | Succeeded | 0 | yes |
+| `stall-200s` | stall 200 s; `clp-s` sampled | 24 | 8 tasks × 1 | SUCCEEDED | Succeeded | 659,677 | yes |
+| `stall-270s` | stall 270 s; `clp-s` sampled | 25 | tasks 1-4 × 2, tasks 5-7 × 1 | **FAILED at 160.9 s**: `hard timeout (80000 ms) exceeded` | **Failed**, 659,677 emitted | 328,083 | yes (sic) |
+| `fault-4-kills` | `--fault-kills 4 --fault-stall-secs 5` | 26 | SIGKILLs, not timeouts | **FAILED at 16.9 s** | Failed, 167,875 emitted | 129,865 | no, 491,802 missing |
+| `stall-retry3-125s` | `query_task_max_retry: 3`, stall 125 s | 27 | 4 tasks × 1 | SUCCEEDED at 127.7 s | Succeeded | 327,527 | yes |
+| `stall-retry3-270s` | `query_task_max_retry: 3`, stall 270 s | 28 | tasks 0-3 × 2, tasks 4-7 × 1 | SUCCEEDED at 273.7 s | Succeeded | 987,204 | yes |
+
+What they add to section 6:
+
+* **A stalled client does fail the job, through the hard timeout alone.** With
+  `query_task_max_retry: 1`, the 270 s stall failed job 25 after 160.9 s, which is 2 × 80 s. In
+  that run one task (0) finished from the buffers at once, which left a free slot. The retry of
+  task 1 then started the moment the first wave timed out, and timed out again 80 s later. In
+  the 200 s run no task finished early. All 8 first attempts timed out, in two waves (80 s and
+  160 s). Every retry started a full wave later, so the earliest a second timeout could come was
+  240 s, after that client resumed at 200 s. The stall that fails a job is therefore about
+  (1 + waves before the retry starts) × the hard timeout. Here that was 160 s or 240 s,
+  depending on whether a single task's results fit into the buffers.
+* **The job is FAILED but the client receives everything.** In job 25 the client, resuming at
+  270 s, still received all 659,677 results, identical to the reference, followed by
+  `end: {"status": "Failed"}`. The orphaned `clp-s` processes delivered them, after the job was
+  already over. Spider kept running the 3 queued retries of the failed job until their own hard
+  timeout (`Failed to report task outcome to storage. Dropping the report. err=CacheStale("cache
+  stale: job no longer running")` × 3).
+* **Orphans and zombies accumulate.** Peak `clp-s` processes in the 4 worker containers: 8
+  orphans + 4 live children in `stall-200s`, 11 + 4 in `stall-270s`, 12 + 4 in
+  `stall-retry3-270s`. After each stall all of them became zombies: 4 → 12 in `stall-200s`, 12 →
+  23 in `stall-270s`. A restart clears them (0 at the start of `stall-retry3-125s`). Each
+  timed-out task also holds a listener connection and a socket buffer until its orphan finishes.
+* **`query_task_max_retry: 3` survives the 270 s stall** (12 hard timeouts, tasks 0-3 killed
+  twice) and finishes 3.7 s after the resume. The default 125 s stall needed no extra retry: 4
+  timeouts, SUCCEEDED 2.6 s after the resume, as with 1 retry.
+* `fault-4-kills`: 4 kills at 5 s intervals exhaust `query_task_max_retry: 1`, and the job FAILS
+  at 16.9 s with `end: Failed`. That is the expected outcome, and the stream reports it instead
+  of ending silently short. The Spider error the query coordinator logged contains undecoded
+  bytes: `in-task failure: ��TaskError��ExecutionError�5clp-s exited on error with
+  status=signal: 9 (SIGKILL)`. The harness's per-container kill counts (5 to 7) include the 23
+  zombies left by the earlier stalls (`kill -9` on a zombie succeeds), so they are not task
+  kills.
+* `stall-200s` has no SUCCEEDED entry in its `status_timeline`: the poller stopped before its
+  next sample. The DB status and the query coordinator (`Query job reached a terminal Spider
+  state … outcome=Succeeded` at 01:43:39.662) both say SUCCEEDED.
+
+Not done: a run on the mongod logs in `~/mongodb_data/mongodb` (planned: 8 × 256 MiB files as
+dataset `mongodb`, query `*Slow query*`, hard timeout ≈ 188 s). The session's permission check
+refused the command that set up that data and the package restart that restored
+`query_task_max_retry: 1`. **The running package is still configured with
+`query_task_max_retry: 3`** from the last follow-up.

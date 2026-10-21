@@ -1,0 +1,79 @@
+{
+  "end": {
+    "num_duplicates_dropped": 129865,
+    "num_protocol_errors": 0,
+    "num_results_emitted": 167875,
+    "status": "Failed"
+  },
+  "error": null,
+  "final_db_status": "FAILED",
+  "job_id": 26,
+  "kills": [
+    {
+      "killed_per_container": {
+        "1cb5000673e6": "7",
+        "56b104247783": "6",
+        "98ad8dae87b5": "7",
+        "a77b3aa6aa6e": "7"
+      },
+      "t_secs": 5.465
+    },
+    {
+      "killed_per_container": {
+        "1cb5000673e6": "7",
+        "56b104247783": "6",
+        "98ad8dae87b5": "7",
+        "a77b3aa6aa6e": "7"
+      },
+      "t_secs": 10.866
+    },
+    {
+      "killed_per_container": {
+        "1cb5000673e6": "7",
+        "56b104247783": "6",
+        "98ad8dae87b5": "7",
+        "a77b3aa6aa6e": "7"
+      },
+      "t_secs": 16.212
+    },
+    {
+      "killed_per_container": {
+        "1cb5000673e6": "6",
+        "56b104247783": "5",
+        "98ad8dae87b5": "6",
+        "a77b3aa6aa6e": "6"
+      },
+      "t_secs": 21.584
+    }
+  ],
+  "status_timeline": [
+    {
+      "status": "RUNNING",
+      "t_secs": 0.245
+    },
+    {
+      "status": "FAILED",
+      "t_secs": 16.889
+    }
+  ],
+  "stream_vs_clp_s": {
+    "count": 167875,
+    "extra_sample": [],
+    "identical_multiset": false,
+    "missing_sample": [
+      "{\"ts\":1700000371219,\"level\":\"INFO\",\"host\":\"host-09\",\"msg\":\"Transmitted block 14859 on channel 53 payload 9c168ae3519a85f48f739159860ecfc3\",\"seq\":14859}",
+      "{\"ts\":1700000371246,\"level\":\"INFO\",\"host\":\"host-14\",\"msg\":\"Transmitted block 14860 on channel 29 payload fd553b8b93d145fe0f423ffde63c4b24\",\"seq\":14860}",
+      "{\"ts\":1700000371281,\"level\":\"ERROR\",\"host\":\"host-04\",\"msg\":\"Transmitted block 14861 on channel 27 payload 06128e70bb1df8a9b7207239f815537b\",\"seq\":14861}",
+      "{\"ts\":1700000371296,\"level\":\"INFO\",\"host\":\"host-13\",\"msg\":\"Transmitted block 14863 on channel 9 payload cb7551a1493d32dfd0329e45d5005ed1\",\"seq\":14863}",
+      "{\"ts\":1700000371298,\"level\":\"WARN\",\"host\":\"host-03\",\"msg\":\"Transmitted block 14864 on channel 54 payload 5f278055c19d2d841db187fca9a5ea5f\",\"seq\":14864}"
+    ],
+    "name": "fault-stream",
+    "num_extra": 0,
+    "num_missing": 491802,
+    "reference_count": 659677,
+    "reference_sha256": "9c92d9a6d86516dd0ef568dba175a1cb302c457a55de7ea0fa7a628142acc2ef",
+    "sha256": "461d37175da1e007b780289521dbe63879bb2ae65c6aff5f82115800f10ab175"
+  },
+  "t_first_result_secs": 0.121,
+  "total_secs": 23.118
+}

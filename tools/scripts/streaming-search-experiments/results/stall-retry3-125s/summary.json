@@ -1,0 +1,60 @@
+{
+  "args": {
+    "api_host": "127.0.0.1",
+    "api_port": 3001,
+    "dataset": "default",
+    "disconnect_wait_secs": 180.0,
+    "fault_kills": 2,
+    "fault_stall_secs": 8.0,
+    "file_size_mb": 40,
+    "logs_dir": "/home/xuhuichen/streaming-search/clp/tools/scripts/streaming-search-experiments/results/stall-retry3-125s/logs",
+    "num_files": 8,
+    "package_dir": "build/clp-package",
+    "phases": [
+      "preflight",
+      "stall"
+    ],
+    "project": null,
+    "query": "*Transmitted*",
+    "results_cache_limit": 1000000,
+    "results_dir": "tools/scripts/streaming-search-experiments/results/stall-retry3-125s",
+    "runs": 3,
+    "seed": 20261021,
+    "skip_compress_if_archives": false,
+    "stall_secs": 125.0,
+    "timestamp_key": "ts"
+  },
+  "finished": "2026-10-21T01:54:45Z",
+  "phases": {
+    "preflight": {
+      "ok": true,
+      "secs": 0.7
+    },
+    "stall": {
+      "highlights": {
+        "end": {
+          "num_duplicates_dropped": 327527,
+          "num_protocol_errors": 0,
+          "num_results_emitted": 659677,
+          "status": "Succeeded"
+        },
+        "error": null,
+        "final_db_status": "SUCCEEDED",
+        "identical": true,
+        "status_timeline": [
+          {
+            "status": "RUNNING",
+            "t_secs": 0.266
+          },
+          {
+            "status": "SUCCEEDED",
+            "t_secs": 127.72
+          }
+        ]
+      },
+      "ok": true,
+      "secs": 130.9
+    }
+  },
+  "started": "2026-10-21T01:52:27Z"
+}

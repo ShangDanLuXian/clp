@@ -1,0 +1,359 @@
+2026-10-21T01:52:27.137Z ---
+2026-10-21T01:52:29.567Z spider-worker-4 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:52:29.567Z spider-worker-2 pid=69 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:52:29.567Z spider-worker-3 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:52:29.567Z spider-worker-1 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:52:29.567Z ---
+2026-10-21T01:52:31.980Z spider-worker-4 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:52:31.980Z spider-worker-2 pid=69 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:52:31.980Z spider-worker-3 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:52:31.980Z spider-worker-1 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:52:31.980Z ---
+2026-10-21T01:52:34.422Z spider-worker-4 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:52:34.422Z spider-worker-2 pid=69 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:52:34.422Z spider-worker-3 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:52:34.422Z spider-worker-1 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:52:34.422Z ---
+2026-10-21T01:52:36.827Z spider-worker-4 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:52:36.827Z spider-worker-2 pid=69 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:52:36.827Z spider-worker-3 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:52:36.827Z spider-worker-1 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:52:36.827Z ---
+2026-10-21T01:52:39.214Z spider-worker-4 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:52:39.214Z spider-worker-2 pid=69 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:52:39.214Z spider-worker-3 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:52:39.214Z spider-worker-1 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:52:39.214Z ---
+2026-10-21T01:52:41.639Z spider-worker-4 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:52:41.639Z spider-worker-2 pid=69 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:52:41.639Z spider-worker-3 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:52:41.639Z spider-worker-1 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:52:41.639Z ---
+2026-10-21T01:52:44.049Z spider-worker-4 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:52:44.049Z spider-worker-2 pid=69 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:52:44.049Z spider-worker-3 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:52:44.049Z spider-worker-1 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:52:44.049Z ---
+2026-10-21T01:52:46.464Z spider-worker-4 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:52:46.464Z spider-worker-2 pid=69 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:52:46.464Z spider-worker-3 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:52:46.464Z spider-worker-1 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:52:46.464Z ---
+2026-10-21T01:52:48.887Z spider-worker-4 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:52:48.887Z spider-worker-2 pid=69 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:52:48.887Z spider-worker-3 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:52:48.887Z spider-worker-1 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:52:48.887Z ---
+2026-10-21T01:52:52.877Z spider-worker-4 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:52:52.877Z spider-worker-2 pid=69 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:52:52.877Z spider-worker-3 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:52:52.877Z spider-worker-1 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:52:52.877Z ---
+2026-10-21T01:52:55.240Z spider-worker-4 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:52:55.240Z spider-worker-2 pid=69 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:52:55.240Z spider-worker-3 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:52:55.240Z spider-worker-1 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:52:55.240Z ---
+2026-10-21T01:52:57.685Z spider-worker-4 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:52:57.685Z spider-worker-2 pid=69 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:52:57.685Z spider-worker-3 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:52:57.685Z spider-worker-1 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:52:57.685Z ---
+2026-10-21T01:53:00.109Z spider-worker-4 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:00.109Z spider-worker-2 pid=69 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:00.109Z spider-worker-3 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:00.109Z spider-worker-1 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:00.109Z ---
+2026-10-21T01:53:02.500Z spider-worker-4 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:02.500Z spider-worker-2 pid=69 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:02.500Z spider-worker-3 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:02.500Z spider-worker-1 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:02.500Z ---
+2026-10-21T01:53:04.877Z spider-worker-4 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:04.877Z spider-worker-2 pid=69 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:04.877Z spider-worker-3 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:04.877Z spider-worker-1 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:04.877Z ---
+2026-10-21T01:53:07.286Z spider-worker-4 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:07.286Z spider-worker-2 pid=69 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:07.286Z spider-worker-3 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:07.286Z spider-worker-1 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:07.286Z ---
+2026-10-21T01:53:09.701Z spider-worker-4 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:09.701Z spider-worker-2 pid=69 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:09.701Z spider-worker-3 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:09.701Z spider-worker-1 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:09.701Z ---
+2026-10-21T01:53:12.121Z spider-worker-4 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:12.121Z spider-worker-2 pid=69 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:12.121Z spider-worker-3 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:12.121Z spider-worker-1 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:12.121Z ---
+2026-10-21T01:53:14.512Z spider-worker-4 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:14.512Z spider-worker-2 pid=69 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:14.512Z spider-worker-3 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:14.512Z spider-worker-1 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:14.512Z ---
+2026-10-21T01:53:16.925Z spider-worker-4 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:16.925Z spider-worker-2 pid=69 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:16.925Z spider-worker-3 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:16.925Z spider-worker-1 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:16.925Z ---
+2026-10-21T01:53:19.346Z spider-worker-4 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:19.346Z spider-worker-2 pid=69 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:19.346Z spider-worker-3 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:19.346Z spider-worker-1 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:19.346Z ---
+2026-10-21T01:53:21.749Z spider-worker-4 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:21.749Z spider-worker-2 pid=69 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:21.749Z spider-worker-3 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:21.749Z spider-worker-1 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:21.749Z ---
+2026-10-21T01:53:25.807Z spider-worker-4 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:25.807Z spider-worker-2 pid=69 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:25.807Z spider-worker-3 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:25.807Z spider-worker-1 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:25.807Z ---
+2026-10-21T01:53:28.186Z spider-worker-4 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:28.186Z spider-worker-2 pid=69 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:28.186Z spider-worker-3 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:28.186Z spider-worker-1 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:28.186Z ---
+2026-10-21T01:53:30.646Z spider-worker-4 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:30.646Z spider-worker-2 pid=69 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:30.646Z spider-worker-3 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:30.646Z spider-worker-1 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:30.646Z ---
+2026-10-21T01:53:33.038Z spider-worker-4 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:33.038Z spider-worker-2 pid=69 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:33.038Z spider-worker-3 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:33.038Z spider-worker-1 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:33.038Z ---
+2026-10-21T01:53:35.478Z spider-worker-4 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:35.478Z spider-worker-2 pid=69 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:35.478Z spider-worker-3 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:35.478Z spider-worker-1 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:35.478Z ---
+2026-10-21T01:53:37.883Z spider-worker-4 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:37.883Z spider-worker-2 pid=69 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:37.883Z spider-worker-3 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:37.883Z spider-worker-1 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:37.883Z ---
+2026-10-21T01:53:40.302Z spider-worker-4 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:40.302Z spider-worker-2 pid=69 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:40.302Z spider-worker-3 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:40.302Z spider-worker-1 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:40.302Z ---
+2026-10-21T01:53:42.698Z spider-worker-4 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:42.698Z spider-worker-2 pid=69 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:42.698Z spider-worker-3 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:42.698Z spider-worker-1 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:42.698Z ---
+2026-10-21T01:53:45.090Z spider-worker-4 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:45.090Z spider-worker-2 pid=69 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:45.090Z spider-worker-3 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:45.090Z spider-worker-1 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:45.090Z ---
+2026-10-21T01:53:47.506Z spider-worker-4 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:47.506Z spider-worker-2 pid=69 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:47.506Z spider-worker-3 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:47.506Z spider-worker-1 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:47.506Z ---
+2026-10-21T01:53:49.894Z spider-worker-4 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:49.894Z spider-worker-2 pid=69 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:49.894Z spider-worker-3 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:49.894Z spider-worker-1 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:49.894Z ---
+2026-10-21T01:53:52.314Z spider-worker-4 pid=68 state_ppid="S 33" parent=spider-task-exe
+2026-10-21T01:53:52.314Z spider-worker-2 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:53:52.314Z spider-worker-2 pid=69 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:53:52.314Z spider-worker-3 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:53:52.314Z spider-worker-3 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:53:52.314Z spider-worker-1 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:53:52.314Z spider-worker-1 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:53:52.314Z ---
+2026-10-21T01:53:56.269Z spider-worker-4 pid=540 state_ppid="S 513" parent=spider-task-exe
+2026-10-21T01:53:56.269Z spider-worker-4 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:53:56.269Z spider-worker-2 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:53:56.269Z spider-worker-2 pid=69 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:53:56.269Z spider-worker-3 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:53:56.269Z spider-worker-3 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:53:56.269Z spider-worker-1 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:53:56.269Z spider-worker-1 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:53:56.269Z ---
+2026-10-21T01:53:58.688Z spider-worker-4 pid=540 state_ppid="S 513" parent=spider-task-exe
+2026-10-21T01:53:58.688Z spider-worker-4 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:53:58.688Z spider-worker-2 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:53:58.688Z spider-worker-2 pid=69 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:53:58.688Z spider-worker-3 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:53:58.688Z spider-worker-3 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:53:58.688Z spider-worker-1 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:53:58.688Z spider-worker-1 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:53:58.688Z ---
+2026-10-21T01:54:01.100Z spider-worker-4 pid=540 state_ppid="S 513" parent=spider-task-exe
+2026-10-21T01:54:01.100Z spider-worker-4 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:01.100Z spider-worker-2 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:01.100Z spider-worker-2 pid=69 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:01.100Z spider-worker-3 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:01.100Z spider-worker-3 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:01.100Z spider-worker-1 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:01.100Z spider-worker-1 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:01.100Z ---
+2026-10-21T01:54:03.508Z spider-worker-4 pid=540 state_ppid="S 513" parent=spider-task-exe
+2026-10-21T01:54:03.508Z spider-worker-4 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:03.508Z spider-worker-2 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:03.508Z spider-worker-2 pid=69 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:03.508Z spider-worker-3 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:03.508Z spider-worker-3 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:03.508Z spider-worker-1 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:03.508Z spider-worker-1 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:03.508Z ---
+2026-10-21T01:54:05.906Z spider-worker-4 pid=540 state_ppid="S 513" parent=spider-task-exe
+2026-10-21T01:54:05.906Z spider-worker-4 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:05.906Z spider-worker-2 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:05.906Z spider-worker-2 pid=69 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:05.906Z spider-worker-3 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:05.906Z spider-worker-3 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:05.906Z spider-worker-1 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:05.906Z spider-worker-1 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:05.906Z ---
+2026-10-21T01:54:08.308Z spider-worker-4 pid=540 state_ppid="S 513" parent=spider-task-exe
+2026-10-21T01:54:08.308Z spider-worker-4 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:08.308Z spider-worker-2 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:08.308Z spider-worker-2 pid=69 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:08.308Z spider-worker-3 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:08.308Z spider-worker-3 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:08.308Z spider-worker-1 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:08.308Z spider-worker-1 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:08.308Z ---
+2026-10-21T01:54:10.737Z spider-worker-4 pid=540 state_ppid="S 513" parent=spider-task-exe
+2026-10-21T01:54:10.737Z spider-worker-4 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:10.737Z spider-worker-2 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:10.737Z spider-worker-2 pid=69 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:10.737Z spider-worker-3 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:10.737Z spider-worker-3 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:10.737Z spider-worker-1 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:10.737Z spider-worker-1 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:10.737Z ---
+2026-10-21T01:54:13.150Z spider-worker-4 pid=540 state_ppid="S 513" parent=spider-task-exe
+2026-10-21T01:54:13.150Z spider-worker-4 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:13.150Z spider-worker-2 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:13.150Z spider-worker-2 pid=69 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:13.150Z spider-worker-3 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:13.150Z spider-worker-3 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:13.150Z spider-worker-1 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:13.150Z spider-worker-1 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:13.150Z ---
+2026-10-21T01:54:15.744Z spider-worker-4 pid=540 state_ppid="S 513" parent=spider-task-exe
+2026-10-21T01:54:15.744Z spider-worker-4 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:15.744Z spider-worker-2 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:15.744Z spider-worker-2 pid=69 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:15.744Z spider-worker-3 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:15.744Z spider-worker-3 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:15.744Z spider-worker-1 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:15.744Z spider-worker-1 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:15.744Z ---
+2026-10-21T01:54:18.152Z spider-worker-4 pid=540 state_ppid="S 513" parent=spider-task-exe
+2026-10-21T01:54:18.152Z spider-worker-4 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:18.152Z spider-worker-2 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:18.152Z spider-worker-2 pid=69 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:18.152Z spider-worker-3 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:18.152Z spider-worker-3 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:18.152Z spider-worker-1 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:18.152Z spider-worker-1 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:18.152Z ---
+2026-10-21T01:54:20.571Z spider-worker-4 pid=540 state_ppid="S 513" parent=spider-task-exe
+2026-10-21T01:54:20.571Z spider-worker-4 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:20.571Z spider-worker-2 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:20.571Z spider-worker-2 pid=69 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:20.571Z spider-worker-3 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:20.571Z spider-worker-3 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:20.571Z spider-worker-1 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:20.571Z spider-worker-1 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:20.571Z ---
+2026-10-21T01:54:22.993Z spider-worker-4 pid=540 state_ppid="S 513" parent=spider-task-exe
+2026-10-21T01:54:22.993Z spider-worker-4 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:22.993Z spider-worker-2 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:22.993Z spider-worker-2 pid=69 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:22.993Z spider-worker-3 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:22.993Z spider-worker-3 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:22.993Z spider-worker-1 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:22.993Z spider-worker-1 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:22.993Z ---
+2026-10-21T01:54:26.964Z spider-worker-4 pid=540 state_ppid="S 513" parent=spider-task-exe
+2026-10-21T01:54:26.964Z spider-worker-4 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:26.964Z spider-worker-2 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:26.964Z spider-worker-2 pid=69 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:26.964Z spider-worker-3 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:26.964Z spider-worker-3 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:26.964Z spider-worker-1 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:26.964Z spider-worker-1 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:26.964Z ---
+2026-10-21T01:54:29.393Z spider-worker-4 pid=540 state_ppid="S 513" parent=spider-task-exe
+2026-10-21T01:54:29.393Z spider-worker-4 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:29.393Z spider-worker-2 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:29.393Z spider-worker-2 pid=69 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:29.393Z spider-worker-3 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:29.393Z spider-worker-3 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:29.393Z spider-worker-1 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:29.393Z spider-worker-1 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:29.393Z ---
+2026-10-21T01:54:31.822Z spider-worker-4 pid=540 state_ppid="S 513" parent=spider-task-exe
+2026-10-21T01:54:31.822Z spider-worker-4 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:31.822Z spider-worker-2 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:31.822Z spider-worker-2 pid=69 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:31.822Z spider-worker-3 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:31.822Z spider-worker-3 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:31.822Z spider-worker-1 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:31.822Z spider-worker-1 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:31.822Z ---
+2026-10-21T01:54:34.193Z spider-worker-4 pid=540 state_ppid="S 513" parent=spider-task-exe
+2026-10-21T01:54:34.193Z spider-worker-4 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:34.193Z spider-worker-2 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:34.193Z spider-worker-2 pid=69 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:34.193Z spider-worker-3 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:34.193Z spider-worker-3 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:34.193Z spider-worker-1 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:34.193Z spider-worker-1 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:34.193Z ---
+2026-10-21T01:54:36.611Z spider-worker-4 pid=540 state_ppid="S 513" parent=spider-task-exe
+2026-10-21T01:54:36.611Z spider-worker-4 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:36.611Z spider-worker-2 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:36.611Z spider-worker-2 pid=69 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:36.611Z spider-worker-3 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:36.611Z spider-worker-3 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:36.611Z spider-worker-1 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:36.611Z spider-worker-1 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:36.611Z ---
+2026-10-21T01:54:39.012Z spider-worker-4 pid=540 state_ppid="S 513" parent=spider-task-exe
+2026-10-21T01:54:39.012Z spider-worker-4 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:39.012Z spider-worker-2 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:39.012Z spider-worker-2 pid=69 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:39.012Z spider-worker-3 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:39.012Z spider-worker-3 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:39.012Z spider-worker-1 pid=526 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:39.012Z spider-worker-1 pid=68 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:39.012Z ---
+2026-10-21T01:54:41.444Z spider-worker-4 pid=68 state_ppid="Z 1" parent=spider-executio
+2026-10-21T01:54:41.444Z spider-worker-4 pid=849 state_ppid="S 513" parent=spider-task-exe
+2026-10-21T01:54:41.444Z spider-worker-2 pid=69 state_ppid="S 1" parent=spider-executio
+2026-10-21T01:54:41.444Z spider-worker-2 pid=852 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:41.444Z spider-worker-3 pid=68 state_ppid="Z 1" parent=spider-executio
+2026-10-21T01:54:41.444Z spider-worker-3 pid=852 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:41.444Z spider-worker-1 pid=68 state_ppid="Z 1" parent=spider-executio
+2026-10-21T01:54:41.444Z spider-worker-1 pid=852 state_ppid="S 499" parent=spider-task-exe
+2026-10-21T01:54:41.444Z ---
+2026-10-21T01:54:43.901Z spider-worker-4 pid=68 state_ppid="Z 1" parent=spider-executio
+2026-10-21T01:54:43.901Z spider-worker-2 pid=69 state_ppid="Z 1" parent=spider-executio
+2026-10-21T01:54:43.901Z spider-worker-3 pid=68 state_ppid="Z 1" parent=spider-executio
+2026-10-21T01:54:43.901Z spider-worker-1 pid=68 state_ppid="Z 1" parent=spider-executio
+2026-10-21T01:54:43.901Z ---
+2026-10-21T01:54:46.294Z spider-worker-4 pid=68 state_ppid="Z 1" parent=spider-executio
+2026-10-21T01:54:46.294Z spider-worker-2 pid=69 state_ppid="Z 1" parent=spider-executio
+2026-10-21T01:54:46.294Z spider-worker-3 pid=68 state_ppid="Z 1" parent=spider-executio
+2026-10-21T01:54:46.294Z spider-worker-1 pid=68 state_ppid="Z 1" parent=spider-executio
+2026-10-21T01:54:46.294Z ---
+2026-10-21T01:54:48.678Z spider-worker-4 pid=68 state_ppid="Z 1" parent=spider-executio
+2026-10-21T01:54:48.678Z spider-worker-2 pid=69 state_ppid="Z 1" parent=spider-executio
+2026-10-21T01:54:48.678Z spider-worker-3 pid=68 state_ppid="Z 1" parent=spider-executio
+2026-10-21T01:54:48.678Z spider-worker-1 pid=68 state_ppid="Z 1" parent=spider-executio

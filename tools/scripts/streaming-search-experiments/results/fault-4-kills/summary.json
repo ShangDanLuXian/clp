@@ -1,0 +1,60 @@
+{
+  "args": {
+    "api_host": "127.0.0.1",
+    "api_port": 3001,
+    "dataset": "default",
+    "disconnect_wait_secs": 180.0,
+    "fault_kills": 4,
+    "fault_stall_secs": 5.0,
+    "file_size_mb": 40,
+    "logs_dir": "/home/xuhuichen/streaming-search/clp/tools/scripts/streaming-search-experiments/results/fault-4-kills/logs",
+    "num_files": 8,
+    "package_dir": "build/clp-package",
+    "phases": [
+      "preflight",
+      "fault"
+    ],
+    "project": null,
+    "query": "*Transmitted*",
+    "results_cache_limit": 1000000,
+    "results_dir": "tools/scripts/streaming-search-experiments/results/fault-4-kills",
+    "runs": 3,
+    "seed": 20261021,
+    "skip_compress_if_archives": false,
+    "stall_secs": null,
+    "timestamp_key": "ts"
+  },
+  "finished": "2026-10-21T01:50:40Z",
+  "phases": {
+    "fault": {
+      "highlights": {
+        "end": {
+          "num_duplicates_dropped": 129865,
+          "num_protocol_errors": 0,
+          "num_results_emitted": 167875,
+          "status": "Failed"
+        },
+        "error": null,
+        "final_db_status": "FAILED",
+        "identical": false,
+        "status_timeline": [
+          {
+            "status": "RUNNING",
+            "t_secs": 0.245
+          },
+          {
+            "status": "FAILED",
+            "t_secs": 16.889
+          }
+        ]
+      },
+      "ok": true,
+      "secs": 24.6
+    },
+    "preflight": {
+      "ok": true,
+      "secs": 0.7
+    }
+  },
+  "started": "2026-10-21T01:50:14Z"
+}

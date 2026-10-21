@@ -1,0 +1,72 @@
+[2026-10-21T01:39:06Z] wrote /home/xuhuichen/streaming-search/clp/tools/scripts/streaming-search-experiments/results/stall-control-40s/summary.json
+[2026-10-21T01:39:06Z] ===== phase preflight =====
+[2026-10-21T01:39:06Z] $ docker version --format {{.Server.Version}}
+[2026-10-21T01:39:06Z] $ docker compose ls --format json
+[2026-10-21T01:39:06Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 ps --format json
+[2026-10-21T01:39:06Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 exec -T database mariadb -N -B -uclp-user -p<masked> clp-db -e SELECT COUNT(*) FROM query_jobs
+[2026-10-21T01:39:06Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 exec -T database mariadb -N -B -uclp-user -p<masked> clp-db -e SHOW TABLES LIKE '%archives'
+[2026-10-21T01:39:06Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 exec -T database mariadb -N -B -uclp-user -p<masked> clp-db -e SELECT id, uncompressed_size, size FROM `clp_default_archives`
+[2026-10-21T01:39:06Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 exec -T database mariadb -N -B -uclp-user -p<masked> clp-db -e SHOW TABLES LIKE '%archives'
+[2026-10-21T01:39:07Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 exec -T database mariadb -N -B -uclp-user -p<masked> clp-db -e SELECT id, uncompressed_size, size FROM `clp_default_archives`
+[2026-10-21T01:39:07Z] $ docker ps -q --filter label=com.docker.compose.project=clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 --filter label=com.docker.compose.service=spider-worker
+[2026-10-21T01:39:07Z] $ git rev-parse HEAD
+[2026-10-21T01:39:07Z] wrote /home/xuhuichen/streaming-search/clp/tools/scripts/streaming-search-experiments/results/stall-control-40s/preflight.json
+[2026-10-21T01:39:07Z] wrote /home/xuhuichen/streaming-search/clp/tools/scripts/streaming-search-experiments/results/stall-control-40s/summary.json
+[2026-10-21T01:39:07Z] ===== phase stall =====
+[2026-10-21T01:39:07Z] $ /home/xuhuichen/streaming-search/clp/build/core/clp-s s /home/xuhuichen/streaming-search/clp/build/clp-package/var/data/archives/default *Transmitted*
+[2026-10-21T01:39:08Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 exec -T database mariadb -N -B -uclp-user -p<masked> clp-db -e SHOW TABLES LIKE '%archives'
+[2026-10-21T01:39:08Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 exec -T database mariadb -N -B -uclp-user -p<masked> clp-db -e SELECT id, uncompressed_size, size FROM `clp_default_archives`
+[2026-10-21T01:39:08Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 exec -T database mariadb -N -B -uclp-user -p<masked> clp-db -e SELECT status FROM query_jobs WHERE id = 23
+[2026-10-21T01:39:08Z] stalling the client for 40 s (hard timeout max 80.0 s)
+[2026-10-21T01:39:09Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 exec -T database mariadb -N -B -uclp-user -p<masked> clp-db -e SELECT status FROM query_jobs WHERE id = 23
+[2026-10-21T01:39:10Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 exec -T database mariadb -N -B -uclp-user -p<masked> clp-db -e SELECT status FROM query_jobs WHERE id = 23
+[2026-10-21T01:39:13Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 exec -T database mariadb -N -B -uclp-user -p<masked> clp-db -e SELECT status FROM query_jobs WHERE id = 23
+[2026-10-21T01:39:14Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 exec -T database mariadb -N -B -uclp-user -p<masked> clp-db -e SELECT status FROM query_jobs WHERE id = 23
+[2026-10-21T01:39:15Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 exec -T database mariadb -N -B -uclp-user -p<masked> clp-db -e SELECT status FROM query_jobs WHERE id = 23
+[2026-10-21T01:39:16Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 exec -T database mariadb -N -B -uclp-user -p<masked> clp-db -e SELECT status FROM query_jobs WHERE id = 23
+[2026-10-21T01:39:17Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 exec -T database mariadb -N -B -uclp-user -p<masked> clp-db -e SELECT status FROM query_jobs WHERE id = 23
+[2026-10-21T01:39:18Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 exec -T database mariadb -N -B -uclp-user -p<masked> clp-db -e SELECT status FROM query_jobs WHERE id = 23
+[2026-10-21T01:39:20Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 exec -T database mariadb -N -B -uclp-user -p<masked> clp-db -e SELECT status FROM query_jobs WHERE id = 23
+[2026-10-21T01:39:21Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 exec -T database mariadb -N -B -uclp-user -p<masked> clp-db -e SELECT status FROM query_jobs WHERE id = 23
+[2026-10-21T01:39:22Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 exec -T database mariadb -N -B -uclp-user -p<masked> clp-db -e SELECT status FROM query_jobs WHERE id = 23
+[2026-10-21T01:39:23Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 exec -T database mariadb -N -B -uclp-user -p<masked> clp-db -e SELECT status FROM query_jobs WHERE id = 23
+[2026-10-21T01:39:24Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 exec -T database mariadb -N -B -uclp-user -p<masked> clp-db -e SELECT status FROM query_jobs WHERE id = 23
+[2026-10-21T01:39:25Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 exec -T database mariadb -N -B -uclp-user -p<masked> clp-db -e SELECT status FROM query_jobs WHERE id = 23
+[2026-10-21T01:39:26Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 exec -T database mariadb -N -B -uclp-user -p<masked> clp-db -e SELECT status FROM query_jobs WHERE id = 23
+[2026-10-21T01:39:27Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 exec -T database mariadb -N -B -uclp-user -p<masked> clp-db -e SELECT status FROM query_jobs WHERE id = 23
+[2026-10-21T01:39:28Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 exec -T database mariadb -N -B -uclp-user -p<masked> clp-db -e SELECT status FROM query_jobs WHERE id = 23
+[2026-10-21T01:39:30Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 exec -T database mariadb -N -B -uclp-user -p<masked> clp-db -e SELECT status FROM query_jobs WHERE id = 23
+[2026-10-21T01:39:31Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 exec -T database mariadb -N -B -uclp-user -p<masked> clp-db -e SELECT status FROM query_jobs WHERE id = 23
+[2026-10-21T01:39:32Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 exec -T database mariadb -N -B -uclp-user -p<masked> clp-db -e SELECT status FROM query_jobs WHERE id = 23
+[2026-10-21T01:39:33Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 exec -T database mariadb -N -B -uclp-user -p<masked> clp-db -e SELECT status FROM query_jobs WHERE id = 23
+[2026-10-21T01:39:34Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 exec -T database mariadb -N -B -uclp-user -p<masked> clp-db -e SELECT status FROM query_jobs WHERE id = 23
+[2026-10-21T01:39:35Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 exec -T database mariadb -N -B -uclp-user -p<masked> clp-db -e SELECT status FROM query_jobs WHERE id = 23
+[2026-10-21T01:39:36Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 exec -T database mariadb -N -B -uclp-user -p<masked> clp-db -e SELECT status FROM query_jobs WHERE id = 23
+[2026-10-21T01:39:37Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 exec -T database mariadb -N -B -uclp-user -p<masked> clp-db -e SELECT status FROM query_jobs WHERE id = 23
+[2026-10-21T01:39:38Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 exec -T database mariadb -N -B -uclp-user -p<masked> clp-db -e SELECT status FROM query_jobs WHERE id = 23
+[2026-10-21T01:39:40Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 exec -T database mariadb -N -B -uclp-user -p<masked> clp-db -e SELECT status FROM query_jobs WHERE id = 23
+[2026-10-21T01:39:41Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 exec -T database mariadb -N -B -uclp-user -p<masked> clp-db -e SELECT status FROM query_jobs WHERE id = 23
+[2026-10-21T01:39:42Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 exec -T database mariadb -N -B -uclp-user -p<masked> clp-db -e SELECT status FROM query_jobs WHERE id = 23
+[2026-10-21T01:39:44Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 exec -T database mariadb -N -B -uclp-user -p<masked> clp-db -e SELECT status FROM query_jobs WHERE id = 23
+[2026-10-21T01:39:45Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 exec -T database mariadb -N -B -uclp-user -p<masked> clp-db -e SELECT status FROM query_jobs WHERE id = 23
+[2026-10-21T01:39:47Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 exec -T database mariadb -N -B -uclp-user -p<masked> clp-db -e SELECT status FROM query_jobs WHERE id = 23
+[2026-10-21T01:39:48Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 exec -T database mariadb -N -B -uclp-user -p<masked> clp-db -e SELECT status FROM query_jobs WHERE id = 23
+[2026-10-21T01:39:49Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 exec -T database mariadb -N -B -uclp-user -p<masked> clp-db -e SELECT status FROM query_jobs WHERE id = 23
+[2026-10-21T01:39:50Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 exec -T database mariadb -N -B -uclp-user -p<masked> clp-db -e SELECT status FROM query_jobs WHERE id = 23
+[2026-10-21T01:39:51Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 exec -T database mariadb -N -B -uclp-user -p<masked> clp-db -e SELECT status FROM query_jobs WHERE id = 23
+[2026-10-21T01:39:51Z] resuming reads
+[2026-10-21T01:39:52Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 exec -T database mariadb -N -B -uclp-user -p<masked> clp-db -e SELECT status FROM query_jobs WHERE id = 23
+[2026-10-21T01:39:53Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 exec -T database mariadb -N -B -uclp-user -p<masked> clp-db -e SELECT status FROM query_jobs WHERE id = 23
+[2026-10-21T01:39:54Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 exec -T database mariadb -N -B -uclp-user -p<masked> clp-db -e SELECT status FROM query_jobs WHERE id = 23
+[2026-10-21T01:39:54Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 exec -T database mariadb -N -B -uclp-user -p<masked> clp-db -e SELECT status FROM query_jobs WHERE id = 23
+[2026-10-21T01:39:55Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 exec -T database mariadb -N -B -uclp-user -p<masked> clp-db -e SELECT status FROM query_jobs WHERE id = 23
+[2026-10-21T01:39:55Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 logs --no-color --timestamps --since 2026-10-21T01:39:08Z api-server
+[2026-10-21T01:39:55Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 logs --no-color --timestamps --since 2026-10-21T01:39:08Z query-coordinator
+[2026-10-21T01:39:55Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 logs --no-color --timestamps --since 2026-10-21T01:39:08Z spider-scheduler
+[2026-10-21T01:39:55Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 logs --no-color --timestamps --since 2026-10-21T01:39:08Z spider-storage
+[2026-10-21T01:39:55Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 logs --no-color --timestamps --since 2026-10-21T01:39:08Z spider-worker
+[2026-10-21T01:39:55Z] $ docker compose --project-name clp-package-51d911fb-5143-47a0-bd98-3c911d9e28c9 logs --no-color --timestamps --since 2026-10-21T01:39:08Z spider-worker-compression
+[2026-10-21T01:39:55Z] wrote /home/xuhuichen/streaming-search/clp/tools/scripts/streaming-search-experiments/results/stall-control-40s/stall.logs.txt and /home/xuhuichen/streaming-search/clp/tools/scripts/streaming-search-experiments/results/stall-control-40s/stall.logs.interesting.txt
+[2026-10-21T01:39:55Z] wrote /home/xuhuichen/streaming-search/clp/tools/scripts/streaming-search-experiments/results/stall-control-40s/stall.json
+[2026-10-21T01:39:55Z] wrote /home/xuhuichen/streaming-search/clp/tools/scripts/streaming-search-experiments/results/stall-control-40s/summary.json
+[2026-10-21T01:39:55Z] done; commit and push the results directory
