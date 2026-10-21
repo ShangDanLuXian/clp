@@ -860,6 +860,12 @@ def main() -> int:
 
     phases = ALL_ORDER if "all" in args.phases else args.phases
     summary = {"started": utc_now_iso(), "phases": {}, "args": vars(args)}
+    previous = ctx.results_dir / "summary.json"
+    if previous.exists():
+        # Re-running some phases into the same directory keeps the other phases' results.
+        old = json.loads(previous.read_text())
+        summary["phases"] = old.get("phases", {})
+        summary["previous_invocations"] = old.get("previous_invocations", []) + [{"started": old.get("started"), "args": old.get("args")}]
     ctx.save("summary.json", summary)
     for phase in phases:
         if phase != "preflight" and ctx.project is None:
