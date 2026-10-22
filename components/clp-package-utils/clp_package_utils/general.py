@@ -5,7 +5,6 @@ import json
 import logging
 import os
 import pathlib
-import re
 import secrets
 import socket
 import subprocess
@@ -38,10 +37,7 @@ from clp_py_utils.clp_config import (
     WEBUI_COMPONENT_NAME,
     WorkerConfig,
 )
-from clp_py_utils.clp_metadata_db_utils import (
-    MYSQL_TABLE_NAME_MAX_LEN,
-    TABLE_SUFFIX_MAX_LEN,
-)
+from clp_py_utils.clp_metadata_db_utils import DATASET_NAME_MAX_LEN
 from clp_py_utils.core import (
     get_config_value,
     make_config_path_absolute,
@@ -717,51 +713,29 @@ def validate_path_for_container_mount(path: pathlib.Path) -> None:
             )
 
 
-def validate_dataset_name(clp_table_prefix: str, dataset_name: str) -> None:
+def validate_dataset_name(dataset_name: str) -> None:
     """
     Validates that the given dataset name abides by the following rules:
-    - Its length won't cause any metadata table names to exceed MySQL's max table name length.
-    - It only contains alphanumeric characters and underscores.
+    - Its length does not exceed the maximum size of the dataset name column in the database.
 
-    :param clp_table_prefix:
     :param dataset_name:
     :raise: ValueError if the dataset name is invalid.
     """
-    if re.fullmatch(r"\w+", dataset_name) is None:
-        raise ValueError(
-            f"Invalid dataset name: `{dataset_name}`. Names can only contain alphanumeric"
-            f" characters and underscores."
-        )
-
-    dataset_name_max_len = (
-        MYSQL_TABLE_NAME_MAX_LEN
-        - len(clp_table_prefix)
-        - 1  # For the separator between the dataset name and the table suffix
-        - TABLE_SUFFIX_MAX_LEN
-    )
-    if len(dataset_name) > dataset_name_max_len:
+    if len(dataset_name) > DATASET_NAME_MAX_LEN:
         raise ValueError(
             f"Invalid dataset name: `{dataset_name}`. Names can only be a maximum of"
-            f" {dataset_name_max_len} characters long."
+            f" {DATASET_NAME_MAX_LEN} characters long."
         )
 
 
 def validate_retention_config(clp_config: ClpConfig) -> None:
     clp_query_engine = clp_config.webui.query_engine
-    if is_retention_period_configured(clp_config) and clp_query_engine == QueryEngine.PRESTO:
+    if clp_config.results_cache.retention_period is not None and (
+        clp_query_engine == QueryEngine.PRESTO
+    ):
         raise ValueError(
             f"Retention control is not supported with query_engine `{clp_query_engine}`"
         )
-
-
-def is_retention_period_configured(clp_config: ClpConfig) -> bool:
-    if clp_config.archive_output.retention_period is not None:
-        return True
-
-    if clp_config.results_cache.retention_period is not None:
-        return True
-
-    return False
 
 
 def get_common_env_vars_list(

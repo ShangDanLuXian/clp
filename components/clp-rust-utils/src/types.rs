@@ -12,11 +12,21 @@ use sqlx::error::BoxDynError;
 use sqlx::mysql::MySqlTypeInfo;
 use sqlx::mysql::MySqlValueRef;
 
-/// An archive's UUID. External storage keys and database values use its canonical text form.
+/// An archive's UUID. External storage keys use its canonical text form.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(transparent)]
 pub struct ArchiveId {
     value: uuid::Uuid,
+}
+
+impl ArchiveId {
+    /// # Returns
+    ///
+    /// A reference to the archive ID's underlying UUID bytes.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; 16] {
+        self.value.as_bytes()
+    }
 }
 
 impl FromStr for ArchiveId {

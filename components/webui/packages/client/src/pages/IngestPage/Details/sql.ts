@@ -5,7 +5,9 @@ import {querySql} from "../../../api/sql";
 import {settings} from "../../../settings";
 import {
     CLP_ARCHIVES_TABLE_COLUMN_NAMES,
+    CLP_DATASETS_TABLE_COLUMN_NAMES,
     CLP_FILES_TABLE_COLUMN_NAMES,
+    CLP_S_ARCHIVES_TABLE_COLUMN_NAMES,
 } from "../sqlConfig";
 
 
@@ -17,6 +19,14 @@ interface DetailsItem {
     end_timestamp: Nullable<number>;
     num_files: Nullable<number>;
     num_messages: Nullable<number>;
+}
+
+/**
+ * Row returned by the clp-s details query, which only covers the archives' time range.
+ */
+interface DetailsTimeRangeRow {
+    begin_timestamp: Nullable<number>;
+    end_timestamp: Nullable<number>;
 }
 
 /**
@@ -64,10 +74,41 @@ FROM
  * Builds the query string for details stats when using CLP-S storage engine
  * (i.e. multiple datasets).
  *
+ * NOTE: `num_files` and `num_messages` aren't queried. The clp-s details panel renders only the
+ * time range, so the pre-migration query computed them without ever displaying them, and the
+ * shared schema provides no files table to compute them from.
+ *
+ * TODO: Once clp-s has a files table, add the file and message counts here using the aggregation
+ * in `buildLegacyMultiDatasetDetailsSql`, then delete that function.
+ *
+ * @return
+ */
+const buildMultiDatasetDetailsSql = (): string => `
+    SELECT
+      MIN(archives.${CLP_S_ARCHIVES_TABLE_COLUMN_NAMES.TIMESTAMP_RANGE_BEGIN_MILLIS})
+        AS begin_timestamp,
+      MAX(archives.${CLP_S_ARCHIVES_TABLE_COLUMN_NAMES.TIMESTAMP_RANGE_END_MILLIS})
+        AS end_timestamp
+    FROM ${settings.SqlDbClpArchivesTableName} AS archives
+    JOIN ${settings.SqlDbClpDatasetsTableName} AS datasets
+      ON archives.${CLP_S_ARCHIVES_TABLE_COLUMN_NAMES.DATASET_ID} =
+         datasets.${CLP_DATASETS_TABLE_COLUMN_NAMES.ID}
+    WHERE datasets.${CLP_DATASETS_TABLE_COLUMN_NAMES.NAME} IN (?);
+  `;
+
+/**
+ * Builds the pre-migration query string for details stats across multiple clp-s datasets.
+ *
+ * NOTE: Unused, and not revivable as-is: it reads the per-dataset
+ * `<prefix><dataset>_archives`/`_files` tables, whereas clp-s' files table(s) will be shared and
+ * keyed by `dataset_id` like the archives table. What's preserved here is the aggregation -
+ * `COUNT(DISTINCT orig_file_id)`, `SUM(num_messages)`, and the cross-join against the time range -
+ * so it doesn't have to be re-derived.
+ *
  * @param datasetNames
  * @return
  */
-const buildMultiDatasetDetailsSql = (datasetNames: string[]): string => {
+const buildLegacyMultiDatasetDetailsSql = (datasetNames: string[]): string => {
     const archiveQueries = datasetNames.map((name) => `
     SELECT
       MIN(${CLP_ARCHIVES_TABLE_COLUMN_NAMES.BEGIN_TIMESTAMP}) AS begin_timestamp,
@@ -111,20 +152,21 @@ const buildMultiDatasetDetailsSql = (datasetNames: string[]): string => {
 };
 
 /**
- * Executes details SQL query and extracts details result.
+ * Executes a details SQL query and extracts its single row.
  *
  * @param sql
+ * @param queryParams
  * @return
  * @throws {Error} if query result does not contain data
  */
-const executeDetailsQuery = async (sql: string): Promise<DetailsItem> => {
-    const resp = await querySql<DetailsItem[]>(sql);
-    const [detailsResult] = resp.data;
-    if ("undefined" === typeof detailsResult) {
+const executeSingleRowQuery = async <T>(sql: string, queryParams?: unknown[]): Promise<T> => {
+    const resp = await querySql<T[]>(sql, queryParams);
+    const [row] = resp.data;
+    if ("undefined" === typeof row) {
         throw new Error("Details result does not contain data.");
     }
 
-    return detailsResult;
+    return row;
 };
 
 /**
@@ -134,7 +176,7 @@ const executeDetailsQuery = async (sql: string): Promise<DetailsItem> => {
  */
 const fetchClpDetails = async (): Promise<DetailsItem> => {
     const sql = getDetailsSql();
-    return executeDetailsQuery(sql);
+    return executeSingleRowQuery<DetailsItem>(sql);
 };
 
 /**
@@ -149,12 +191,19 @@ const fetchClpsDetails = async (
     if (0 === datasetNames.length) {
         return DETAILS_DEFAULT;
     }
-    const sql = buildMultiDatasetDetailsSql(datasetNames);
-    return executeDetailsQuery(sql);
+    const sql = buildMultiDatasetDetailsSql();
+    const timeRange = await executeSingleRowQuery<DetailsTimeRangeRow>(sql, [datasetNames]);
+
+    return {
+        ...DETAILS_DEFAULT,
+        begin_timestamp: timeRange.begin_timestamp,
+        end_timestamp: timeRange.end_timestamp,
+    };
 };
 
 export type {DetailsItem};
 export {
+    buildLegacyMultiDatasetDetailsSql,
     DETAILS_DEFAULT,
     fetchClpDetails,
     fetchClpsDetails,

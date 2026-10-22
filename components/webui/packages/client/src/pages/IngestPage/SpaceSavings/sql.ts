@@ -1,8 +1,10 @@
-import {SqlTableSuffix} from "@webui/common/config";
-
 import {querySql} from "../../../api/sql";
 import {settings} from "../../../settings";
-import {CLP_ARCHIVES_TABLE_COLUMN_NAMES} from "../sqlConfig";
+import {
+    CLP_ARCHIVES_TABLE_COLUMN_NAMES,
+    CLP_DATASETS_TABLE_COLUMN_NAMES,
+    CLP_S_ARCHIVES_TABLE_COLUMN_NAMES,
+} from "../sqlConfig";
 
 
 /**
@@ -48,46 +50,42 @@ FROM ${settings.SqlDbClpArchivesTableName}
  * Builds the query string for space savings stats when using CLP-S storage
  * engine (i.e. multiple datasets).
  *
- * @param datasetNames
  * @return
  */
-const buildMultiDatasetSpaceSavingsSql = (datasetNames: string[]): string => {
-    const archiveQueries = datasetNames.map((name) => `
-    SELECT
-        ${CLP_ARCHIVES_TABLE_COLUMN_NAMES.UNCOMPRESSED_SIZE},
-        ${CLP_ARCHIVES_TABLE_COLUMN_NAMES.SIZE}
-    FROM ${settings.SqlDbClpTablePrefix}${name}_${SqlTableSuffix.ARCHIVES}
-    `);
-
-    return `
+const buildMultiDatasetSpaceSavingsSql = (): string => `
     SELECT
         CAST(
             COALESCE(
-                SUM(${CLP_ARCHIVES_TABLE_COLUMN_NAMES.UNCOMPRESSED_SIZE}),
+                SUM(archives.${CLP_S_ARCHIVES_TABLE_COLUMN_NAMES.NUM_UNCOMPRESSED_BYTES}),
                 0
             ) AS UNSIGNED
         ) AS total_uncompressed_size,
         CAST(
             COALESCE(
-                SUM(${CLP_ARCHIVES_TABLE_COLUMN_NAMES.SIZE}),
+                SUM(archives.${CLP_S_ARCHIVES_TABLE_COLUMN_NAMES.NUM_COMPRESSED_BYTES}),
                 0
             ) AS UNSIGNED
         ) AS total_compressed_size
-    FROM (
-        ${archiveQueries.join("\nUNION ALL\n")}
-    ) AS archives_combined
+    FROM ${settings.SqlDbClpArchivesTableName} AS archives
+    JOIN ${settings.SqlDbClpDatasetsTableName} AS datasets
+        ON archives.${CLP_S_ARCHIVES_TABLE_COLUMN_NAMES.DATASET_ID} =
+           datasets.${CLP_DATASETS_TABLE_COLUMN_NAMES.ID}
+    WHERE datasets.${CLP_DATASETS_TABLE_COLUMN_NAMES.NAME} IN (?)
     `;
-};
 
 /**
  * Executes space savings SQL query and extracts space savings result.
  *
  * @param sql
+ * @param queryParams
  * @return
  * @throws {Error} if query result does not contain data
  */
-const executeSpaceSavingsQuery = async (sql: string): Promise<SpaceSavingsItem> => {
-    const resp = await querySql<SpaceSavingsItem[]>(sql);
+const executeSpaceSavingsQuery = async (
+    sql: string,
+    queryParams?: unknown[]
+): Promise<SpaceSavingsItem> => {
+    const resp = await querySql<SpaceSavingsItem[]>(sql, queryParams);
     const [spaceSavingsResult] = resp.data;
     if ("undefined" === typeof spaceSavingsResult) {
         throw new Error("Space savings result does not contain data.");
@@ -118,8 +116,8 @@ const fetchClpsSpaceSavings = async (
     if (0 === datasetNames.length) {
         return SPACE_SAVINGS_DEFAULT;
     }
-    const sql = buildMultiDatasetSpaceSavingsSql(datasetNames);
-    return executeSpaceSavingsQuery(sql);
+    const sql = buildMultiDatasetSpaceSavingsSql();
+    return executeSpaceSavingsQuery(sql, [datasetNames]);
 };
 
 export type {SpaceSavingsItem};

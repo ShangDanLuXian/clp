@@ -3,8 +3,7 @@
 use anyhow::Context;
 use clp_rust_utils::clp_config::package::credentials;
 use clp_rust_utils::database::mysql::create_clp_db_mysql_pool;
-use clp_rust_utils::dataset::VALID_DATASET_NAME_REGEX;
-use clp_rust_utils::dataset::resolve_dataset_name;
+use clp_rust_utils::dataset::register_dataset as register_dataset_in_db;
 use clp_rust_utils::job_config::CompressionJobId;
 use clp_rust_utils::job_config::CompressionJobStatus;
 use clp_rust_utils::task_io::compression::ArchiveMetadata;
@@ -12,6 +11,11 @@ use secrecy::SecretString;
 use spider_core::types::id::JobId;
 
 use crate::common::spider_task_executor_config;
+
+/// Archives whose timestamp range exceeds this are also recorded in the long-span archives table.
+///
+/// Mirror of `clp_py_utils.clp_metadata_db_utils.LONG_SPAN_THRESHOLD_MILLIS`.
+const LONG_SPAN_THRESHOLD_MILLIS: i64 = 24 * 60 * 60 * 1000;
 
 /// Publishes a compression job's archives and marks it succeeded.
 ///
@@ -26,7 +30,6 @@ use crate::common::spider_task_executor_config;
 /// Returns an error if:
 ///
 /// * `archives` is empty.
-/// * `dataset` is not a valid dataset name.
 /// * No CLP compression job exists for `spider_job_id`.
 /// * The CLP compression job is in a state other than [`CompressionJobStatus::Running`] or
 ///   [`CompressionJobStatus::Succeeded`].
@@ -55,14 +58,8 @@ pub(super) async fn commit(
 
     let config = spider_task_executor_config();
 
-    // The dataset is interpolated into the table name (it cannot be bound), so guard against SQL
-    // injection by validating it against the allowed-name pattern.
-    if let Some(dataset) = dataset.as_deref()
-        && !VALID_DATASET_NAME_REGEX.is_match(dataset)
-    {
-        anyhow::bail!("invalid dataset name: {dataset}");
-    }
-    let archives_table = config.database.archives_table_name(dataset.as_deref());
+    let archives_table = config.database.archives_table_name();
+    let long_span_archives_table = config.database.long_span_archives_table_name();
 
     let pool = create_clp_db_mysql_pool(&config.database, &db_credentials_from_env()?, 1)
         .await
@@ -96,8 +93,15 @@ pub(super) async fn commit(
         anyhow::bail!("CLP compression job {id} is no longer running; refusing to commit");
     }
 
-    register_dataset(&mut tx, config, dataset.as_deref()).await?;
-    insert_archives(&mut tx, &archives_table, &archives).await?;
+    let dataset_id = register_dataset(&mut tx, config, dataset.as_deref()).await?;
+    insert_archives(
+        &mut tx,
+        &archives_table,
+        &long_span_archives_table,
+        dataset_id,
+        &archives,
+    )
+    .await?;
     mark_job_succeeded(&mut tx, id, total_uncompressed_size, total_compressed_size).await?;
 
     tx.commit()
@@ -112,7 +116,11 @@ pub(super) async fn commit(
 }
 
 /// Idempotently registers `dataset` (defaulting a missing one to the `CLP_S` default) in the
-/// `datasets` table, recording its archive storage directory.
+/// `datasets` table, recording its archive storage path.
+///
+/// # Returns
+///
+/// The dataset's ID.
 ///
 /// # Errors
 ///
@@ -123,24 +131,18 @@ async fn register_dataset(
     tx: &mut sqlx::Transaction<'_, sqlx::MySql>,
     config: &clp_rust_utils::clp_config::package::config::SpiderTaskExecutorConfig,
     dataset: Option<&str>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<u64> {
     let datasets_table = config.database.datasets_table_name();
-    let archive_storage_directory = config
+    let archive_storage_path = config
         .archive_output
         .dataset_archive_storage_directory(dataset);
-    sqlx::query(&format!(
-        "INSERT INTO `{datasets_table}` (name, archive_storage_directory) VALUES (?, ?) ON \
-         DUPLICATE KEY UPDATE archive_storage_directory = VALUES(archive_storage_directory)"
-    ))
-    .bind(resolve_dataset_name(dataset))
-    .bind(&archive_storage_directory)
-    .execute(&mut **tx)
-    .await
-    .with_context(|| format!("failed to register dataset in `{datasets_table}`"))?;
-    Ok(())
+    register_dataset_in_db(tx, &datasets_table, &archive_storage_path, dataset)
+        .await
+        .with_context(|| format!("failed to register dataset in `{datasets_table}`"))
 }
 
-/// Inserts every archive's metadata into `archives_table`.
+/// Inserts every archive's metadata into `archives_table`, and records those whose timestamp range
+/// exceeds [`LONG_SPAN_THRESHOLD_MILLIS`] in `long_span_archives_table`.
 ///
 /// # Errors
 ///
@@ -150,28 +152,62 @@ async fn register_dataset(
 async fn insert_archives(
     tx: &mut sqlx::Transaction<'_, sqlx::MySql>,
     archives_table: &str,
+    long_span_archives_table: &str,
+    dataset_id: u64,
     archives: &[ArchiveMetadata],
 ) -> anyhow::Result<()> {
     for archives in archives.chunks(1000) {
+        let uuids: Vec<Vec<u8>> = archives
+            .iter()
+            .map(|archive| archive.id.as_bytes().to_vec())
+            .collect();
+
         let mut builder = sqlx::QueryBuilder::<sqlx::MySql>::new(format!(
-            "INSERT INTO `{archives_table}` (id, begin_timestamp, end_timestamp, \
-             uncompressed_size, size, creator_id, creation_ix) "
+            "INSERT INTO `{archives_table}` (dataset_id, uuid, timestamp_range_begin_millis, \
+             timestamp_range_end_millis, num_uncompressed_bytes, num_compressed_bytes, \
+             creation_time_millis) "
         ));
-        builder.push_values(archives, |mut row, archive| {
-            // NOTE: clp-s does not set `creator_id` or `creation_ix`.
-            row.push_bind(archive.id)
+        builder.push_values(archives.iter().zip(&uuids), |mut row, (archive, uuid)| {
+            row.push_bind(dataset_id)
+                .push_bind(uuid.clone())
                 .push_bind(archive.begin_timestamp)
                 .push_bind(archive.end_timestamp)
                 .push_bind(archive.uncompressed_size)
                 .push_bind(archive.size)
-                .push_bind("")
-                .push_bind(0_i32);
+                .push("CAST(UNIX_TIMESTAMP(CURRENT_TIMESTAMP(3)) * 1000 AS SIGNED)");
         });
         builder
             .build()
             .execute(&mut **tx)
             .await
             .with_context(|| format!("failed to insert archives into `{archives_table}`"))?;
+
+        let long_span_uuids: Vec<&Vec<u8>> = archives
+            .iter()
+            .zip(&uuids)
+            .filter(|(archive, _)| {
+                LONG_SPAN_THRESHOLD_MILLIS < archive.end_timestamp - archive.begin_timestamp
+            })
+            .map(|(_, uuid)| uuid)
+            .collect();
+        if long_span_uuids.is_empty() {
+            continue;
+        }
+
+        let placeholders = vec!["?"; long_span_uuids.len()].join(", ");
+        let statement = format!(
+            "INSERT INTO `{long_span_archives_table}` (dataset_id, \
+             timestamp_range_begin_millis, timestamp_range_end_millis, archive_id) SELECT \
+             dataset_id, timestamp_range_begin_millis, timestamp_range_end_millis, id FROM \
+             `{archives_table}` WHERE `dataset_id` = ? AND `uuid` IN ({placeholders})"
+        );
+        let mut query = sqlx::query(&statement).bind(dataset_id);
+        for uuid in long_span_uuids {
+            query = query.bind(uuid.clone());
+        }
+        query.execute(&mut **tx).await.with_context(|| {
+            format!("failed to insert archives into `{long_span_archives_table}`")
+        })?;
     }
     Ok(())
 }

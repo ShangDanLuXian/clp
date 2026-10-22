@@ -1,12 +1,5 @@
-use std::sync::LazyLock;
-
-use regex::Regex;
-
 /// The default dataset name (mirror of `clp_py_utils.clp_config.CLP_DEFAULT_DATASET_NAME`).
 pub const CLP_DEFAULT_DATASET_NAME: &str = "default";
-
-pub static VALID_DATASET_NAME_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^[a-zA-Z0-9_]+$").unwrap());
 
 /// # Returns
 ///
@@ -14,6 +7,35 @@ pub static VALID_DATASET_NAME_REGEX: LazyLock<Regex> =
 #[must_use]
 pub fn resolve_dataset_name(dataset: Option<&str>) -> &str {
     dataset.unwrap_or(CLP_DEFAULT_DATASET_NAME)
+}
+
+/// Idempotently registers `dataset` (defaulting a missing one to the `CLP_S` default) in
+/// `datasets_table`, recording `archive_storage_path` as its archive storage path.
+///
+/// # Returns
+///
+/// The dataset's ID.
+///
+/// # Errors
+///
+/// Returns an error if:
+///
+/// * Forwards [`sqlx::query::Query::execute`]'s return values on failure.
+pub async fn register_dataset(
+    tx: &mut sqlx::Transaction<'_, sqlx::MySql>,
+    datasets_table: &str,
+    archive_storage_path: &str,
+    dataset: Option<&str>,
+) -> Result<u64, sqlx::Error> {
+    let query_result = sqlx::query(&format!(
+        "INSERT INTO `{datasets_table}` (name, archive_storage_path) VALUES (?, ?) ON DUPLICATE \
+         KEY UPDATE id = LAST_INSERT_ID(id), archive_storage_path = VALUES(archive_storage_path)"
+    ))
+    .bind(resolve_dataset_name(dataset))
+    .bind(archive_storage_path)
+    .execute(&mut **tx)
+    .await?;
+    Ok(query_result.last_insert_id())
 }
 
 #[cfg(test)]

@@ -1,13 +1,7 @@
 import {querySql} from "../../../../api/sql";
 import {settings} from "../../../../settings";
+import {CLP_DATASETS_TABLE_COLUMN_NAMES} from "../../../IngestPage/sqlConfig";
 
-
-/**
- * Column names for the datasets table.
- */
-enum CLP_DATASETS_TABLE_COLUMN_NAMES {
-    NAME = "name",
-}
 
 /**
  * SQL query to get all dataset names.
@@ -16,6 +10,7 @@ const GET_DATASETS_SQL = `
     SELECT
         ${CLP_DATASETS_TABLE_COLUMN_NAMES.NAME} AS name
     FROM ${settings.SqlDbClpDatasetsTableName}
+    WHERE ${CLP_DATASETS_TABLE_COLUMN_NAMES.IS_DELETED} = FALSE
     ORDER BY ${CLP_DATASETS_TABLE_COLUMN_NAMES.NAME};
 `;
 

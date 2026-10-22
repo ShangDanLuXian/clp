@@ -70,7 +70,6 @@ from clp_package_utils.general import (
     generate_docker_compose_container_config,
     get_clp_home,
     http_request,
-    is_retention_period_configured,
     validate_db_config,
     validate_mcp_server_config,
     validate_queue_config,
@@ -859,8 +858,8 @@ class BaseController(ABC):
             archives_table_name = ""
             files_table_name = ""
         else:
-            archives_table_name = get_archives_table_name(table_prefix, None)
-            files_table_name = get_files_table_name(table_prefix, None)
+            archives_table_name = get_archives_table_name(table_prefix)
+            files_table_name = get_files_table_name(table_prefix)
 
         logs_input_root_dir = (
             str(CONTAINER_INPUT_LOGS_ROOT_DIR)
@@ -1017,16 +1016,6 @@ class BaseController(ABC):
         :return: Dictionary of environment variables necessary to launch the component.
         """
         component_name = GARBAGE_COLLECTOR_COMPONENT_NAME
-        if not is_retention_period_configured(self._clp_config):
-            logger.info(
-                f"Retention period is not configured, skipping {component_name} creation..."
-            )
-            return EnvVarsDict(
-                {
-                    "CLP_GARBAGE_COLLECTOR_ENABLED": "0",
-                }
-            )
-
         logger.info("Setting up environment for %s...", component_name)
 
         logs_dir = self._clp_config.logs_directory / component_name
