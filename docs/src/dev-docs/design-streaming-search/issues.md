@@ -11,6 +11,36 @@ Severity:
 * **P1**: an architectural trade-off that should be decided before the design is final.
 * **P2**: details.
 
+## Status after the 2026-10-20/21 design revision and the Rust-reader report
+
+The design doc was revised twice after this review started, and a third report
+("rust-search-integration-and-scaling-report", branch `query-coordinator/streaming-search-rust-reader`
+at `e10364cc`, **not pushed**; all of its changes were uncommitted) added three pieces of work:
+protocol v2 (a per-task trailer and a listener acknowledgement before a task may succeed),
+encoding moved into the listener's connection tasks (the "funnel fix"), and V3, a Rust
+reimplementation of the clp-s reader running inside the Spider task executor instead of spawning
+`clp-s`. None of that code is on this branch yet; the notes below are from the documents.
+
+| Issue | Status after the revision |
+|---|---|
+| 2 (no acknowledgement, silent loss) | **Closed by protocol v2.** The report found the same hole independently: a client throttled to 40 MB/s plus two killed workers lost 8 to 15,764 results per run with `end: Succeeded`, because the tail was still in the dead worker's kernel send buffer after the task had reported success. v2 makes the task wait for the listener's acknowledgement of `0..N-1` plus a trailer count. |
+| 10 (no per-task end frame) | **Closed by the v2 trailer.** A SUCCEEDED job now implies every task's full output reached the session. Incomplete connections are counted (`num_incomplete_connections`). |
+| 20 (orphaned `clp-s`) | **Gone under V3, unchanged under V2.** V3 has no subprocess, so the executor's SIGKILL on a hard timeout kills the reader too. V2 (C++ `clp-s`) is still the default engine (`CLP_SPIDER_SEARCH_ENGINE` unset), and compression tasks still spawn subprocesses. |
+| 1 and 4 (backpressure vs. hard timeout, slot starvation) | **Not addressed, and sharpened by v2**: see issue 21. |
+| 3 (determinism precondition) | **A concrete trigger appeared with V3**: see issue 22. |
+| 6 (status polling) | Unchanged; the report lists the 100 ms poll as the end-of-stream floor (about 50 ms). |
+| 5, 7, 9, 11, 12 | Unchanged. |
+| 9 (extensibility) | v2 adds a 1-element trailer told apart by array length and a fixed 10-byte acknowledgement; still positional. |
+
+The report's own open issues that this review had not listed: memory under backpressure is
+O(blocked connections) and 2.2-2.5x the old build after the funnel fix (its acceptance criterion
+failed, but v2 bounds the blocked connections by the worker slots, see issue 21); the listener's
+accept backlog is mio's 128 and bursts of task connections overflow it (about 1 s of SYN
+retransmits); Spider's dispatch rate (3.8 ms per task at 16 workers) limits tiny-task queries;
+the results-cache path cannot request unlimited results, polls with a backoff of up to 5 s, reads
+back on one stream at about 400k docs/s, and inserts synchronously; all scaling numbers are capped
+by the WSL2 host's per-core slowdown at 16 busy threads and need multi-node validation.
+
 ## P0
 
 ### 1. Backpressure conflicts with Spider's task timeouts
@@ -234,6 +264,55 @@ mentions the soft timeout, and no task had two live instances before its hard ti
 the soft timeout (10.8 s) was exceeded by every stalled task. Whether Spider's
 `resource_group_round_robin` policy implements soft-timeout re-dispatch at this revision should be
 checked before the design relies on it either way.
+
+### 21. Protocol v2 makes a slow client fail the job sooner and more surely
+
+Under v2 a task succeeds only after the listener acknowledges that its results have been handed
+to the session's channel, so a task holds its worker slot until the consumer has drained what it
+sent. The revised design doc states this as a memory win ("the job now lasts as long as the
+stream"; API-server peak memory down 2.4-5x, open listener connections from 64-282 down to about
+10) and relies on "Spider's task timeouts bound everything else". Those timeouts are what fail
+the job:
+
+* Under v1 a fast task could finish into the kernel buffers and succeed while the client was
+  stalled (the measured 125 s and 200 s stalls succeeded only because of that and of the queued
+  retries). Under v2 no task with results can finish until the client reads them, so every first
+  attempt times out together, every retry times out one hard timeout later, and with
+  `query_task_max_retry: 1` the job fails whenever the client stalls for more than about twice the
+  hard timeout.
+* A client that is merely slow fails the job too. A task's wall time becomes the results queued
+  ahead of it divided by the client's rate, shared across the slots. With 4 slots holding about
+  15 MB of results each and an 80 s hard timeout, a client slower than roughly 1 MB/s cannot
+  acknowledge a wave in time. That is an ordinary rate for a client on a mobile or cross-region
+  link.
+* The memory the funnel fix moved into blocked connections is now bounded because the pressure
+  moved into worker slots instead (issue 4): one slow client holds every slot its job has.
+
+The stall experiments in `tools/scripts/streaming-search-experiments/` ran against v1. They
+should be re-run against v2 with the same harness, plus a throttled (not stalled) client
+(`curl --limit-rate`), before the design's backpressure section is finalised. The expectation is
+FAILED at 2 x hard timeout for any stall longer than that, independent of the queueing nuance
+measured under v1.
+
+### 22. V2 and V3 engines in one job break the determinism precondition
+
+V3 selects the search engine per worker container through `CLP_SPIDER_SEARCH_ENGINE`. The
+Rust-reader report records 3 of 225 fixture cases whose wire output differs from C++ only in float
+formatting (divergence DV-01). If one attempt of a task runs on a V2 worker and its retry on a V3
+worker, the same `result_index` can carry a different message, and position-based deduplication
+turns that into one duplicate and one loss with no error (issue 3's failure mode, with a concrete
+trigger; it is also the design doc's own "rolling upgrade" risk). The engine must be uniform
+within a job (in practice, per deployment), or the listener must verify duplicates against a
+per-result identity such as `log_event_idx`.
+
+### 23. Protocol v2 breaks `sbin/search.sh` in Celery mode
+
+Under v2 `clp-s` waits for the listener's acknowledgement before exiting 0. The Celery path's
+Python CLI (`native/search.py`), which the prototype had adapted to read v1 frames, never
+acknowledges, so every Celery search with the new `clp-s` fails. The revised design doc lists this
+under its assumptions ("a Celery search through `sbin/search.sh` fails"). A package deployed in
+Celery mode with this `clp-s` therefore loses search entirely; either the Celery CLI acknowledges
+too, or the package must refuse Celery mode with a v2 `clp-s`.
 
 ## P1
 
