@@ -110,6 +110,27 @@ package in Spider mode with 8 synthetic archives of 40 MiB and the query `*Trans
   recorded in the reports, so there is nothing to re-run.
 * The report's end-to-end handler script (26/26) and the clang-format check; the script is not
   on the branch.
+## After merging upstream `main` (2026-10-22)
+
+The branch was then merged with y-scope/clp `main` at `616b07d`, which adds query job
+cancellation (#2573, with the `CancelRequested` state and the coordinator's cancellation monitor),
+`ClpSQueryOption` with count-by-time (#2561), unlimited result limits when omitted (#2567), failing
+unsupported jobs (#2565), and an `OutputHandler` interface that returns error codes instead of
+throwing. The prototype's clp-s `network` handler was ported to that interface (protocol v1
+unchanged), the shared `cancel_query_job` now requests cancellation the way the coordinator
+expects, and streaming searches require `max_num_results` to be omitted.
+
+| Check                                                             | Result |
+|-------------------------------------------------------------------|--------|
+| `cargo check --workspace --all-targets`                           | **passes** |
+| `cargo nextest run --workspace`                                   | **150 passed, 6 skipped** (upstream added 10 tests) |
+| `task lint:check-rust`                                            | see below |
+| clp-s builds with the ported handler                              | **builds** |
+| Real-clp-s listener test with the rebuilt binary                  | **passes** (36 passed, 0 skipped in the listener crate with `--run-ignored all`) |
+| Wire capture of the rebuilt clp-s                                 | handshake `[1, token, 0, archive id]`, 143 contiguous results, timestamps match |
+| clp-s with no listener on the port                                | logs `Failed to write search result, error=20` (`ErrorCodeFailureNetwork`) and **exits 1**, so the task fails and Spider retries |
+| Listener that accepts, reads a few bytes, and closes              | clp-s **exits 0**: all 143 results of this small archive fit in the kernel send buffer before the peer's reset arrives. This is the v1 gap of issue 2 (no acknowledgement), reproduced on purpose; protocol v2's trailer and acknowledgement in the revised design close it. |
+
 ## Conclusion
 
 Every check that can run without a deployment reproduces the reports' results exactly: the merged

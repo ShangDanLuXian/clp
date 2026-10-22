@@ -197,7 +197,7 @@ export interface components {
          * @description Mirror of `job_orchestration.scheduler.constants.QueryJobStatus`. Must be kept in sync.
          * @enum {string}
          */
-        QueryJobStatus: "Pending" | "Running" | "Succeeded" | "Failed" | "Cancelling" | "Cancelled" | "Killed";
+        QueryJobStatus: "Pending" | "Running" | "Succeeded" | "Failed" | "CancelRequested" | "Cancelling" | "Cancelled" | "Killed";
         QueryResultsUri: {
             /** @description The uri to get the query results. */
             query_results_uri: string;

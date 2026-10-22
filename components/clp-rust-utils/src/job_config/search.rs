@@ -1,8 +1,7 @@
 use std::num::NonZeroU16;
-
-use non_empty_string::NonEmptyString;
 use std::num::NonZeroU32;
 
+use non_empty_string::NonEmptyString;
 use num_enum::IntoPrimitive;
 use num_enum::TryFromPrimitive;
 use serde::Deserialize;

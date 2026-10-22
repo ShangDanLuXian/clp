@@ -427,6 +427,7 @@
           "Running",
           "Succeeded",
           "Failed",
+          "CancelRequested",
           "Cancelling",
           "Cancelled",
           "Killed"
