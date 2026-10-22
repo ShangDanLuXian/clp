@@ -124,7 +124,7 @@ expects, and streaming searches require `max_num_results` to be omitted.
 |-------------------------------------------------------------------|--------|
 | `cargo check --workspace --all-targets`                           | **passes** |
 | `cargo nextest run --workspace`                                   | **150 passed, 6 skipped** (upstream added 10 tests) |
-| `task lint:check-rust`                                            | see below |
+| `task lint:check-rust` (nightly fmt + clippy `-D warnings`)       | **clean** |
 | clp-s builds with the ported handler                              | **builds** |
 | Real-clp-s listener test with the rebuilt binary                  | **passes** (36 passed, 0 skipped in the listener crate with `--run-ignored all`) |
 | Wire capture of the rebuilt clp-s                                 | handshake `[1, token, 0, archive id]`, 143 contiguous results, timestamps match |
