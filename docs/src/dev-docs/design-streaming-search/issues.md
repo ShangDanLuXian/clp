@@ -385,6 +385,36 @@ not chosen.
 | 18 | An unsupported version closes the connection with no way for `clp-s` to fall back. Acceptable, but record it. |
 | 19 | Two overlapping attempts can emit one task's results out of index order. Accepted; not to be fixed.  |
 
+## Which issues affect correctness
+
+Of the 23 issues, these are the ones whose failure mode is wrong or incomplete results, or a
+wrong "complete" signal, as opposed to a job that fails, hangs, or is slow.
+
+| # | Failure mode the client sees | Trigger | Status |
+|---|---|---|---|
+| 2 | Results silently missing while the job and `end` say `Succeeded`: a task "succeeds" once its bytes are in its own kernel buffer, and if the listener never reads them nobody retries. | A worker dies with a backpressured tail (the Rust-reader report measured 8 to 15,764 of 1.88M results missing per run); or the listener closes after clp-s's last `send()` (reproduced on this branch: a small archive exits 0 although the listener dropped it). | Confirmed. Closed by protocol v2 (trailer and acknowledgement), not on this branch yet. |
+| 10 | No loss is detectable, because the listener cannot tell "task finished with N results" from "task died after N". Concrete path: during the drain, a connection reading only duplicates (an orphan ran ahead) is cut after the grace period; if the orphan is gone too, the unclaimed tail is lost under `SUCCEEDED`. | An orphan ahead of the retry plus a slow worker-to-listener network. Narrow; not observed. | Closed by v2's trailer and acknowledgement. |
+| 3 | One duplicate and one loss, silently: position-based deduplication assumes every attempt of a task produces identical output in identical order, and nothing enforces or tests it. | Any clp-s change to scan order, threading, or top-K tie-breaking; a rolling upgrade; issue 22. | Open. v2 verifies count and order per connection but not content, so it does not address this. Mitigation: carry `log_event_idx` and verify duplicates against it, or a contract test on clp-s. |
+| 22 | Same as issue 3, with a known trigger: 3 of 225 fixtures differ in float formatting between the C++ and Rust readers, so a retry on the other engine yields a different message at the same index. | A job whose tasks run on workers with different `CLP_SPIDER_SEARCH_ENGINE` settings. | Open. Needs one engine per job, or the issue 3 check. |
+| 20 (a) | A `reducer` output would double-count: an orphan and its retry both send their counts, and the reducer has no `_id` deduplication. | Aggregation on Spider, which the coordinator rejects today. | Open, latent. v2 does not fix it: both attempts would be acknowledged. |
+| 20 (b) | A FAILED job can deliver a complete result set, so the status no longer says whether the results are complete. The data itself is intact. | Any hard timeout under the V2 engine. | Status-level only. |
+| 8 | Fabricated results delivered as genuine: the session token is in the DB config and on worker command lines, and the archive-ID check only covers task indices that already have a cursor, so an unused index accepts anything. | An attacker with DB read access or `ps` on a worker while the session is open. | Open. Integrity under attack, not a bug in normal operation. |
+| 13 | A wrong time attributed to a result: what clp-s sends for an event without a timestamp is unspecified. | Records lacking the timestamp key. | Open, unverified; metadata only. |
+| 14 | Messages with meaningful leading or trailing whitespace differ by path: the API strips one trailing newline, the results-cache path trims, the CLI keeps the bytes. | Any such message. | Cosmetic but byte-visible; needs one rule. |
+
+Two that are not correctness issues but get mistaken for them:
+
+* Issue 19, out-of-order results within a task when attempts overlap: no order is promised, so it
+  is only wrong for a consumer that assumes per-archive order. The API docs should say so.
+* Issues 1, 21 and 15, a job that fails because of backpressure and delivers partial (or, with
+  orphans, complete) results followed by `end: Failed`: the data is never wrong and the client is
+  told. These are availability issues.
+
+After v2 lands, the remaining correctness exposure is issues 3 and 22 (determinism, now with a
+real trigger), 20 (a) (aggregation on Spider, latent) and 8 (adversarial). Issue 3 is the one to
+fix first: v2's acknowledgement verifies count and order per connection but cannot detect that two
+attempts disagree about the content at the same index.
+
 ## Protocol v2 sketch
 
 Addresses issues 2, 3, 9, and 10 together:
