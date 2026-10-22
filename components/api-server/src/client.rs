@@ -1,5 +1,6 @@
 use std::net::Ipv4Addr;
 use std::net::SocketAddr;
+use std::num::NonZeroU32;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -13,7 +14,6 @@ use clp_rust_utils::clp_config::package::config::Config;
 use clp_rust_utils::clp_config::package::config::StorageEngine;
 use clp_rust_utils::clp_config::package::config::StreamOutputStorage;
 use clp_rust_utils::clp_config::package::credentials::Credentials;
-use clp_rust_utils::database::mysql::cancel_query_job;
 use clp_rust_utils::database::mysql::create_clp_db_mysql_pool;
 use clp_rust_utils::database::mysql::submit_query_job;
 use clp_rust_utils::dataset::CLP_DEFAULT_DATASET_NAME;
@@ -21,7 +21,6 @@ use clp_rust_utils::dataset::VALID_DATASET_NAME_REGEX;
 use clp_rust_utils::job_config::AggregationConfig;
 pub use clp_rust_utils::job_config::CompressionJobStatus;
 use clp_rust_utils::job_config::QUERY_JOBS_TABLE_NAME;
-use clp_rust_utils::job_config::QueryJobId;
 use clp_rust_utils::job_config::QueryJobStatus;
 use clp_rust_utils::job_config::SearchJobConfig;
 use futures::Stream;
@@ -197,9 +196,10 @@ pub struct QueryConfig {
     #[serde(default)]
     pub datasets: Option<Vec<String>>,
 
-    /// The maximum number of results to return. Set to `0` for no limit.
+    /// The maximum number of results to return. Omit for no limit.
     #[serde(default)]
-    pub max_num_results: u32,
+    #[schema(value_type = Option<u32>, minimum = 1)]
+    pub max_num_results: Option<NonZeroU32>,
 
     /// The beginning timestamp (in epoch milliseconds) for the search range (inclusive).
     #[serde(default)]
@@ -243,7 +243,7 @@ impl QueryConfig {
     ///   * `datasets` is empty.
     ///   * A dataset name in `datasets` doesn't match [`VALID_DATASET_NAME_REGEX`].
     ///   * `time_range_begin_millisecs` is greater than `time_range_end_millisecs`.
-    ///   * `max_num_results` isn't 0, since a streaming search streams every result.
+    ///   * `max_num_results` is set, since a streaming search streams every result.
     ///   * `buffer_results_in_mongodb` is set, since a streaming search doesn't buffer its results.
     ///   * `count_by_time_bucket_size_millisecs` is set, since a streaming search doesn't support
     ///     aggregations.
@@ -278,9 +278,9 @@ impl QueryConfig {
                 "time_range_begin_millisecs must be <= time_range_end_millisecs".to_owned(),
             ));
         }
-        if 0 != self.max_num_results {
+        if self.max_num_results.is_some() {
             return Err(ClientError::InvalidInput(
-                "max_num_results must be 0 for a streaming search, which streams every result"
+                "max_num_results must be unset for a streaming search, which streams every result"
                     .to_owned(),
             ));
         }
@@ -443,10 +443,6 @@ impl Client {
                 StorageEngine::ClpS => Some(vec!["default".to_owned()]),
             }
         }
-        if search_job_config.max_num_results == 0 {
-            search_job_config.max_num_results =
-                self.get_api_server_config().default_max_num_query_results;
-        }
         if let Some(bucket_size) = count_by_time_bucket_size {
             search_job_config.aggregation_config = Some(AggregationConfig {
                 count_by_time_bucket_size: Some(bucket_size),
@@ -501,9 +497,10 @@ impl Client {
                     break;
                 }
                 QueryJobStatus::Failed
+                | QueryJobStatus::CancelRequested
+                | QueryJobStatus::Cancelling
                 | QueryJobStatus::Cancelled
-                | QueryJobStatus::Killed
-                | QueryJobStatus::Cancelling => {
+                | QueryJobStatus::Killed => {
                     return Err(ClientError::QueryNotSucceeded);
                 }
                 QueryJobStatus::Running | QueryJobStatus::Pending => {
@@ -517,11 +514,11 @@ impl Client {
         let max_num_results = job_config.max_num_results;
 
         if job_config.aggregation_config.is_some() {
-            // Aggregation results are always buffered in MongoDB. Each document is an
-            // aggregation record (e.g., a time bucket) rather than a log message, so stream the
-            // documents whole and without a limit.
+            // Aggregation results are always buffered in MongoDB. Each document is an aggregation
+            // record (e.g., a time bucket) rather than a log message, so stream the documents whole
+            // and without a limit.
             return self
-                .fetch_results_from_mongo(search_job_id, 0, true, false)
+                .fetch_results_from_mongo(search_job_id, None, true, false)
                 .await
                 .map(|s| SearchResultStream::Mongo { inner: s });
         }
@@ -547,6 +544,9 @@ impl Client {
 
     /// Submits a cancellation request for a search job.
     ///
+    /// This method is idempotent: if a cancellation has already been requested for the job, it's a
+    /// no-op that returns `Ok(())`.
+    ///
     /// # Returns
     ///
     /// `Ok(())` on success.
@@ -555,18 +555,42 @@ impl Client {
     ///
     /// Returns an error if:
     ///
-    /// * [`ClientError::SearchJobNotFound`] if no matching job was found (e.g., the job doesn't
-    ///   exist or is not in a cancellable state).
-    /// * Forwards [`cancel_query_job`]'s return values on failure.
+    /// * [`ClientError::SearchJobNotFound`] if the job doesn't exist or is not in a cancellable
+    ///   state.
+    /// * Forwards [`sqlx::Pool::begin`]'s return values on failure.
+    /// * Forwards [`sqlx::query::QueryScalar::fetch_optional`]'s return values on failure.
+    /// * Forwards [`sqlx::query::Query::execute`]'s return values on failure.
+    /// * Forwards [`sqlx::Transaction::commit`]'s return values on failure.
     pub async fn cancel_search_job(&self, search_job_id: u64) -> Result<(), ClientError> {
-        let Ok(query_job_id) = QueryJobId::try_from(search_job_id) else {
+        let mut tx = self.sql_pool.begin().await?;
+        let Some(status) = sqlx::query_scalar::<_, QueryJobStatus>(&format!(
+            "SELECT status FROM `{QUERY_JOBS_TABLE_NAME}` WHERE id = ? FOR UPDATE"
+        ))
+        .bind(search_job_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        else {
             return Err(ClientError::SearchJobNotFound(search_job_id));
         };
-        if !cancel_query_job(&self.sql_pool, query_job_id).await? {
-            return Err(ClientError::SearchJobNotFound(search_job_id));
-        }
 
-        Ok(())
+        match status {
+            QueryJobStatus::Pending | QueryJobStatus::Running => {
+                sqlx::query(&format!(
+                    "UPDATE `{QUERY_JOBS_TABLE_NAME}` SET status = ? WHERE id = ?"
+                ))
+                .bind(QueryJobStatus::CancelRequested)
+                .bind(search_job_id)
+                .execute(&mut *tx)
+                .await?;
+                tx.commit().await?;
+                Ok(())
+            }
+            QueryJobStatus::CancelRequested | QueryJobStatus::Cancelling => Ok(()),
+            QueryJobStatus::Succeeded
+            | QueryJobStatus::Failed
+            | QueryJobStatus::Cancelled
+            | QueryJobStatus::Killed => Err(ClientError::SearchJobNotFound(search_job_id)),
+        }
     }
 
     /// Retrieves the status of a previously submitted search job.
@@ -622,13 +646,19 @@ impl Client {
     /// * Forwards [`tokio::fs::read_dir`]'s return values on failure.
     /// * Forwards [`tokio::fs::ReadDir::next_entry`]'s return values on failure.
     ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    ///
+    /// * Forwards [`limit_result_stream`]'s return values on failure.
+    ///
     /// # Panics
     ///
     /// Panics if the stream output storage is not file system.
     fn fetch_results_from_file(
         &self,
         search_job_id: u64,
-        max_num_results: u32,
+        max_num_results: Option<NonZeroU32>,
     ) -> Result<impl Stream<Item = Result<String, ClientError>> + use<>, ClientError> {
         let StreamOutputStorage::Fs { directory } = &self.config.stream_output.storage else {
             unreachable!();
@@ -648,12 +678,7 @@ impl Client {
                 }
             }
         };
-        let limit: usize = max_num_results.try_into().map_err(|_| {
-            ClientError::InvalidSearchJobConfig(
-                "cannot convert `max_num_results` from `u32` to `usize`".to_owned(),
-            )
-        })?;
-        Ok(stream.take(limit))
+        limit_result_stream(stream, max_num_results)
     }
 
     /// Asynchronously fetches results of a completed search job from S3.
@@ -680,10 +705,11 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Return an error if:
+    /// Returns an error if:
     ///
     /// * [`ClientError::Aws`] if a region code is not provided when using the default AWS S3
     ///   endpoint.
+    /// * Forwards [`limit_result_stream`]'s return values on failure.
     ///
     /// # Panics
     ///
@@ -691,7 +717,7 @@ impl Client {
     async fn fetch_results_from_s3(
         &self,
         search_job_id: u64,
-        max_num_results: u32,
+        max_num_results: Option<NonZeroU32>,
     ) -> Result<impl Stream<Item = Result<String, ClientError>> + use<>, ClientError> {
         tracing::info!("Streaming results from S3");
         let StreamOutputStorage::S3 { s3_config, .. } = &self.config.stream_output.storage else {
@@ -754,18 +780,12 @@ impl Client {
                 }
             }
         };
-        let limit: usize = max_num_results.try_into().map_err(|_| {
-            ClientError::InvalidSearchJobConfig(
-                "cannot convert `max_num_results` from `u32` to `usize`".to_owned(),
-            )
-        })?;
-        Ok(stream.take(limit))
+        limit_result_stream(stream, max_num_results)
     }
 
     /// Asynchronously fetches results of a completed search job from `MongoDB`.
     ///
-    /// When `max_num_results` is greater than 0, the query is limited to at most that many
-    /// documents.
+    /// When `max_num_results` is set, the query is limited to at most that many documents.
     ///
     /// When `raw_docs` is `true`, each document is serialized to JSON whole (used
     /// for aggregation results); otherwise the document's "message" field is extracted (used for
@@ -799,7 +819,7 @@ impl Client {
     async fn fetch_results_from_mongo(
         &self,
         search_job_id: u64,
-        max_num_results: u32,
+        max_num_results: Option<NonZeroU32>,
         raw_docs: bool,
         sorted: bool,
     ) -> Result<impl Stream<Item = Result<String, ClientError>> + use<>, ClientError> {
@@ -809,8 +829,8 @@ impl Client {
         let collection: mongodb::Collection<mongodb::bson::Document> =
             database.collection(&search_job_id.to_string());
         let mut find_options = mongodb::options::FindOptions::default();
-        if max_num_results > 0 {
-            find_options.limit = Some(i64::from(max_num_results));
+        if let Some(limit) = max_num_results {
+            find_options.limit = Some(i64::from(limit.get()));
         }
         if sorted {
             find_options.sort = Some(mongodb::bson::doc! {
@@ -1019,6 +1039,39 @@ where
         }
         poll
     }
+}
+
+/// Applies an optional limit to a search result stream.
+///
+/// # Type Parameters
+///
+/// * `StreamType` - The input stream type.
+///
+/// # Returns
+///
+/// A stream yielding at most `max_num_results` items, or all items if unset, on success.
+///
+/// # Errors
+///
+/// Returns an error if:
+///
+/// * [`ClientError::InvalidSearchJobConfig`] if the limit cannot be represented as a [`usize`].
+fn limit_result_stream<StreamType: Stream<Item = Result<String, ClientError>>>(
+    stream: StreamType,
+    max_num_results: Option<NonZeroU32>,
+) -> Result<impl Stream<Item = Result<String, ClientError>>, ClientError> {
+    let limit = max_num_results
+        .map(|limit| usize::try_from(limit.get()))
+        .transpose()
+        .map_err(|_| {
+            ClientError::InvalidSearchJobConfig(
+                "cannot convert `max_num_results` from `u32` to `usize`".to_owned(),
+            )
+        })?;
+    Ok(match limit {
+        Some(limit) => stream.take(limit).left_stream(),
+        None => stream.right_stream(),
+    })
 }
 
 #[cfg(test)]

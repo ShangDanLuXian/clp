@@ -6,6 +6,8 @@ from typing import Literal
 
 from clp_py_utils.clp_config import NonEmptyStr, Port, S3Config
 from pydantic import BaseModel, field_validator
+from clp_py_utils.clp_config import S3Config
+from pydantic import BaseModel, field_validator, PositiveInt
 from strenum import LowercaseStrEnum
 
 
@@ -116,7 +118,7 @@ class ExtractJsonJobConfig(QueryJobConfig):
 class SearchJobConfig(QueryJobConfig):
     datasets: list[str] | None = None
     query_string: str
-    max_num_results: int
+    max_num_results: PositiveInt | None = None
     begin_timestamp: int | None = None
     end_timestamp: int | None = None
     ignore_case: bool = False

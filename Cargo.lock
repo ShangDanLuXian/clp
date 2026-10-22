@@ -3329,6 +3329,7 @@ dependencies = [
  "const_format",
  "non-empty-string",
  "rmp-serde",
+ "secrecy",
  "serde",
  "spider-client",
  "spider-core",

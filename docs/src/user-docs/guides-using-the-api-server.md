@@ -39,6 +39,9 @@ following commands to submit a query to clp-json and stream the results.
        }'
    ```
 
+   Omit `max_num_results` to return all matching results. When specified, the limit must be a
+   positive integer; zero is rejected.
+
    On success, the server responds with:
 
     ```json
@@ -94,8 +97,8 @@ data: {"status":"Succeeded","num_results_emitted":1,"num_duplicates_dropped":0,"
 ```
 
 Results from different archives arrive in no particular order. Streaming search doesn't support
-`max_num_results` (other than `0`), `buffer_results_in_mongodb`, or
-`count_by_time_bucket_size_millisecs`. If the client disconnects before the `end` event, the query
+`max_num_results` (it must be omitted, since every result is streamed), `buffer_results_in_mongodb`,
+or `count_by_time_bucket_size_millisecs`. If the client disconnects before the `end` event, the query
 job is marked for cancellation. If the API server can no longer track the job's status, an `error`
 event replaces the `end` event, and the query job is also marked for cancellation.
 

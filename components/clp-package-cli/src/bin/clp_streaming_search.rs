@@ -160,7 +160,7 @@ async fn search(args: Cli) -> anyhow::Result<QueryJobStatus> {
     let search_job_config = SearchJobConfig {
         datasets: Some(datasets),
         query_string: args.wildcard_query,
-        max_num_results: 0,
+        max_num_results: None,
         begin_timestamp: args.begin_time,
         end_timestamp: args.end_time,
         ignore_case: args.ignore_case,

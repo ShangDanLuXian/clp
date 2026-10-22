@@ -141,7 +141,6 @@ async fn health() -> String {
             "time_range_begin_millisecs": 0,
             "time_range_end_millisecs": 17_356_896,
             "ignore_case": true,
-            "max_num_results": 0,
             "buffer_results_in_mongodb": true,
             "count_by_time_bucket_size_millisecs": null
         })),
@@ -1133,7 +1132,7 @@ mod stream_query_tests {
                     QueryJobStatus::Pending | QueryJobStatus::Running
                 );
                 if is_cancellable {
-                    job.status = QueryJobStatus::Cancelling;
+                    job.status = QueryJobStatus::CancelRequested;
                 }
                 is_cancellable
             });
@@ -1613,7 +1612,7 @@ mod stream_query_tests {
         );
         assert_eq!(
             harness.query_job_table.status(query_job_id),
-            QueryJobStatus::Cancelling
+            QueryJobStatus::CancelRequested
         );
         sleep(Duration::from_millis(200)).await;
         assert_eq!(harness.query_job_table.cancel_requests(), [query_job_id]);
@@ -1713,7 +1712,7 @@ mod stream_query_tests {
         );
         assert_eq!(
             harness.query_job_table.status(1),
-            QueryJobStatus::Cancelling
+            QueryJobStatus::CancelRequested
         );
     }
 
@@ -1744,7 +1743,7 @@ mod stream_query_tests {
         );
         assert_eq!(
             harness.query_job_table.status(query_job_id),
-            QueryJobStatus::Cancelling
+            QueryJobStatus::CancelRequested
         );
         assert_eq!(
             events.next_event().await,

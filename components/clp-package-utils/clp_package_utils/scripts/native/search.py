@@ -59,7 +59,6 @@ def create_and_monitor_job_in_db(
         begin_timestamp=begin_timestamp,
         end_timestamp=end_timestamp,
         ignore_case=ignore_case,
-        max_num_results=0,  # unlimited number of results
         path_filter=path_filter,
         network_output=network_output,
     )

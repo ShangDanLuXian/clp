@@ -133,7 +133,7 @@ pub async fn cancel_query_job(
     );
 
     let query_result = sqlx::query(QUERY)
-        .bind(QueryJobStatus::Cancelling)
+        .bind(QueryJobStatus::CancelRequested)
         .bind(query_job_id)
         .bind(QueryJobStatus::Pending)
         .bind(QueryJobStatus::Running)

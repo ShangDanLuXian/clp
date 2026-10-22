@@ -773,7 +773,6 @@ class ApiServer(BaseModel):
     host: DomainStr = "localhost"
     port: Port = DEFAULT_PORT
     query_job_polling: QueryJobPollingConfig = QueryJobPollingConfig()
-    default_max_num_query_results: int = 1000
     search_result_listener: SearchResultListener = SearchResultListener()
 
     def transform_for_container(self):
@@ -783,9 +782,15 @@ class ApiServer(BaseModel):
 
 
 class LogIngestor(BaseModel):
+    DEFAULT_PORT: ClassVar[int] = 3002
+
     host: DomainStr = "localhost"
-    port: Port = 3002
+    port: Port = DEFAULT_PORT
     logging_level: LoggingLevelRust = "INFO"
+
+    def transform_for_container(self) -> None:
+        self.host = LOG_INGESTOR_COMPONENT_NAME
+        self.port = self.DEFAULT_PORT
 
 
 class SpiderInboundQueue(BaseModel):
@@ -898,6 +903,7 @@ class SpiderWorkerPools(BaseModel):
 
     general: SpiderWorkerPool = SpiderWorkerPool()
     compression: SpiderWorkerPool = SpiderWorkerPool()
+    query: SpiderWorkerPool = SpiderWorkerPool(replicas=4)
 
 
 class SpiderWorker(BaseModel):
@@ -961,11 +967,11 @@ class CompressionCoordinator(BaseModel):
 class QueryCoordinator(BaseModel):
     logging_level: LoggingLevelRust = "INFO"
     database_connection_pool_size: PositiveInt = 10
-    job_polling_interval_millisecs: PositiveInt = 50
+    job_polling_interval_millisecs: PositiveInt = 100
     max_concurrent_jobs: PositiveInt = 1000
     max_datasets_per_query: PositiveInt | None = 10
     query_task_max_retry: NonNegativeInt = 1
-    result_polling_interval_millisecs: PositiveInt = 20
+    result_polling_interval_millisecs: PositiveInt = 100
     termination_timeout_secs: PositiveInt = 30
     # This field is loaded at runtime through `load_credentials_from_file`.
     resource_group_password: str | None = None
@@ -1348,7 +1354,7 @@ class ClpConfig(BaseModel):
             raise ValueError("`redis` must be configured when using Celery orchestration.")
         return self
 
-    def transform_for_container(self):
+    def transform_for_container(self) -> None:
         """
         Converts all relevant directories to absolute paths inside the container, and updates
         component hostnames and ports to their container service names and default ports.
@@ -1371,6 +1377,8 @@ class ClpConfig(BaseModel):
         self.otel_collector.transform_for_container(BundledService.OTEL_COLLECTOR in self.bundled)
         if self.api_server is not None:
             self.api_server.transform_for_container()
+        if self.log_ingestor is not None:
+            self.log_ingestor.transform_for_container()
         if self.query_scheduler is not None:
             self.query_scheduler.transform_for_container()
         if self.reducer is not None:

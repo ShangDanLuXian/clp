@@ -206,7 +206,6 @@ pub struct ApiServer {
     pub host: String,
     pub port: u16,
     pub query_job_polling: QueryJobPollingConfig,
-    pub default_max_num_query_results: u32,
     pub search_result_listener: SearchResultListener,
 }
 
@@ -216,7 +215,6 @@ impl Default for ApiServer {
             host: "localhost".to_owned(),
             port: 3001,
             query_job_polling: QueryJobPollingConfig::default(),
-            default_max_num_query_results: 1000,
             search_result_listener: SearchResultListener::default(),
         }
     }
@@ -581,7 +579,7 @@ impl Default for QueryCoordinator {
         Self {
             database_connection_pool_size: NonZeroU32::new(10)
                 .expect("default database connection pool size should not be zero"),
-            job_polling_interval_millisecs: NonZeroU64::new(50)
+            job_polling_interval_millisecs: NonZeroU64::new(100)
                 .expect("default jobs poll delay should not be zero"),
             max_concurrent_jobs: NonZeroUsize::new(1000)
                 .expect("default maximum number of concurrent jobs should not be zero"),

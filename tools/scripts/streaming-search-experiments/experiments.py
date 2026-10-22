@@ -40,9 +40,10 @@ QUERY_JOB_STATUS = {
     1: "RUNNING",
     2: "SUCCEEDED",
     3: "FAILED",
-    4: "CANCELLING",
-    5: "CANCELLED",
-    6: "KILLED",
+    4: "CANCEL_REQUESTED",
+    5: "CANCELLING",
+    6: "CANCELLED",
+    7: "KILLED",
 }
 TERMINAL_STATUSES = {"SUCCEEDED", "FAILED", "CANCELLED", "KILLED"}
 
@@ -651,7 +652,7 @@ def phase_disconnect(ctx: Ctx) -> dict:
         while time.monotonic() < deadline and not (poller.timeline and poller.timeline[-1]["status"] in TERMINAL_STATUSES):
             time.sleep(0.5)
         poller.stop()
-        cancelling = next((t["t_secs"] for t in poller.timeline if t["status"] == "CANCELLING"), None)
+        cancelling = next((t["t_secs"] for t in poller.timeline if t["status"] in ("CANCEL_REQUESTED", "CANCELLING")), None)
         run = {
             "run": i,
             "job_id": job_id,

@@ -2,7 +2,6 @@
 
 use std::cmp::Reverse;
 use std::collections::HashSet;
-use std::num::NonZeroU32;
 use std::num::NonZeroU64;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -90,11 +89,11 @@ impl<SubmitterType: QueryJobSubmitter> QueryJobHandle<SubmitterType> {
     ///
     /// Returns an error if:
     ///
-    /// * [`Error::InvalidQueryJobConfig`] if:
+    /// * [`Error::UnsupportedJobConfig`] if:
     ///   * The job carries an aggregation config.
-    ///   * The job asks for its results to be written to files.
-    ///   * The query string is empty.
-    ///   * The begin timestamp exceeds the end timestamp.
+    ///   * The job writes its results to files.
+    /// * [`Error::InvalidQueryJobConfig`] if the begin timestamp exceeds the end timestamp.
+    /// * Forwards [`ClpSQueryOption::try_from`]'s return values on failure.
     pub fn new(
         context: Arc<QueryJobHandleContext>,
         query_job_id: QueryJobId,
@@ -104,24 +103,17 @@ impl<SubmitterType: QueryJobSubmitter> QueryJobHandle<SubmitterType> {
         job_creation_timestamp_millisecs: i64,
     ) -> Result<Self, Error> {
         if search_job_config.aggregation_config.is_some() {
-            return Err(Error::InvalidQueryJobConfig(
+            return Err(Error::UnsupportedJobConfig(
                 "aggregation jobs are not supported".to_owned(),
             ));
         }
-
         if search_job_config.write_to_file {
-            return Err(Error::InvalidQueryJobConfig(
-                "writing query results to files is not supported; resubmit the query with its \
-                 results buffered in the results cache"
-                    .to_owned(),
+            return Err(Error::UnsupportedJobConfig(
+                "writing query results to files is not supported".to_owned(),
             ));
         }
 
-        let query_string = NonEmptyString::try_from(search_job_config.query_string.clone())
-            .map_err(|_| {
-                Error::InvalidQueryJobConfig("query string must not be empty".to_owned())
-            })?;
-
+        let clp_s_query_option = ClpSQueryOption::try_from(&search_job_config)?;
         if let (Some(begin_timestamp), Some(end_timestamp)) = (
             search_job_config.begin_timestamp,
             search_job_config.end_timestamp,
@@ -136,14 +128,6 @@ impl<SubmitterType: QueryJobSubmitter> QueryJobHandle<SubmitterType> {
             .archive_selection_options
             .archive_retention_period_millisecs
             .map(|period| job_creation_timestamp_millisecs.saturating_sub_unsigned(period.get()));
-
-        let clp_s_query_option = ClpSQueryOption {
-            query_string,
-            max_num_results: NonZeroU32::new(search_job_config.max_num_results),
-            begin_timestamp_millisecs: search_job_config.begin_timestamp,
-            end_timestamp_millisecs: search_job_config.end_timestamp,
-            ignore_case: search_job_config.ignore_case,
-        };
 
         let output_handle = search_job_config.network_output.clone().map_or_else(
             || OutputHandle::ResultsCache {
@@ -265,7 +249,21 @@ impl<SubmitterType: QueryJobSubmitter> QueryJobHandle<SubmitterType> {
             "Query job submitted.",
         );
 
-        self.start(spider_job_id, persisted_num_tasks).await?;
+        if let Err(start_error) = self.start(spider_job_id, persisted_num_tasks).await {
+            let _ = self
+                .job_submitter
+                .cancel_query_job(spider_job_id)
+                .await
+                .inspect_err(|e| {
+                    tracing::warn!(
+                        query_job_id = % self.query_job_id,
+                        spider_job_id = % spider_job_id,
+                        error = % e,
+                        "Failed to cancel the Spider job after failing to start the query job.",
+                    );
+                });
+            return Err(start_error);
+        }
         Ok(spider_job_id)
     }
 
@@ -310,7 +308,7 @@ impl<SubmitterType: QueryJobSubmitter> QueryJobHandle<SubmitterType> {
     ///
     /// Returns an error if:
     ///
-    /// * [`Error::QueryJobCancelled`] if the query job is in [`QueryJobStatus::Cancelling`].
+    /// * [`Error::QueryJobCancelled`] if the query job is in [`QueryJobStatus::CancelRequested`].
     /// * [`Error::InvalidQueryJobStatusTransition`] if the query job is in any other status than
     ///   [`QueryJobStatus::Pending`].
     /// * Forwards [`sqlx::Pool::begin`]'s return values on failure.
@@ -327,7 +325,7 @@ impl<SubmitterType: QueryJobSubmitter> QueryJobHandle<SubmitterType> {
         let mut tx = self.context.db_pool.begin().await?;
         match self.lock_and_get_status(&mut tx).await? {
             QueryJobStatus::Pending => {}
-            QueryJobStatus::Cancelling => return Err(Error::QueryJobCancelled),
+            QueryJobStatus::CancelRequested => return Err(Error::QueryJobCancelled),
             from => {
                 return Err(Error::InvalidQueryJobStatusTransition {
                     from,
@@ -426,9 +424,12 @@ impl<SubmitterType: QueryJobSubmitter> QueryJobHandle<SubmitterType> {
     /// persist from the locked status as follows:
     ///
     /// * [`QueryJobOutcome::Succeeded`] is permitted from [`QueryJobStatus::Pending`] and
-    ///   [`QueryJobStatus::Running`]. From [`QueryJobStatus::Cancelling`], the job is terminated as
-    ///   [`QueryJobStatus::Cancelled`] instead, since a cancellation wins over a success.
-    /// * [`QueryJobOutcome::Cancelled`] is permitted only from [`QueryJobStatus::Cancelling`].
+    ///   [`QueryJobStatus::Running`]. From [`QueryJobStatus::CancelRequested`] and
+    ///   [`QueryJobStatus::Cancelling`], the job is terminated as [`QueryJobStatus::Cancelled`]
+    ///   instead, since a cancellation wins over a success.
+    /// * [`QueryJobOutcome::Cancelled`] is permitted only from [`QueryJobStatus::CancelRequested`]
+    ///   and [`QueryJobStatus::Cancelling`]. From [`QueryJobStatus::Running`], the job is
+    ///   terminated as [`QueryJobStatus::Failed`] instead.
     /// * [`QueryJobOutcome::Failed`] is permitted from any non-terminal status, since a failure
     ///   wins over both a success and a cancellation.
     ///
@@ -449,6 +450,8 @@ impl<SubmitterType: QueryJobSubmitter> QueryJobHandle<SubmitterType> {
         const CANCELLED_AFTER_COMPLETION_MESSAGE: &str =
             "The query job completed, but it had already been requested to be cancelled.";
         const CANCELLED_MESSAGE: &str = "The query job was cancelled.";
+        const CANCELLED_UNEXPECTED_MESSAGE: &str =
+            "The query job was cancelled unexpectedly without a cancellation request.";
 
         let mut tx = self.context.db_pool.begin().await?;
         let current_status = self.lock_and_get_status(&mut tx).await?;
@@ -458,10 +461,14 @@ impl<SubmitterType: QueryJobSubmitter> QueryJobHandle<SubmitterType> {
             (QueryJobOutcome::Succeeded, QueryJobStatus::Pending | QueryJobStatus::Running) => {
                 (to, None)
             }
-            (QueryJobOutcome::Cancelled, QueryJobStatus::Cancelling) => {
-                (to, Some(CANCELLED_MESSAGE.to_owned()))
-            }
-            (QueryJobOutcome::Succeeded, QueryJobStatus::Cancelling) => {
+            (
+                QueryJobOutcome::Cancelled,
+                QueryJobStatus::CancelRequested | QueryJobStatus::Cancelling,
+            ) => (to, Some(CANCELLED_MESSAGE.to_owned())),
+            (
+                QueryJobOutcome::Succeeded,
+                QueryJobStatus::CancelRequested | QueryJobStatus::Cancelling,
+            ) => {
                 tracing::info!(
                     query_job_id = % self.query_job_id,
                     "{CANCELLED_AFTER_COMPLETION_MESSAGE}",
@@ -469,6 +476,16 @@ impl<SubmitterType: QueryJobSubmitter> QueryJobHandle<SubmitterType> {
                 (
                     QueryJobStatus::Cancelled,
                     Some(CANCELLED_AFTER_COMPLETION_MESSAGE.to_owned()),
+                )
+            }
+            (QueryJobOutcome::Cancelled, QueryJobStatus::Running) => {
+                tracing::error!(
+                    query_job_id = % self.query_job_id,
+                    "{CANCELLED_UNEXPECTED_MESSAGE}",
+                );
+                (
+                    QueryJobStatus::Failed,
+                    Some(CANCELLED_UNEXPECTED_MESSAGE.to_owned()),
                 )
             }
             (QueryJobOutcome::Failed { error_message }, from) if !from.is_terminal() => {
@@ -864,6 +881,10 @@ mod tests {
             _poll_interval: Duration,
         ) -> Result<QueryJobOutcome, Error> {
             unreachable!("the test never runs a query job")
+        }
+
+        async fn cancel_query_job(&self, _spider_job_id: SpiderJobId) -> Result<(), Error> {
+            unreachable!("the test never cancels a query job")
         }
     }
 

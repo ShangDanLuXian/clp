@@ -405,6 +405,7 @@ mod tests {
             begin_timestamp_millisecs: None,
             end_timestamp_millisecs: None,
             ignore_case: false,
+            count_by_time_bucket_size_millisecs: None,
         }
     }
 
@@ -491,6 +492,7 @@ mod tests {
             begin_timestamp_millisecs: Some(1_310_138_944_000),
             end_timestamp_millisecs: Some(1_311_208_074_120),
             ignore_case: true,
+            count_by_time_bucket_size_millisecs: None,
         };
 
         assert_eq!(
@@ -533,6 +535,7 @@ mod tests {
             begin_timestamp_millisecs: Some(1_310_138_944_000),
             end_timestamp_millisecs: Some(1_311_208_074_120),
             ignore_case: true,
+            count_by_time_bucket_size_millisecs: None,
         };
 
         assert_eq!(
@@ -629,6 +632,7 @@ mod tests {
             begin_timestamp_millisecs: Some(1_310_138_944_000),
             end_timestamp_millisecs: Some(1_311_208_074_120),
             ignore_case: true,
+            count_by_time_bucket_size_millisecs: None,
         };
 
         assert_eq!(
