@@ -193,6 +193,35 @@ Nobody saw it before because with results-cache output an orphaned `clp-s` just 
 MongoDB upserts (deduplicated by `_id`) and exits; only streaming gives the orphan a connection
 to keep, and no earlier test stalled past the hard timeout.
 
+**Correctness impact.** None on the result data itself: the cursor's argument (deterministic
+output, TCP order within a connection, one atomic swap per index) does not care whether the
+competing attempt is a retry or an orphan, and the measurements agree (5 stall runs, up to
+987,204 duplicates dropped, 0 protocol errors, every result set byte-identical to `clp-s`). An
+orphan cannot reach another job either: tokens are random per session, and once a session is
+unregistered a late orphan's handshake is rejected and its next `send()` fails.
+
+What breaks is the **meaning of the job status**:
+
+* A FAILED job can deliver a complete result set (observed: job 25 failed at 160.9 s, the client
+  received all 659,677 results, then `end: Failed`).
+* A SUCCEEDED job can, in a narrow case, deliver an incomplete one. During the drain, a
+  connection is cut once it has spent more than the grace period (5 s) reading from its socket
+  without claiming a result (`connection.rs`, `read_time_since_last_claim`). With an orphan that
+  ran ahead, the succeeded attempt's connection reads only duplicates, so it is the one that
+  accumulates read time; if it is cut before it reaches the unclaimed tail, and the orphan is
+  cut too (idle for more than 5 s while scanning a sparse region) or already gone, the tail is
+  lost and nothing reports it. It needs a slow worker-to-listener network on top of the orphan,
+  so it was not observed, but the listener could not detect it if it happened.
+* Aggregation would be wrong: a `reducer` output has no `_id` deduplication, so an orphan and its
+  retry would both add their counts. Not reachable today, because the coordinator rejects
+  aggregation jobs on Spider, but it must be settled before aggregation moves there.
+
+Both status problems have the same root: the listener never learns how many results a task
+produced (no per-task end frame, no acknowledgement; issues 2 and 10), so it cannot say
+"complete" independently of Spider's verdict. The `end` event should carry a completeness flag
+computed from per-task totals, and the CLI's exit code should follow it rather than the job
+status.
+
 **Fix.** In Spider: spawn executors in their own process group (`Command::process_group`) and
 kill the group on timeout or crash, and reap reparented children (or run the worker under an
 init). Defensively in `clp-tdl-package`, independent of Spider: `pre_exec` with
