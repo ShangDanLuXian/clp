@@ -131,6 +131,15 @@ expects, and streaming searches require `max_num_results` to be omitted.
 | clp-s with no listener on the port                                | logs `Failed to write search result, error=20` (`ErrorCodeFailureNetwork`) and **exits 1**, so the task fails and Spider retries |
 | Listener that accepts, reads a few bytes, and closes              | clp-s **exits 0**: all 143 results of this small archive fit in the kernel send buffer before the peer's reset arrives. This is the v1 gap of issue 2 (no acknowledgement), reproduced on purpose; protocol v2's trailer and acknowledgement in the revised design close it. |
 
+## The Rust reader prototype (merged 2026-10-22)
+
+Lin's `clp-s-rust-reader-prototype` branch (the standalone Rust clp-s reader, see
+[rust-reader](rust-reader.md)) merged without conflicts: it adds only `components/core/rust/`, a
+separate Cargo workspace. `cargo check --workspace --all-targets` in that workspace passes after
+one adaptation: the Spider adapter's test fixtures build a `Package` config, which on this branch
+has the `scheduler` field, so they now spread `..Package::default()`. The reader workspace is not
+covered by the repository's CI workflow.
+
 ## Conclusion
 
 Every check that can run without a deployment reproduces the reports' results exactly: the merged

@@ -407,6 +407,7 @@ mod tests {
         SpiderTaskExecutorConfig {
             package: Package {
                 storage_engine: StorageEngine::ClpS,
+                ..Package::default()
             },
             archive_output: ArchiveOutput {
                 storage: ArchiveOutputStorage::S3 {
@@ -516,6 +517,7 @@ mod tests {
         let config = SpiderTaskExecutorConfig {
             package: Package {
                 storage_engine: StorageEngine::ClpS,
+                ..Package::default()
             },
             archive_output: ArchiveOutput {
                 storage: ArchiveOutputStorage::Fs {

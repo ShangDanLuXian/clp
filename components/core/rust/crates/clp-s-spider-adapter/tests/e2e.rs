@@ -355,6 +355,7 @@ impl Harness {
         SpiderTaskExecutorConfig {
             package: Package {
                 storage_engine: StorageEngine::ClpS,
+                ..Package::default()
             },
             archive_output: ArchiveOutput {
                 storage,

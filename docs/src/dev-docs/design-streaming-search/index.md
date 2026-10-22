@@ -48,6 +48,13 @@ Experiment reproduction
 ^^^
 What was re-run from the prototype reports, and how the results compare.
 :::
+
+:::{grid-item-card}
+:link: rust-reader
+The Rust reader prototype and V3
+^^^
+What of the in-process Rust reader is on this branch, where it attaches, and what to settle.
+:::
 ::::
 
 :::{toctree}
@@ -57,4 +64,5 @@ design-summary
 issues
 backpressure
 reproduction
+rust-reader
 :::
