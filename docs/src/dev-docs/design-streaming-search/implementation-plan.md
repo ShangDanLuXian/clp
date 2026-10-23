@@ -1,24 +1,5 @@
 # Streaming search: implementation plan
 
-## Summary
-
-Today a query job on Spider writes its results to the results cache (MongoDB), and a client can
-read them only after the whole job has finished. This work adds **streaming search**: the job's
-query tasks send their results over TCP to a listener in the caller as they find them, and the
-caller forwards them to the client immediately.
-
-Two callers use it:
-
-* the API server, through a new `POST /query/stream` endpoint that answers with Server-Sent
-  Events;
-* the new `sbin/streaming-search.sh` command, backed by a Rust tool, `clp-streaming-search`.
-
-Each caller runs its own listener, from a shared Rust library.
-
-Spider reruns failed tasks, so a task's results can arrive more than once. The listener delivers
-each result to the client exactly once, and a task counts as successful only after the listener
-confirms that it has received all of the task's results.
-
 ## Work breakdown
 
 The work lands as fourteen small pull requests against `main`. Each one:
