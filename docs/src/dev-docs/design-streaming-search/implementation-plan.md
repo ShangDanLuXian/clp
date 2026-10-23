@@ -75,7 +75,7 @@ It sends four kinds of messages, each a msgpack array:
 
 | Message | Sent by | Content |
 |---|---|---|
-| Handshake | `clp-s`, once | `[2, session_token, task_index, archive_id]` (2 is the protocol version) |
+| Handshake | `clp-s`, once | `[1, session_token, task_index, archive_id]` (1 is the protocol version) |
 | Result | `clp-s`, once per result | `[result_index, timestamp, message]`, with `result_index` counting from 0 |
 | Trailer | `clp-s`, once after the last result | `[num_results]` |
 | Acknowledgement | the listener, once | `[num_results]`, always 10 bytes: `0x91 0xcf` and the count as a big-endian u64 |
