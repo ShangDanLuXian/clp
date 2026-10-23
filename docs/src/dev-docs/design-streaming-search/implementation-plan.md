@@ -150,10 +150,10 @@ Depends on: nothing. Size: about 250 lines.
 
 * `NetworkOutput { host, port, session_token }`, and a `network_output` field in
   `QueryJobConfig` (`SearchJobConfig` until #2590 is merged) replacing the unused
-  `network_address`. The token is a UUID stored as a string, so the Python mirror of the job
-  config and the database see a readable value. Update the Python mirror in `job_orchestration`.
+  `network_address`. The token is a UUID, serialized as a string: the form `clp-s` receives on its
+  command line and sends back in the handshake.
 * `OutputHandle::Network { host, port, session_token }`, the task's output destination.
-* Unit tests: serialization round trips and the field names the Python mirror expects.
+* Unit tests: serialization round trips.
 
 #### PR 3. `refactor(clp-rust-utils): Move query job submission and the cancellation request out of the API server.`
 
@@ -266,7 +266,7 @@ Depends on: PR 2. Size: about 250 lines.
 Depends on: PR 3, PR 5, PR 10, PR 11 and PR 12. Size: about 700 lines.
 
 * Config: `api_server.search_result_listener` with the listener's `port` (default 3003) and
-  `advertised_host`, in Rust, in Python, and in the config template. The advertised host defaults
+  `advertised_host`, in the Rust config and in the config template. The advertised host defaults
   to the API server's container hostname, so workers reach it without extra configuration.
 * Start the listener with the API server when the package runs the query coordinator (its config
   has a `query_coordinator` section); otherwise the endpoint answers 501.
@@ -342,8 +342,7 @@ schedule assumes a reviewer available every day.
 ## Open questions
 
 1. **Shape of `sbin/streaming-search.sh`.** The plan above makes it a client of the API server.
-   The alternative is a tool that runs its own listener, which needs database credentials, a
-   network route from the workers back to the machine running the tool, and the Python wrapper
-   that the other `sbin` scripts use. Settle on day 1.
+   The alternative is a tool that runs its own listener, which needs database credentials and a
+   network route from the workers back to the machine running the tool. Settle on day 1.
 2. **Timestamp format in the CLI output.** Epoch milliseconds, as the API returns them, or a
    formatted date and time.
