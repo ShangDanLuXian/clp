@@ -305,6 +305,38 @@ trigger; it is also the design doc's own "rolling upgrade" risk). The engine mus
 within a job (in practice, per deployment), or the listener must verify duplicates against a
 per-result identity such as `log_event_idx`.
 
+### 24. A log message that is not valid UTF-8 cannot cross the protocol
+
+The listener decodes `message` as a msgpack `str` and validates it
+(`search-result-listener/src/protocol.rs`, `read_str` → `std::str::from_utf8`). The C++ `clp-s`
+packs the reconstructed message bytes as `str` without validating them, and log data can contain
+invalid UTF-8 (binary garbage in a line). The outcomes differ by version and engine:
+
+* **v1 (this branch):** the frame fails to decode, the connection is closed as a protocol error,
+  and the task fails on its next `send()`. If the offending message was the task's last result,
+  `clp-s` has already exited 0 (the issue 2 gap), so the task succeeds and that result is silently
+  dropped. Every retry hits the same bytes.
+* **v2:** the acknowledgement is withheld, so the task fails on every attempt and the job is
+  FAILED. Loud, but one archive with one bad line fails the whole search.
+* **V3:** the Rust sink replaces invalid sequences with U+FFFD (its divergence DV-45): the result
+  is delivered but altered, and it differs from what the C++ engine would have sent for the same
+  index (issue 22's failure mode if the two engines ever serve the same task).
+
+The results-cache path has the same gap in another form (DV-45: "the api-server stops at the
+first undecodable tuple"). The design should decide once for both engines: carry `message` as
+msgpack `bin` and let the consumer decide, or specify the replacement and apply it identically in
+`clp-s` and the Rust reader.
+
+### 25. Zero-result attempts are invisible to the listener (assumption to state)
+
+With lazy connect, an attempt that produces no results never connects, never gets a cursor and,
+under v2, is never acknowledged; Spider records its success on the producer's exit code alone.
+Exactly-once therefore rests on one more precondition the design does not state: **a producer
+must fail loudly on any read error and never report "no matches" for an archive it could not
+read.** Both engines satisfy it today (`clp-s` throws on a corrupt archive; the Rust reader
+fails the archive on a corrupt table), but it is a property of the producers, not of the protocol,
+and a future "skip unreadable parts" change in either engine would turn into silent loss.
+
 ### 23. Protocol v2 breaks `sbin/search.sh` in Celery mode
 
 Under v2 `clp-s` waits for the listener's acknowledgement before exiting 0. The Celery path's
@@ -399,7 +431,9 @@ wrong "complete" signal, as opposed to a job that fails, hangs, or is slow.
 | 20 (a) | A `reducer` output would double-count: an orphan and its retry both send their counts, and the reducer has no `_id` deduplication. | Aggregation on Spider, which the coordinator rejects today. | Open, latent. v2 does not fix it: both attempts would be acknowledged. |
 | 20 (b) | A FAILED job can deliver a complete result set, so the status no longer says whether the results are complete. The data itself is intact. | Any hard timeout under the V2 engine. | Status-level only. |
 | 8 | Fabricated results delivered as genuine: the session token is in the DB config and on worker command lines, and the archive-ID check only covers task indices that already have a cursor, so an unused index accepts anything. | An attacker with DB read access or `ps` on a worker while the session is open. | Open. Integrity under attack, not a bug in normal operation. |
-| 13 | A wrong time attributed to a result: what clp-s sends for an event without a timestamp is unspecified. | Records lacking the timestamp key. | Open, unverified; metadata only. |
+| 24 | A message with invalid UTF-8 is dropped silently (v1, if it is the task's last result), fails the whole job (v2), or is delivered altered with U+FFFD (V3), and the two engines disagree about it. | Binary garbage in a log line. | Open. Needs one rule for both engines (`bin` on the wire, or a specified replacement). |
+| 25 | Not a defect today, but an unstated precondition: a producer that reports "no matches" for an archive it failed to read loses those results silently, because zero-result attempts never connect and are never acknowledged. | A future change that skips unreadable data instead of failing. | Open as a rule to write down and test in both engines. |
+| 13 | A time of `0` (epoch) is sent for a record without a timestamp (DV-34), indistinguishable from a real 1970-01-01 timestamp. | Records lacking the timestamp key. | Specified by the reader's divergence registry; metadata only. The protocol could carry an absent timestamp instead. |
 | 14 | Messages with meaningful leading or trailing whitespace differ by path: the API strips one trailing newline, the results-cache path trims, the CLI keeps the bytes. | Any such message. | Cosmetic but byte-visible; needs one rule. |
 
 Two that are not correctness issues but get mistaken for them:
