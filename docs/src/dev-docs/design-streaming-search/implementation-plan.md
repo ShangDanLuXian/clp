@@ -1,15 +1,5 @@
 # Streaming search: implementation plan
 
-Tracking PR title:
-
-```text
-feat(clp-package)!: Stream search results from Spider query tasks to the API server and the CLI.
-```
-
-Timeline: two weeks, Monday 2026-10-26 to Friday 2026-11-06.
-
-# Description
-
 ## Summary
 
 Today a query job on Spider writes its results to the results cache (MongoDB), and a client can
@@ -29,92 +19,6 @@ Spider reruns failed tasks, so a task's results can arrive more than once. The l
 each result to the client exactly once, and a task counts as successful only after the listener
 confirms that it has received all of the task's results.
 
-## Scope
-
-In scope:
-
-* the `network` output of `clp-s`, which each query task uses to send its results;
-* the `query-coordinator` and the Spider query task (`query::clp_s_search`), which pass the network
-  destination to each task;
-* a new Rust library, `search-result-listener`, that receives and deduplicates the results;
-* `POST /query/stream` in the API server, including cancelling the job when the client
-  disconnects;
-* `sbin/streaming-search.sh` and `clp-streaming-search`, including cancelling the job on Ctrl-C;
-* user docs and the package config template.
-
-Out of scope:
-
-* aggregations (`--count`, `--count-by-time`), which stay on the results-cache path;
-* result limits (`max_num_results`) for streaming searches: a streaming search returns every
-  result;
-* the `query-scheduler` path, which is being deprecated, and its `sbin/search.sh`;
-* the Helm deployment, which doesn't run the `query-coordinator`; there the endpoint answers 501.
-
-## How it works
-
-```text
-HTTP client                     terminal
-  │ POST /query/stream (SSE)      │ sbin/streaming-search.sh
-  ▼                               ▼
-API server                      clp-streaming-search
-  └───────────────┬───────────────┘
-                  │ each runs a ResultListener (one per process)
-                  │   └─ Session (one per job): a cursor per task, a bounded queue of results
-                  ▲ TCP: handshake → results → trailer, then the listener's acknowledgement
-                  │
-Spider query task (one per archive) ─ clp-s s <archive> <query> network --host --port
-  ▲                                        --session-token --task-index
-query-coordinator: builds one task per archive and gives each task a fixed index
-```
-
-**Submitting a job.** The caller opens a listener session first, which creates a random session
-token. It then inserts the query job with a network output: the listener's address and the
-token. The `query-coordinator` creates one Spider task per archive and gives each task a fixed
-index (its position in the list of archives). Spider stores the task graph, so a rerun of a task
-gets the same index.
-
-**Sending results.** Each task runs `clp-s` with a `network` output. `clp-s` connects to the
-listener when it finds its first result, so an archive without results never opens a connection.
-It sends four kinds of messages, each a msgpack array:
-
-| Message | Sent by | Content |
-|---|---|---|
-| Handshake | `clp-s`, once | `[protocol_version, session_token, task_index, archive_id]` |
-| Result | `clp-s`, once per result | `[result_index, timestamp, message]`, with `result_index` counting from 0 |
-| Trailer | `clp-s`, once after the last result | `[num_results]` |
-| Acknowledgement | the listener, once | `[num_results]`, always 10 bytes: `0x91 0xcf` and the count as a big-endian u64 |
-
-After the trailer, `clp-s` stops writing and waits for the acknowledgement. It exits successfully
-only if the acknowledgement arrives and its count matches; otherwise it exits with an error, the
-task fails, and Spider reruns it.
-
-**Exactly once.** For each task, the listener keeps a cursor: the index of the next result it
-hasn't delivered yet. A result with index `r` is delivered only if the cursor is exactly `r`, and
-delivering it moves the cursor to `r + 1` in one atomic step. If the cursor is already past `r`,
-another attempt of the same task has delivered that result, and this copy is dropped. Each
-connection must send its results in order (0, 1, 2, ...), which the listener checks. This relies
-on `clp-s` producing a task's results in the same order on every attempt, which it does: it
-searches on one thread, visits schemas in the order stored in the archive, and reads rows in
-order.
-
-**Acknowledging.** The listener acknowledges a connection only after it has decoded the trailer,
-the connection has sent indices `0` to `N - 1` in order, `N` matches the trailer, and every
-result the connection delivered has been handed to the session's queue. So once every task has
-succeeded, the client has every result.
-
-**Delivering to the client.** Each connection converts the results it delivers into the client's
-final format (SSE events for the API server, output lines for the CLI) and passes them on in
-batches, one batch per socket read. The session's queue is bounded, so a slow client slows the
-connections down instead of growing memory.
-
-**Finishing.** The session polls the job's status every 100 ms. When the job reaches a final
-status, the session stops accepting new connections (after accepting any that are already
-waiting), lets open connections finish within a short grace period, closes the queue, and reports
-the final status and statistics: results delivered, duplicates dropped, connections closed for
-protocol errors, and connections that ended before their trailer. If the client disconnects, the
-session keeps reading the tasks' results and drops them, so the tasks still succeed, and the
-caller cancels the job.
-
 ## Work breakdown
 
 The work lands as fourteen small pull requests against `main`. Each one:
@@ -132,13 +36,23 @@ Sizes are rough estimates including tests, and exclude generated files.
 
 Depends on: nothing. Size: about 600 lines, about 350 of them tests.
 
+A connection carries four kinds of messages, each a msgpack array:
+
+| Message | Sent by | Content |
+|---|---|---|
+| Handshake | `clp-s`, once | `[protocol_version, session_token, task_index, archive_id]` |
+| Result | `clp-s`, once per result | `[result_index, timestamp, message]`, with `result_index` counting from 0 |
+| Trailer | `clp-s`, once after the last result | `[num_results]` |
+| Acknowledgement | the listener, once | `[num_results]`, always 10 bytes: `0x91 0xcf` and the count as a big-endian u64 |
+
 * `clp-s s ... network` requires `--session-token` and `--task-index`, and accepts a single
   archive.
-* Connect when the first result is found; send the handshake and the results as described above;
-  always include each result's timestamp.
+* Connect when the first result is found, so an archive without results never opens a
+  connection; then send the handshake and one result message per result, always with the
+  result's timestamp.
 * In the output handler's `finish()` step, which runs after the search, send the trailer, stop
-  writing, wait for the acknowledgement, check it, and close. Any failure makes the search fail
-  and `clp-s` exit with an error.
+  writing, wait for the acknowledgement, check its count, and close. Any failure makes the search
+  fail and `clp-s` exit with an error, so the task fails and Spider reruns it.
 * Send through `clp::networking::try_send`, and make it reliable: loop until the whole buffer is
   written (a send interrupted part-way otherwise drops the rest of a message), retry `EINTR`, and
   pass `MSG_NOSIGNAL` so a closed connection returns an error instead of killing `clp-s` with
@@ -239,7 +153,7 @@ Depends on: PR 9. Size: about 550 lines.
 * `JobStatusSource`, a trait that reports a job's status, and its database implementation, polled
   every 100 ms.
 * The shutdown sequence: accept connections that are already waiting, unregister the session,
-  let open connections finish within the grace period, close the queue, and report the final
+  let open connections finish within a short grace period, close the queue, and report the final
   status and statistics. When the client has gone, keep reading and drop the results so tasks
   still succeed.
 * Unit tests with a fake status source: each step of the shutdown, the grace period, the
@@ -311,58 +225,7 @@ Depends on: PR 3, PR 5 and PR 10. Size: about 550 lines, about 200 of them tests
 * Unit tests: argument parsing, loading the config and the credentials, output formatting, and
   the exit code for each final status.
 
-## Order of work
-
-PR 1, PR 2, PR 3 and PR 4 depend on nothing and start on day 1. The longest chain runs through
-the listener:
-
-```text
-PR 2 → PR 6 → PR 7 → PR 8 → PR 9 → PR 10 → PR 13
-```
-
-Everything else runs alongside it: `clp-s` (PR 1) and the coordinator (PR 4 → PR 5) feed into
-PR 13 and PR 14 through PR 5; PR 11 needs only PR 7; PR 12 needs only PR 2; and PR 14 needs PR 3,
-PR 5 and PR 10, so it proceeds alongside PR 13.
-
-## Schedule
-
-| Day | Date | Engineer A: listener and CLI | Engineer B: `clp-s`, coordinator, API server | Milestone |
-|---|---|---|---|---|
-| 1 | Mon 10-26 | Settle the open questions. PR 2, PR 6. | Start PR 1. PR 4. | |
-| 2 | Tue 10-27 | PR 7. | Finish PR 1. PR 3. | PR 2 merged |
-| 3 | Wed 10-28 | PR 8. | PR 1 review, PR 12. | |
-| 4 | Thu 10-29 | PR 8 review. | PR 5, PR 11. | `clp-s` merged |
-| 5 | Fri 10-30 | PR 9. | PR 5 and PR 11 review. | Coordinator merged |
-| 6 | Mon 11-02 | PR 9 review, PR 10. | PR 13. | |
-| 7 | Tue 11-03 | PR 10 review, PR 14. | PR 13. | Listener merged |
-| 8 | Wed 11-04 | PR 14 review. Review PR 13. | PR 13 review. Review PR 14. | |
-| 9 | Thu 11-05 | Review follow-ups. | Review follow-ups. | API and CLI merged; feature complete |
-| 10 | Fri 11-06 | Spare day for release notes. | | Done |
-
-A PR named on a day is opened that day; it merges once reviewed, usually the next day. Each PR
-is opened as soon as the PR it depends on is up for review, and rebased when that one merges. The
-schedule assumes a reviewer available every day.
-
-## Breaking changes
-
-* The `network` output of `clp-s` uses the new protocol and waits for an acknowledgement, so
-  programs that read the old format can no longer use it. This includes `sbin/search.sh` on the
-  `query-scheduler` path. PR 1's title is marked with `!`.
-* `QueryJobConfig.network_address` is replaced by `network_output`. It is an internal field that
-  nothing reads today.
-
-## Risks
-
-| Risk | Mitigation |
-|---|---|
-| Fourteen PRs to review in two weeks. | Each PR is small and single-purpose; open them early and stack them; reserve a reviewer slot every day. |
-| Other work on the `query-coordinator` and the Spider query task conflicts with PR 4 and PR 5. | Land both in the first week. |
-| #2590 (renaming `SearchJobConfig` to `QueryJobConfig`) is still open and touches the same files as PR 2, PR 5 and PR 12. | Base PR 2 on it, or rebase once it merges; the rename is mechanical. |
-| The C++ build makes PR 1 slow to iterate on. | Start it on day 1, in parallel with the Rust work. |
-
 ## Open questions
-
-Both are settled on day 1.
 
 1. **Default output format.** Should `sbin/streaming-search.sh` print each result's timestamp as
    the raw epoch integer, as the API returns it, or formatted as a date and time?

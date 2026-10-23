@@ -60,7 +60,7 @@ What of the in-process Rust reader is on this branch, where it attaches, and wha
 :link: implementation-plan
 Implementation plan
 ^^^
-How streaming search works, and the two-week plan to build it: PRs, schedule and tests.
+The pull requests that build streaming search in Rust, with their contents, sizes and dependencies.
 :::
 ::::
 
