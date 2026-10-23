@@ -267,7 +267,7 @@ as the PR it depends on is up for review, and rebased when that one merges.
 
 | Risk | Mitigation |
 |---|---|
-| About 7,000 to 8,000 lines to review in two weeks. | Split the listener into two PRs; open PRs early and stack them; reserve a reviewer slot every day. |
+| About 7,000 lines to review in two weeks. | Split the listener into two PRs; open PRs early and stack them; reserve a reviewer slot every day. |
 | Other work on the `query-coordinator` and the Spider query task conflicts with PR 3. | Land PR 3 in the first week and keep it small. |
 | #2590 (renaming `SearchJobConfig` to `QueryJobConfig`) is still open and touches the same files as PR 1, PR 3 and PR 5. | Base PR 1 on it, or rebase once it merges; the rename is mechanical. |
 | The C++ build and tests make PR 2 slow to iterate on. | Start PR 2 on day 1, in parallel with the Rust work. |
