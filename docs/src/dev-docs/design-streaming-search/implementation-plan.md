@@ -146,7 +146,7 @@ Depends on: nothing. Size: about 600 lines, about 350 of them tests.
 
 #### PR 2. `feat(clp-rust-utils): Add the network output of a query job.`
 
-Depends on: nothing. Size: about 250 lines.
+Depends on: nothing. Size: about 210 lines.
 
 * `NetworkOutput { host, port, session_token }`, and a `network_output` field in
   `QueryJobConfig` (`SearchJobConfig` until #2590 is merged) replacing the unused
@@ -263,7 +263,7 @@ Depends on: PR 2. Size: about 250 lines.
 
 #### PR 13. `feat(api-server): Add POST /query/stream to run a query and stream its results as Server-Sent Events.`
 
-Depends on: PR 3, PR 5, PR 10, PR 11 and PR 12. Size: about 700 lines.
+Depends on: PR 3, PR 5, PR 10, PR 11 and PR 12. Size: about 690 lines.
 
 * Config: `api_server.search_result_listener` with the listener's `port` (default 3003) and
   `advertised_host`, in the Rust config and in the config template. The advertised host defaults
