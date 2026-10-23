@@ -21,7 +21,9 @@ Two callers use it:
 
 * the API server, through a new `POST /query/stream` endpoint that answers with Server-Sent
   Events;
-* the `sbin/streaming-search.sh` command-line tool.
+* the new `sbin/streaming-search.sh` command, backed by a Rust tool, `clp-streaming-search`.
+
+Each caller runs its own listener, from a shared Rust library.
 
 Spider reruns failed tasks, so a task's results can arrive more than once. The listener delivers
 each result to the client exactly once, and a task counts as successful only after the listener
@@ -37,7 +39,7 @@ In scope:
 * a new Rust library, `search-result-listener`, that receives and deduplicates the results;
 * `POST /query/stream` in the API server, including cancelling the job when the client
   disconnects;
-* `sbin/streaming-search.sh`;
+* `sbin/streaming-search.sh` and `clp-streaming-search`, including cancelling the job on Ctrl-C;
 * user docs and the package config template.
 
 Out of scope:
@@ -51,13 +53,15 @@ Out of scope:
 ## How it works
 
 ```text
-client
-  │  POST /query/stream (SSE), or sbin/streaming-search.sh
-  ▼
-API server ─ ResultListener (one per process)
-               └─ Session (one per job): a cursor per task, a bounded queue of results
-  ▲  TCP: handshake → results → trailer, then the listener's acknowledgement
-  │
+HTTP client                     terminal
+  │ POST /query/stream (SSE)      │ sbin/streaming-search.sh
+  ▼                               ▼
+API server                      clp-streaming-search
+  └───────────────┬───────────────┘
+                  │ each runs a ResultListener (one per process)
+                  │   └─ Session (one per job): a cursor per task, a bounded queue of results
+                  ▲ TCP: handshake → results → trailer, then the listener's acknowledgement
+                  │
 Spider query task (one per archive) ─ clp-s s <archive> <query> network --host --port
   ▲                                        --session-token --task-index
 query-coordinator: builds one task per archive and gives each task a fixed index
@@ -280,16 +284,32 @@ Depends on: PR 3, PR 5, PR 10, PR 11 and PR 12. Size: about 690 lines.
 
 ### CLI
 
-#### PR 14. `feat(clp-package): Add sbin/streaming-search.sh.`
+#### PR 14. `feat(clp-package): Add sbin/streaming-search.sh, backed by the clp-streaming-search tool.`
 
-Depends on: PR 13. Size: about 300 lines.
+Depends on: PR 3, PR 5 and PR 10. Size: about 550 lines, about 200 of them tests.
 
-* A small Rust command-line client of `POST /query/stream`. It takes the same arguments as
-  `sbin/search.sh` without the aggregation options, prints each result (`--raw` prints only the
-  message; otherwise the archive ID and timestamp come first), and exits with 0 only if the job
-  succeeded. Pressing Ctrl-C closes the stream, which cancels the job.
-* Document the tool.
-* Unit tests: argument parsing and output formatting.
+* A new crate, `components/clp-package-cli`, for the Rust command-line tools shipped in the
+  package, starting with `clp-streaming-search`. It is separate from the listener crate so the
+  API server doesn't depend on a command-line crate.
+* `clp-streaming-search` takes the same arguments as `sbin/search.sh` without the aggregation
+  options: the query, `--dataset`, `--begin-time`, `--end-time`, `--ignore-case` and `--raw`. It
+  also takes `--config`, and `--advertised-host` to override the address the query tasks connect
+  to.
+* It binds its own listener, opens a session, submits the job with the session's network output,
+  and runs the session, polling the job's status every 100 ms. It prints each result as it
+  arrives: `--raw` prints only the message; otherwise the archive ID and timestamp come first. It
+  exits with 0 only if the job succeeded, and logs the final status otherwise. Ctrl-C requests the
+  job's cancellation.
+* It reads the package config (`etc/clp-config.yaml` by default) and the database credentials
+  (`etc/credentials.yaml`) itself, and refuses to run unless the config has a `query_coordinator`
+  section.
+* `sbin/streaming-search.sh` runs `clp-streaming-search` in the package's runtime container,
+  which uses the host's network. So the database address in the config works as written, and the
+  query tasks connect back to the machine running the command, at its first non-loopback IPv4
+  address unless `--advertised-host` is given.
+* Ship the binary in the package image; document the command.
+* Unit tests: argument parsing, loading the config and the credentials, output formatting, and
+  the exit code for each final status.
 
 ## Order of work
 
@@ -297,15 +317,16 @@ PR 1, PR 2, PR 3 and PR 4 depend on nothing and start on day 1. The longest chai
 the listener:
 
 ```text
-PR 2 → PR 6 → PR 7 → PR 8 → PR 9 → PR 10 → PR 13 → PR 14
+PR 2 → PR 6 → PR 7 → PR 8 → PR 9 → PR 10 → PR 13
 ```
 
 Everything else runs alongside it: `clp-s` (PR 1) and the coordinator (PR 4 → PR 5) feed into
-PR 13 through PR 5; PR 11 needs only PR 7; PR 12 needs only PR 2.
+PR 13 and PR 14 through PR 5; PR 11 needs only PR 7; PR 12 needs only PR 2; and PR 14 needs PR 3,
+PR 5 and PR 10, so it proceeds alongside PR 13.
 
 ## Schedule
 
-| Day | Date | Engineer A: listener | Engineer B: `clp-s`, coordinator, API server | Milestone |
+| Day | Date | Engineer A: listener and CLI | Engineer B: `clp-s`, coordinator, API server | Milestone |
 |---|---|---|---|---|
 | 1 | Mon 10-26 | Settle the open questions. PR 2, PR 6. | Start PR 1. PR 4. | |
 | 2 | Tue 10-27 | PR 7. | Finish PR 1. PR 3. | PR 2 merged |
@@ -313,10 +334,10 @@ PR 13 through PR 5; PR 11 needs only PR 7; PR 12 needs only PR 2.
 | 4 | Thu 10-29 | PR 8 review. | PR 5, PR 11. | `clp-s` merged |
 | 5 | Fri 10-30 | PR 9. | PR 5 and PR 11 review. | Coordinator merged |
 | 6 | Mon 11-02 | PR 9 review, PR 10. | PR 13. | |
-| 7 | Tue 11-03 | PR 10 review. | PR 13. | Listener merged |
-| 8 | Wed 11-04 | Review PR 13. | PR 13 review, PR 14. | API merged |
-| 9 | Thu 11-05 | Review PR 14. | PR 14 review. | Feature complete |
-| 10 | Fri 11-06 | Spare day for review follow-ups and release notes. | | Done |
+| 7 | Tue 11-03 | PR 10 review, PR 14. | PR 13. | Listener merged |
+| 8 | Wed 11-04 | PR 14 review. Review PR 13. | PR 13 review. Review PR 14. | |
+| 9 | Thu 11-05 | Review follow-ups. | Review follow-ups. | API and CLI merged; feature complete |
+| 10 | Fri 11-06 | Spare day for release notes. | | Done |
 
 A PR named on a day is opened that day; it merges once reviewed, usually the next day. Each PR
 is opened as soon as the PR it depends on is up for review, and rebased when that one merges. The
@@ -341,8 +362,12 @@ schedule assumes a reviewer available every day.
 
 ## Open questions
 
-1. **Shape of `sbin/streaming-search.sh`.** The plan above makes it a client of the API server.
-   The alternative is a tool that runs its own listener, which needs database credentials and a
-   network route from the workers back to the machine running the tool. Settle on day 1.
-2. **Timestamp format in the CLI output.** Epoch milliseconds, as the API returns them, or a
-   formatted date and time.
+Both are settled on day 1.
+
+1. **Default output format.** Should `sbin/streaming-search.sh` print each result's timestamp as
+   the raw epoch integer, as the API returns it, or formatted as a date and time?
+2. **Loading the config.** The plan has `clp-streaming-search` read the package config and the
+   credentials itself. The alternative is a Python wrapper, like the one behind `sbin/search.sh`,
+   that generates a container config for the tool, so that config handling stays in one place.
+   The plan avoids the wrapper because the tool needs only the database address and credentials,
+   and the runtime container uses the host's network, so the user's config works as written.
