@@ -352,18 +352,3 @@ schedule assumes a reviewer available every day.
    that the other `sbin` scripts use. Settle on day 1.
 2. **Timestamp format in the CLI output.** Epoch milliseconds, as the API returns them, or a
    formatted date and time.
-
-# Checklist
-
-* [ ] The PRs satisfy the [contribution guidelines][yscope-contrib-guidelines].
-* [ ] Breaking changes are indicated in the PR titles (PR 2).
-* [ ] Each user-facing PR updates its docs (PR 14, PR 15).
-* [ ] The open questions are answered in the tracking issue.
-
-# Validation performed
-
-Planned. Each PR is validated by the repository's checks (`task lint:check-rust`,
-`cargo nextest run --workspace`, and the C++ build and `clp_s` unit tests for PR 1 and PR 2) and by
-the unit tests it adds. No integration or end-to-end tests are planned.
-
-[yscope-contrib-guidelines]: https://docs.yscope.com/dev-guide/contrib-guides-overview.html
