@@ -3,7 +3,7 @@
 Tracking PR title:
 
 ```text
-feat(clp-package)!: Stream search results from Spider search tasks to the API server and the CLI.
+feat(clp-package)!: Stream search results from Spider query tasks to the API server and the CLI.
 ```
 
 Timeline: two weeks, Monday 2026-10-26 to Friday 2026-11-06.
@@ -12,9 +12,9 @@ Timeline: two weeks, Monday 2026-10-26 to Friday 2026-11-06.
 
 ## Summary
 
-Today a search job on Spider writes its results to the results cache (MongoDB), and a client can
+Today a query job on Spider writes its results to the results cache (MongoDB), and a client can
 read them only after the whole job has finished. This work adds **streaming search**: the job's
-search tasks send their results over TCP to a listener in the caller as they find them, and the
+query tasks send their results over TCP to a listener in the caller as they find them, and the
 caller forwards them to the client immediately.
 
 Two callers use it:
@@ -31,9 +31,9 @@ confirms that it has received all of the task's results.
 
 In scope:
 
-* the `network` output of `clp-s`, which each search task uses to send its results;
-* the `query-coordinator` and the Spider search task, which pass the network destination to each
-  task;
+* the `network` output of `clp-s`, which each query task uses to send its results;
+* the `query-coordinator` and the Spider query task (`query::clp_s_search`), which pass the network
+  destination to each task;
 * a new Rust library, `search-result-listener`, that receives and deduplicates the results;
 * `POST /query/stream` in the API server, including cancelling the job when the client
   disconnects;
@@ -45,7 +45,7 @@ Out of scope:
 * aggregations (`--count`, `--count-by-time`), which stay on the results-cache path;
 * result limits (`max_num_results`) for streaming searches: a streaming search returns every
   result;
-* the Celery query path and its `sbin/search.sh`;
+* the `query-scheduler` path, which is being deprecated, and its `sbin/search.sh`;
 * the Helm deployment, which doesn't run the `query-coordinator`; there the endpoint answers 501.
 
 ## How it works
@@ -58,13 +58,13 @@ API server ─ ResultListener (one per process)
                └─ Session (one per job): a cursor per task, a bounded queue of results
   ▲  TCP: handshake → results → trailer, then the listener's acknowledgement
   │
-Spider search task (one per archive) ─ clp-s s <archive> <query> network --host --port
-  ▲                                         --session-token --task-index
+Spider query task (one per archive) ─ clp-s s <archive> <query> network --host --port
+  ▲                                        --session-token --task-index
 query-coordinator: builds one task per archive and gives each task a fixed index
 ```
 
 **Submitting a job.** The caller opens a listener session first, which creates a random session
-token. It then inserts the search job with a network output: the listener's address and the
+token. It then inserts the query job with a network output: the listener's address and the
 token. The `query-coordinator` creates one Spider task per archive and gives each task a fixed
 index (its position in the list of archives). Spider stores the task graph, so a rerun of a task
 gets the same index.
@@ -120,17 +120,21 @@ The work lands as seven pull requests against `main`. Sizes are rough estimates,
 Depends on: nothing. Size: about 400 lines.
 
 * `NetworkOutput { host, port, session_token }`, and a `network_output` field in
-  `SearchJobConfig` replacing the unused `network_address`. The token is a UUID stored as a string,
-  so the Python mirror of the job config and the database see a readable value. Update the Python
-  mirror in `job_orchestration` so the existing search paths keep reading the job config.
+  `QueryJobConfig` (`SearchJobConfig` until #2590 is merged) replacing the unused
+  `network_address`. The token is a UUID stored as a string, so the Python mirror of the job
+  config and the database see a readable value. Update the Python mirror in `job_orchestration`
+  so the existing query paths keep reading the job config.
 * `OutputHandle::Network { host, port, session_token }`, the task's output destination.
 * Move query job submission (`INSERT INTO query_jobs`) from the API server into
   `clp-rust-utils`, so the API server and the CLI share it.
-* A shared helper that requests cancellation of a pending or running job (`CancelRequested`, the
-  state the coordinator's cancellation monitor from #2573 acts on).
-* Package config: `package.scheduler` in the Rust config, and
-  `api_server.search_result_listener` with the listener's `port` (default 3003) and
-  `advertised_host`, in Rust, in Python, and in the config template.
+* Move the cancellation request behind the API server's `Client::cancel_query_job` (a pending or
+  running job becomes `CancelRequested`, which the coordinator's cancellation monitor acts on)
+  into `clp-rust-utils`, so `DELETE /query/{query_job_id}` and a disconnected stream share it. The
+  endpoint keeps its `404` and `409` responses.
+* Package config: `api_server.search_result_listener` with the listener's `port` (default 3003)
+  and `advertised_host`, in Rust, in Python, and in the config template. Nothing else is needed to
+  tell whether the package runs the query coordinator: the Rust config already has the
+  `query_coordinator` section.
 
 ### PR 2. `feat(clp-s)!: Send network search results with a handshake, result indices, timestamps, a trailer and an acknowledgement.`
 
@@ -148,7 +152,7 @@ Depends on: nothing; runs in parallel with PR 1. Size: about 550 lines, includin
 * A Catch2 test with a local socket covering the messages, the trailer, a correct, malformed or
   mismatched acknowledgement, and a listener that closes the connection early.
 
-### PR 3. `feat(query-coordinator): Send search results to a job's network output through the Spider search tasks.`
+### PR 3. `feat(query-coordinator): Send search results to a job's network output through the Spider query tasks.`
 
 Depends on: PR 1. Size: about 600 lines.
 
@@ -156,7 +160,7 @@ Depends on: PR 1. Size: about 600 lines.
   cache.
 * Reject a job that sets both a network output and `max_num_results`.
 * Add each task's index to the Spider task graph as a per-task input.
-* In the Spider search task, accept the network output and the index, and build the `clp-s`
+* In the Spider query task (`query::clp_s_search`), accept the network output and the index, and build the `clp-s`
   command line for it.
 * Tests: the command line, the task inputs, and the output selection.
 
@@ -190,8 +194,8 @@ Depends on: PR 4a. Size: about 3,500 lines, about 2,000 of them tests.
 
 Depends on: PR 1 and PR 4b. Size: about 1,800 lines, most of them tests.
 
-* Start the listener with the API server when the package runs the Spider scheduler; otherwise the
-  endpoint answers 501.
+* Start the listener with the API server when the package runs the query coordinator (its config
+  has a `query_coordinator` section); otherwise the endpoint answers 501.
 * Check the request before creating a job: a non-empty query, a valid time range, no
   `max_num_results`, no MongoDB buffering, no count-by-time, valid dataset names.
 * The response is an SSE stream: a `job` event with the job ID, one event per result
@@ -253,8 +257,8 @@ as the PR it depends on is up for review, and rebased when that one merges.
 
 * The `network` output of `clp-s` uses the new protocol and waits for an acknowledgement, so
   programs that read the old format can no longer use it. This includes `sbin/search.sh` on the
-  Celery query path. PR 2's title is marked with `!`.
-* `SearchJobConfig.network_address` is replaced by `network_output`. It is an internal field that
+  `query-scheduler` path. PR 2's title is marked with `!`.
+* `QueryJobConfig.network_address` is replaced by `network_output`. It is an internal field that
   nothing reads today.
 
 ## Risks
@@ -262,7 +266,8 @@ as the PR it depends on is up for review, and rebased when that one merges.
 | Risk | Mitigation |
 |---|---|
 | About 7,000 to 8,000 lines to review in two weeks. | Split the listener into two PRs; open PRs early and stack them; reserve a reviewer slot every day. |
-| Other work on the `query-coordinator` and the Spider search task conflicts with PR 3. | Land PR 3 in the first week and keep it small. |
+| Other work on the `query-coordinator` and the Spider query task conflicts with PR 3. | Land PR 3 in the first week and keep it small. |
+| #2590 (renaming `SearchJobConfig` to `QueryJobConfig`) is still open and touches the same files as PR 1, PR 3 and PR 5. | Base PR 1 on it, or rebase once it merges; the rename is mechanical. |
 | The C++ build and tests make PR 2 slow to iterate on. | Start PR 2 on day 1, in parallel with the Rust work. |
 
 ## Open questions
@@ -290,7 +295,7 @@ Each PR runs the repository's checks: `task lint:check-rust`, `cargo nextest run
 and, for PR 2, the C++ build and the `clp_s` unit tests. Before PR 4b and PR 5 merge, the
 listener's test against a real `clp-s` runs locally.
 
-End-to-end tests, run on a package deployed with the Spider scheduler, first on a branch that
+End-to-end tests, run on a package deployed with the query coordinator, first on a branch that
 combines all PRs (day 7) and then on `main` (day 9):
 
 | Test | Passes when |
