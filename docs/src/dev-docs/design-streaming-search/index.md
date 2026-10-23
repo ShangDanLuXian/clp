@@ -55,6 +55,13 @@ The Rust reader prototype and V3
 ^^^
 What of the in-process Rust reader is on this branch, where it attaches, and what to settle.
 :::
+
+:::{grid-item-card}
+:link: implementation-plan
+Implementation plan
+^^^
+The two-week plan: the PR breakdown, schedule, known limitations and validation gates.
+:::
 ::::
 
 :::{toctree}
@@ -65,4 +72,5 @@ issues
 backpressure
 reproduction
 rust-reader
+implementation-plan
 :::
