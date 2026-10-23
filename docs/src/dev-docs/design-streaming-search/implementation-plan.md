@@ -177,7 +177,7 @@ Depends on: PR 1. Size: about 800 lines.
 
 ### PR 4b. `feat(search-result-listener): Add the listener that delivers each search result exactly once.`
 
-Depends on: PR 4a. Size: about 3,500 lines, about 2,000 of them tests.
+Depends on: PR 4a. Size: about 2,500 lines, about 1,000 of them tests.
 
 * `ResultListener` (the TCP listener, shared by all jobs in a process), `Session` (one per job),
   and the per-connection task.
@@ -186,9 +186,11 @@ Depends on: PR 4a. Size: about 3,500 lines, about 2,000 of them tests.
   limit for a new connection to send its handshake.
 * A job-status source that polls the database, behind a trait so callers and tests can supply
   their own.
-* Integration tests over real TCP: overlapping attempts of one task, reruns, protocol errors,
-  slow clients, shutdown, client disconnects and the acknowledgement cases; plus a test against a
-  real `clp-s` binary that runs when `CLP_S_BINARY` is set.
+* Unit tests in the crate's modules, with no separate integration tests. The connection task is
+  written against `AsyncRead + AsyncWrite`, so its tests drive it through an in-memory stream
+  (`tokio::io::duplex`) instead of real sockets. They cover overlapping attempts of one task,
+  reruns, protocol errors, a slow consumer, the shutdown sequence, a dropped result stream, and
+  the acknowledgement cases; the session tests use a fake job-status source.
 
 ### PR 5. `feat(api-server): Add POST /query/stream to run a search and stream its results as Server-Sent Events.`
 
@@ -292,8 +294,7 @@ as the PR it depends on is up for review, and rebased when that one merges.
 Planned.
 
 Each PR runs the repository's checks: `task lint:check-rust`, `cargo nextest run --workspace`,
-and, for PR 2, the C++ build and the `clp_s` unit tests. Before PR 4b and PR 5 merge, the
-listener's test against a real `clp-s` runs locally.
+and, for PR 2, the C++ build and the `clp_s` unit tests.
 
 End-to-end tests, run on a package deployed with the query coordinator, first on a branch that
 combines all PRs (day 7) and then on `main` (day 9):
