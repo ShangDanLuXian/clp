@@ -113,32 +113,29 @@ caller cancels the job.
 
 ## Work breakdown
 
-The work lands as seven pull requests against `main`. Sizes are rough estimates, including tests.
+The work lands as fifteen small pull requests against `main`. Each one:
 
-### PR 1. `feat(clp-rust-utils): Add network output types for streaming search; share query job submission and cancellation requests.`
+* has a single purpose and makes sense on its own;
+* builds, passes the repository's checks, and leaves `main` working;
+* carries unit tests for the code it adds;
+* updates the docs for anything user-facing it adds.
 
-Depends on: nothing. Size: about 400 lines.
+Sizes are rough estimates including tests, and exclude generated files.
 
-* `NetworkOutput { host, port, session_token }`, and a `network_output` field in
-  `QueryJobConfig` (`SearchJobConfig` until #2590 is merged) replacing the unused
-  `network_address`. The token is a UUID stored as a string, so the Python mirror of the job
-  config and the database see a readable value. Update the Python mirror in `job_orchestration`
-  so the existing query paths keep reading the job config.
-* `OutputHandle::Network { host, port, session_token }`, the task's output destination.
-* Move query job submission (`INSERT INTO query_jobs`) from the API server into
-  `clp-rust-utils`, so the API server and the CLI share it.
-* Move the cancellation request behind the API server's `Client::cancel_query_job` (a pending or
-  running job becomes `CancelRequested`, which the coordinator's cancellation monitor acts on)
-  into `clp-rust-utils`, so `DELETE /query/{query_job_id}` and a disconnected stream share it. The
-  endpoint keeps its `404` and `409` responses.
-* Package config: `api_server.search_result_listener` with the listener's `port` (default 3003)
-  and `advertised_host`, in Rust, in Python, and in the config template. Nothing else is needed to
-  tell whether the package runs the query coordinator: the Rust config already has the
-  `query_coordinator` section.
+### `clp-s`
 
-### PR 2. `feat(clp-s)!: Send network search results with a handshake, result indices, timestamps, a trailer and an acknowledgement.`
+#### PR 1. `fix(clp): Retry partial and interrupted sends, and don't raise SIGPIPE when the peer has closed the connection.`
 
-Depends on: nothing; runs in parallel with PR 1. Size: about 550 lines, including a Catch2 test.
+Depends on: nothing. Size: about 60 lines.
+
+* `clp::networking::try_send` loops until the whole buffer is written, retries `EINTR`, and passes
+  `MSG_NOSIGNAL` so a closed connection returns an error instead of killing the process. The
+  reducer and `clo` use the same function and benefit too.
+* Unit tests over a socket pair.
+
+#### PR 2. `feat(clp-s)!: Send network search results with a handshake, result indices, timestamps, a trailer and an acknowledgement.`
+
+Depends on: PR 1. Size: about 550 lines, about 350 of them tests.
 
 * `clp-s s ... network` requires `--session-token` and `--task-index`, and accepts a single
   archive.
@@ -147,113 +144,188 @@ Depends on: nothing; runs in parallel with PR 1. Size: about 550 lines, includin
 * In the output handler's `finish()` step, which runs after the search, send the trailer, stop
   writing, wait for the acknowledgement, check it, and close. Any failure makes the search fail
   and `clp-s` exit with an error.
-* Make sending robust: retry partial writes and interrupted calls, and don't let a closed
-  connection kill the process with `SIGPIPE`.
-* A Catch2 test with a local socket covering the messages, the trailer, a correct, malformed or
-  mismatched acknowledgement, and a listener that closes the connection early.
+* Catch2 unit tests over a socket pair: the messages, the trailer, a correct, malformed or
+  mismatched acknowledgement, and a peer that closes early.
 
-### PR 3. `feat(query-coordinator): Send search results to a job's network output through the Spider query tasks.`
+### Shared Rust types
 
-Depends on: PR 1. Size: about 600 lines.
+#### PR 3. `feat(clp-rust-utils): Add the network output of a query job.`
+
+Depends on: nothing. Size: about 250 lines.
+
+* `NetworkOutput { host, port, session_token }`, and a `network_output` field in
+  `QueryJobConfig` (`SearchJobConfig` until #2590 is merged) replacing the unused
+  `network_address`. The token is a UUID stored as a string, so the Python mirror of the job
+  config and the database see a readable value. Update the Python mirror in `job_orchestration`.
+* `OutputHandle::Network { host, port, session_token }`, the task's output destination.
+* Unit tests: serialization round trips and the field names the Python mirror expects.
+
+#### PR 4. `refactor(clp-rust-utils): Move query job submission and the cancellation request out of the API server.`
+
+Depends on: nothing. Size: about 200 lines.
+
+* Move `INSERT INTO query_jobs` and the cancellation request behind `Client::cancel_query_job` (a
+  pending or running job becomes `CancelRequested`) from the API server into `clp-rust-utils`, so
+  the streaming endpoint and the CLI can reuse them.
+* No behavior change: `DELETE /query/{query_job_id}` keeps its `404` and `409` responses, and the
+  API server's existing tests cover it.
+
+### `query-coordinator` and the Spider query task
+
+#### PR 5. `feat(query-coordinator): Pass each query task its index within the job.`
+
+Depends on: nothing. Size: about 250 lines.
+
+* Add each task's index (its position in the list of archives) to the Spider task graph as a
+  per-task input, and accept it in the Spider query task (`query::clp_s_search`). The coordinator
+  and the task change together, because the task's input list must match the graph.
+* Spider stores the graph, so a rerun of a task gets the same index.
+* Unit tests: the graph's per-task inputs.
+
+#### PR 6. `feat(query-coordinator): Send a query job's results to its network output.`
+
+Depends on: PR 2, PR 3 and PR 5. Size: about 350 lines.
 
 * Choose each job's output from its config: the network output if set, otherwise the results
-  cache.
-* Reject a job that sets both a network output and `max_num_results`.
-* Add each task's index to the Spider task graph as a per-task input.
-* In the Spider query task (`query::clp_s_search`), accept the network output and the index, and build the `clp-s`
-  command line for it.
-* Tests: the command line, the task inputs, and the output selection.
+  cache. Reject a job that sets both a network output and `max_num_results`.
+* In the Spider query task, build the `clp-s` command line for the network output.
+* Unit tests: the output selection, the rejection, and the command line.
 
-### PR 4a. `feat(search-result-listener): Add the wire protocol decoder and the per-task result cursor.`
+### `search-result-listener`
 
-Depends on: PR 1. Size: about 800 lines.
+#### PR 7. `feat(search-result-listener): Add the crate with the wire protocol.`
 
-* A new crate, `components/search-result-listener`, starting with the parts that do no I/O:
-  decoding the handshake, result and trailer messages, encoding the acknowledgement, and the
-  per-task cursor.
-* Clear protocol errors: unknown session, archive ID that doesn't match the task, unexpected
-  result index, count mismatch, data after the trailer, unsupported version, malformed message.
-* Unit tests for the decoder and the cursor, including cut-off messages and out-of-range values.
+Depends on: PR 3. Size: about 600 lines.
 
-### PR 4b. `feat(search-result-listener): Add the listener that delivers each search result exactly once.`
+* A new crate, `components/search-result-listener`, with no I/O yet: decoding the handshake,
+  result and trailer messages, encoding the acknowledgement, and the protocol errors (unsupported
+  version, malformed message, unexpected result index, count mismatch, data after the trailer).
+* Workspace member, CI path filter.
+* Unit tests, including cut-off messages and out-of-range values.
 
-Depends on: PR 4a. Size: about 2,500 lines, about 1,000 of them tests.
+#### PR 8. `feat(search-result-listener): Add the per-task result cursor and the result encodings.`
 
-* `ResultListener` (the TCP listener, shared by all jobs in a process), `Session` (one per job),
-  and the per-connection task.
-* A pluggable output format (`ResultEncoding`), so each caller receives ready-to-send batches.
-* The acknowledgement rules, the shutdown sequence described under "How it works", and a 10 s
-  limit for a new connection to send its handshake.
-* A job-status source that polls the database, behind a trait so callers and tests can supply
-  their own.
-* Unit tests in the crate's modules, with no separate integration tests. The connection task is
-  written against `AsyncRead + AsyncWrite`, so its tests drive it through an in-memory stream
-  (`tokio::io::duplex`) instead of real sockets. They cover overlapping attempts of one task,
-  reruns, protocol errors, a slow consumer, the shutdown sequence, a dropped result stream, and
-  the acknowledgement cases; the session tests use a fake job-status source.
+Depends on: PR 7. Size: about 300 lines.
 
-### PR 5. `feat(api-server): Add POST /query/stream to run a search and stream its results as Server-Sent Events.`
+* `TaskCursor`: the next undelivered index of a task, advanced with one atomic compare-and-swap.
+* `ResultEncoding` and `ResultEncoder`, the pluggable output format, and `SearchResultEncoding`,
+  which yields plain results.
+* Unit tests: claiming and dropping duplicates from concurrent claimers; encoding batches.
 
-Depends on: PR 1 and PR 4b. Size: about 1,800 lines, most of them tests.
+#### PR 9. `feat(search-result-listener): Add the connection handler.`
 
+Depends on: PR 8. Size: about 650 lines, about 350 of them tests.
+
+* The per-connection logic: read the handshake, check the archive ID against the task's cursor,
+  claim and encode the results of each read, send one batch per read, check the trailer, and
+  acknowledge after the last batch has been handed on.
+* Written against `AsyncRead + AsyncWrite`, so the unit tests drive it through an in-memory stream
+  (`tokio::io::duplex`): two attempts of one task, a rerun, each protocol error, a connection that
+  ends before its trailer, and a slow consumer.
+
+#### PR 10. `feat(search-result-listener): Add the TCP listener and its session registry.`
+
+Depends on: PR 9. Size: about 450 lines.
+
+* `ResultListener`: binds the socket, accepts connections, gives each one 10 s to send its
+  handshake, and routes it to its session by token. Unknown tokens are rejected.
+* `Session` creation and registration: a new session gets a random token and a bounded batch
+  queue, and is registered before its job is submitted.
+* Unit tests: routing, unknown tokens, the handshake time limit, several sessions on one listener.
+
+#### PR 11. `feat(search-result-listener): Finish a session once its query job terminates.`
+
+Depends on: PR 10. Size: about 550 lines.
+
+* `JobStatusSource`, a trait that reports a job's status, and its database implementation, polled
+  every 100 ms.
+* The shutdown sequence: accept connections that are already waiting, unregister the session,
+  let open connections finish within the grace period, close the queue, and report the final
+  status and statistics. When the client has gone, keep reading and drop the results so tasks
+  still succeed.
+* Unit tests with a fake status source: each step of the shutdown, the grace period, the
+  statistics, and a dropped result stream.
+
+### API server
+
+#### PR 12. `feat(api-server): Add a Server-Sent Events encoding for streamed results.`
+
+Depends on: PR 8. Size: about 400 lines.
+
+* `SseEncoding`, which turns results into ready-to-send `data:` events, and a response type that
+  forwards the batches and sends a keep-alive comment after 15 s without an event.
+* Unit tests: the events match axum's own SSE rendering byte for byte, including escaping; the
+  keep-alive timing.
+
+#### PR 13. `feat(api-server): Validate streaming query requests.`
+
+Depends on: PR 3. Size: about 250 lines.
+
+* Turn a `QueryConfig` into a streaming query job config, rejecting what streaming doesn't
+  support: an empty query, an invalid time range, `max_num_results`, MongoDB buffering,
+  count-by-time, invalid dataset names.
+* Unit tests for each rule.
+
+#### PR 14. `feat(api-server): Add POST /query/stream to run a query and stream its results as Server-Sent Events.`
+
+Depends on: PR 4, PR 6, PR 11, PR 12 and PR 13. Size: about 700 lines.
+
+* Config: `api_server.search_result_listener` with the listener's `port` (default 3003) and
+  `advertised_host`, in Rust, in Python, and in the config template. The advertised host defaults
+  to the API server's container hostname, so workers reach it without extra configuration.
 * Start the listener with the API server when the package runs the query coordinator (its config
   has a `query_coordinator` section); otherwise the endpoint answers 501.
-* Check the request before creating a job: a non-empty query, a valid time range, no
-  `max_num_results`, no MongoDB buffering, no count-by-time, valid dataset names.
-* The response is an SSE stream: a `job` event with the job ID, one event per result
-  (`archive_id`, `timestamp`, `message`), and a final `end` event with the status and the
-  statistics, or an `error` event if the job's status can't be determined.
-* If the client disconnects before the `end` event, request the job's cancellation.
-* Default the listener's advertised host to the API server's container hostname, so workers can
-  reach it without extra configuration.
-* Regenerate the OpenAPI document and the web UI's API client.
+* The handler: validate, open a session, submit the job, and stream a `job` event, one event per
+  result, and a final `end` event (status and statistics) or `error` event. If the client
+  disconnects before `end`, request the job's cancellation.
+* Regenerate the OpenAPI document and the web UI's API client; document the endpoint in the API
+  server guide.
+* Unit tests with an in-memory query job table: the events, 501, validation errors, and
+  cancellation on disconnect.
 
-### PR 6. `feat(clp-package): Add sbin/streaming-search.sh.`
+### CLI
 
-Depends on: PR 5. Size: about 300 lines.
+#### PR 15. `feat(clp-package): Add sbin/streaming-search.sh.`
+
+Depends on: PR 14. Size: about 300 lines.
 
 * A small Rust command-line client of `POST /query/stream`. It takes the same arguments as
   `sbin/search.sh` without the aggregation options, prints each result (`--raw` prints only the
   message; otherwise the archive ID and timestamp come first), and exits with 0 only if the job
-  succeeded.
-* Pressing Ctrl-C closes the stream, which cancels the job.
-
-### PR 7. `docs: Document streaming search.`
-
-Depends on: PR 5 and PR 6.
-
-* The API server guide: the request, the events, and what streaming search doesn't support.
-* The CLI usage.
-* Comments for `api_server.search_result_listener` in the config template.
+  succeeded. Pressing Ctrl-C closes the stream, which cancels the job.
+* Document the tool.
+* Unit tests: argument parsing and output formatting.
 
 ## Order of work
 
+PR 1, PR 3, PR 4 and PR 5 depend on nothing and start on day 1. The longest chain runs through
+the listener:
+
 ```text
-PR 1 ──┬── PR 3
-       └── PR 4a ── PR 4b ── PR 5 ── PR 6 ── PR 7
-PR 2 (in parallel)
+PR 3 → PR 7 → PR 8 → PR 9 → PR 10 → PR 11 → PR 14 → PR 15
 ```
 
-The longest chain is PR 1 → PR 4a → PR 4b → PR 5 → PR 6. PR 2 and PR 3 run alongside it and must
-be merged before the end-to-end testing in week 2.
+Everything else runs alongside it: `clp-s` (PR 1 → PR 2) and the coordinator (PR 5 → PR 6) feed
+into PR 14 through PR 6; PR 12 needs only PR 8; PR 13 needs only PR 3.
 
 ## Schedule
 
-| Day | Date | Rust track | C++ and coordinator track | Milestone |
+| Day | Date | Engineer A: listener | Engineer B: `clp-s`, coordinator, API server | Milestone |
 |---|---|---|---|---|
-| 1 | Mon 10-26 | Settle the open questions. Open PR 1. Start PR 4a. | Start PR 2. | |
-| 2 | Tue 10-27 | Review PR 1. Open PR 4a. | Finish PR 2. | |
-| 3 | Wed 10-28 | Merge PR 1. Start PR 4b. | Open PR 2 and PR 3. | PR 1 merged |
-| 4 | Thu 10-29 | Open PR 4b. | Review PR 2 and PR 3. | |
-| 5 | Fri 10-30 | Merge PR 4a. Start PR 5. | Merge PR 2 and PR 3. Build a package with all open PRs and run a first end-to-end check. | Task side merged |
-| 6 | Mon 11-02 | Review PR 4b. Open PR 5. | Prepare the end-to-end tests. | |
-| 7 | Tue 11-03 | Merge PR 4b. Open PR 6. | Run the end-to-end tests on the combined branch. | Listener merged |
-| 8 | Wed 11-04 | Review and merge PR 5. | Fix what the tests found. | API merged |
-| 9 | Thu 11-05 | Merge PR 6. Write PR 7. | Run the end-to-end tests on `main`. | Feature complete |
+| 1 | Mon 10-26 | Settle the open questions. PR 3, PR 7. | PR 1, PR 5. | |
+| 2 | Tue 10-27 | PR 8. | PR 2, PR 4. | PR 3 merged |
+| 3 | Wed 10-28 | PR 9. | PR 2 review, PR 13. | |
+| 4 | Thu 10-29 | PR 9 review. | PR 6, PR 12. | `clp-s` merged |
+| 5 | Fri 10-30 | PR 10. | PR 6 and PR 12 review. | Coordinator merged |
+| 6 | Mon 11-02 | PR 10 review, PR 11. | PR 14. | |
+| 7 | Tue 11-03 | PR 11 review. | PR 14. | Listener merged |
+| 8 | Wed 11-04 | Review PR 14. | PR 14 review, PR 15. | API merged |
+| 9 | Thu 11-05 | Review PR 15. | PR 15 review. | Feature complete |
 | 10 | Fri 11-06 | Spare day for review follow-ups and release notes. | | Done |
 
-The schedule assumes two engineers and a reviewer available every day. Each PR is opened as soon
-as the PR it depends on is up for review, and rebased when that one merges.
+A PR named on a day is opened that day; it merges once reviewed, usually the next day. Each PR
+is opened as soon as the PR it depends on is up for review, and rebased when that one merges. The
+schedule assumes a reviewer available every day.
 
 ## Breaking changes
 
@@ -267,10 +339,10 @@ as the PR it depends on is up for review, and rebased when that one merges.
 
 | Risk | Mitigation |
 |---|---|
-| About 7,000 lines to review in two weeks. | Split the listener into two PRs; open PRs early and stack them; reserve a reviewer slot every day. |
-| Other work on the `query-coordinator` and the Spider query task conflicts with PR 3. | Land PR 3 in the first week and keep it small. |
-| #2590 (renaming `SearchJobConfig` to `QueryJobConfig`) is still open and touches the same files as PR 1, PR 3 and PR 5. | Base PR 1 on it, or rebase once it merges; the rename is mechanical. |
-| The C++ build and tests make PR 2 slow to iterate on. | Start PR 2 on day 1, in parallel with the Rust work. |
+| Fifteen PRs to review in two weeks. | Each PR is small and single-purpose; open them early and stack them; reserve a reviewer slot every day. |
+| Other work on the `query-coordinator` and the Spider query task conflicts with PR 5 and PR 6. | Land both in the first week. |
+| #2590 (renaming `SearchJobConfig` to `QueryJobConfig`) is still open and touches the same files as PR 3, PR 6 and PR 13. | Base PR 3 on it, or rebase once it merges; the rename is mechanical. |
+| The C++ build makes PR 1 and PR 2 slow to iterate on. | Start them on day 1, in parallel with the Rust work. |
 
 ## Open questions
 
@@ -285,27 +357,13 @@ as the PR it depends on is up for review, and rebased when that one merges.
 
 * [ ] The PRs satisfy the [contribution guidelines][yscope-contrib-guidelines].
 * [ ] Breaking changes are indicated in the PR titles (PR 2).
-* [ ] Necessary docs have been updated (PR 7).
+* [ ] Each user-facing PR updates its docs (PR 14, PR 15).
 * [ ] The open questions are answered in the tracking issue.
-* [ ] Every end-to-end test below passes on `main` after the last merge.
 
 # Validation performed
 
-Planned.
-
-Each PR runs the repository's checks: `task lint:check-rust`, `cargo nextest run --workspace`,
-and, for PR 2, the C++ build and the `clp_s` unit tests.
-
-End-to-end tests, run on a package deployed with the query coordinator, first on a branch that
-combines all PRs (day 7) and then on `main` (day 9):
-
-| Test | Passes when |
-|---|---|
-| The same query through `POST /query/stream` (3 times), through the results cache, and with `clp-s` directly | All five result sets are identical |
-| Kill the running `clp-s` processes twice during a streaming search | The results are identical to `clp-s`'s own results, some duplicates were dropped, and the job succeeds |
-| A slow client (`curl --limit-rate 40M`) while a worker is killed | No results are missing in 3 runs, and the job succeeds |
-| The client disconnects after the first result | The job is cancelled within about a second, and its Spider tasks stop |
-| The client disconnects before the job starts | The job ends as cancelled |
-| Time to the first result | Recorded; well below the time to the first result through the results cache |
+Planned. Each PR is validated by the repository's checks (`task lint:check-rust`,
+`cargo nextest run --workspace`, and the C++ build and `clp_s` unit tests for PR 1 and PR 2) and by
+the unit tests it adds. No integration or end-to-end tests are planned.
 
 [yscope-contrib-guidelines]: https://docs.yscope.com/dev-guide/contrib-guides-overview.html
