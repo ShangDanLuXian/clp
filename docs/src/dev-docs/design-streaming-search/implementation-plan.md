@@ -1,375 +1,305 @@
-# Implementation plan: streaming search on Spider
+# Streaming search: implementation plan
 
-Suggested tracking PR title:
+Tracking PR title:
 
 ```text
-feat(query-coordinator)!: Stream search results from Spider search tasks to the API server and the CLI (implementation plan).
+feat(clp-package)!: Stream search results from Spider search tasks to the API server and the CLI.
 ```
 
-Target: two weeks, Monday 2026-10-26 to Friday 2026-11-06.
+Timeline: two weeks, Monday 2026-10-26 to Friday 2026-11-06.
 
 # Description
 
 ## Summary
 
-Ship streaming search on the Spider query path. A search job's tasks stream their results over
-TCP to a listener in the API server (`POST /query/stream`, Server-Sent Events) or in the
-`sbin/streaming-search.sh` tool. Each result is delivered exactly once per task, even when Spider
-reruns tasks. A task succeeds only after the listener acknowledges that it holds all of the task's
-results (protocol v2).
+Today a search job on Spider writes its results to the results cache (MongoDB), and a client can
+read them only after the whole job has finished. This work adds **streaming search**: the job's
+search tasks send their results over TCP to a listener in the caller as they find them, and the
+caller forwards them to the client immediately.
 
-The work lands as seven PRs against `y-scope/clp` `main`.
+Two callers use it:
 
-A complete reference implementation exists: `LinZhihao-723/clp` branch
-`query-coordinator/streaming-search-api` at `63927f0`, which now includes protocol v2 (`63927f0`)
-and the batch encoding (`4cc49f1`), about 8,700 lines including tests. It is a **reference, not a
-port source**: it sits on the pre-squash base of #2554 (`ab2e560`), so it predates `main`'s
-#2561, #2565, #2567 and #2573 and the error-code `OutputHandler` interface, and its code structure
-is not the one the PRs should have. Each PR below names the reference files to read and the
-places where `main` differs. This branch carries the reference's protocol v1 state merged onto
-`main` (see [reproduction](reproduction.md)), which shows how those differences resolve.
+* the API server, through a new `POST /query/stream` endpoint that answers with Server-Sent
+  Events;
+* the `sbin/streaming-search.sh` command-line tool.
 
-References:
-
-* The design doc (revised 2026-10-21: protocol v2 and result encoding) and its summary,
-  [design-summary](design-summary.md).
-* The review, [issues](issues.md), and the measurements behind it,
-  [backpressure](backpressure.md) and [reproduction](reproduction.md).
-* The prototype reports (CLI, API server integration, Rust reader integration and scaling).
+Spider reruns failed tasks, so a task's results can arrive more than once. The listener delivers
+each result to the client exactly once, and a task counts as successful only after the listener
+confirms that it has received all of the task's results.
 
 ## Scope
 
 In scope:
 
-* Protocol v2 in the C++ `clp-s` `network` output handler: session handshake, per-task result
-  indices, timestamps, lazy connect, trailer, acknowledgement.
-* Network output through the `query-coordinator` and the TDL search task, with a persisted task
-  index per task.
-* The `search-result-listener` library: exactly-once delivery, acknowledgement, batch encoding,
-  shutdown and drain, discard mode.
-* `POST /query/stream` in the API server, with cancellation on client disconnect through main's
-  `CancelRequested` (#2573).
-* `sbin/streaming-search.sh` (its shape is decision D1).
-* Docs and the package config template.
+* the `network` output of `clp-s`, which each search task uses to send its results;
+* the `query-coordinator` and the Spider search task, which pass the network destination to each
+  task;
+* a new Rust library, `search-result-listener`, that receives and deduplicates the results;
+* `POST /query/stream` in the API server, including cancelling the job when the client
+  disconnects;
+* `sbin/streaming-search.sh`;
+* user docs and the package config template.
 
-Out of scope, by decision:
+Out of scope:
 
-* **Celery.** Python is being deprecated. The Celery `sbin/search.sh` network output stops working
-  with the new `clp-s` (see "Breaking changes"). Celery results-cache searches keep working.
-* **Aggregation** (`--count`, `--count-by-time`) on the streaming path.
-* **A retry policy for the job-status poll** (issue 6): a status-source error ends the session and
-  cancels the job. Documented, not fixed.
-* **Backpressure redesign** (issues 1, 4 and 21): documented as a known limitation.
-* **Adversarial clients** (issue 8): the session token is not a security boundary.
-* **The Rust in-process reader (V3).** This milestone streams from the C++ `clp-s`; V3 can follow
-  on the same wire protocol.
-* **Helm.** The Helm chart deploys no `query-coordinator`, so the endpoint answers 501 there.
+* aggregations (`--count`, `--count-by-time`), which stay on the results-cache path;
+* result limits (`max_num_results`) for streaming searches: a streaming search returns every
+  result;
+* the Celery query path and its `sbin/search.sh`;
+* the Helm deployment, which doesn't run the `query-coordinator`; there the endpoint answers 501.
 
-## Assumptions
-
-* `clp-s` is correct and deterministic: single-threaded, schemas in metadata order, rows in
-  order. Position-based deduplication relies on this (issue 3); it is a precondition, not
-  something this work verifies.
-* One search engine per deployment (issue 22).
-* The internal network between workers and the listener is trusted.
-
-## Architecture recap
+## How it works
 
 ```text
-caller: API server (POST /query/stream) or streaming-search tool
-  ResultListener (one per process) ── Session (one per job: cursors, bounded batch channel)
-        ▲  TCP, protocol v2: handshake → results → trailer ← acknowledgement
-  Spider search task ── clp-s s ... network --host --port --session-token --task-index
-        ▲
-  query-coordinator: one task per archive, task_index = position in archives_to_search,
-                     OutputHandle::Network from the job's network_output
+client
+  │  POST /query/stream (SSE), or sbin/streaming-search.sh
+  ▼
+API server ─ ResultListener (one per process)
+               └─ Session (one per job): a cursor per task, a bounded queue of results
+  ▲  TCP: handshake → results → trailer, then the listener's acknowledgement
+  │
+Spider search task (one per archive) ─ clp-s s <archive> <query> network --host --port
+  ▲                                         --session-token --task-index
+query-coordinator: builds one task per archive and gives each task a fixed index
 ```
+
+**Submitting a job.** The caller opens a listener session first, which creates a random session
+token. It then inserts the search job with a network output: the listener's address and the
+token. The `query-coordinator` creates one Spider task per archive and gives each task a fixed
+index (its position in the list of archives). Spider stores the task graph, so a rerun of a task
+gets the same index.
+
+**Sending results.** Each task runs `clp-s` with a `network` output. `clp-s` connects to the
+listener when it finds its first result, so an archive without results never opens a connection.
+It sends four kinds of messages, each a msgpack array:
+
+| Message | Sent by | Content |
+|---|---|---|
+| Handshake | `clp-s`, once | `[2, session_token, task_index, archive_id]` (2 is the protocol version) |
+| Result | `clp-s`, once per result | `[result_index, timestamp, message]`, with `result_index` counting from 0 |
+| Trailer | `clp-s`, once after the last result | `[num_results]` |
+| Acknowledgement | the listener, once | `[num_results]`, always 10 bytes: `0x91 0xcf` and the count as a big-endian u64 |
+
+After the trailer, `clp-s` stops writing and waits for the acknowledgement. It exits successfully
+only if the acknowledgement arrives and its count matches; otherwise it exits with an error, the
+task fails, and Spider reruns it.
+
+**Exactly once.** For each task, the listener keeps a cursor: the index of the next result it
+hasn't delivered yet. A result with index `r` is delivered only if the cursor is exactly `r`, and
+delivering it moves the cursor to `r + 1` in one atomic step. If the cursor is already past `r`,
+another attempt of the same task has delivered that result, and this copy is dropped. Each
+connection must send its results in order (0, 1, 2, ...), which the listener checks. This relies
+on `clp-s` producing a task's results in the same order on every attempt, which it does: it
+searches on one thread, visits schemas in the order stored in the archive, and reads rows in
+order.
+
+**Acknowledging.** The listener acknowledges a connection only after it has decoded the trailer,
+the connection has sent indices `0` to `N - 1` in order, `N` matches the trailer, and every
+result the connection delivered has been handed to the session's queue. So once every task has
+succeeded, the client has every result.
+
+**Delivering to the client.** Each connection converts the results it delivers into the client's
+final format (SSE events for the API server, output lines for the CLI) and passes them on in
+batches, one batch per socket read. The session's queue is bounded, so a slow client slows the
+connections down instead of growing memory.
+
+**Finishing.** The session polls the job's status every 100 ms. When the job reaches a final
+status, the session stops accepting new connections (after accepting any that are already
+waiting), lets open connections finish within a short grace period, closes the queue, and reports
+the final status and statistics: results delivered, duplicates dropped, connections closed for
+protocol errors, and connections that ended before their trailer. If the client disconnects, the
+session keeps reading the tasks' results and drops them, so the tasks still succeed, and the
+caller cancels the job.
 
 ## Work breakdown
 
-Sizes are measured on the reference at `63927f0`. "Reference" names the files to read; "new"
-marks work the reference does not cover.
-
-Where the reference predates `main` (every PR must follow `main`, not the reference):
-
-| Reference (`63927f0`) | `main` |
-|---|---|
-| `cancel_query_job` sets `Cancelling` directly | #2573: the API requests `CancelRequested`; the coordinator's cancellation monitor cancels the Spider job and moves the job to `Cancelling` and `Cancelled` |
-| `QueryConfig.max_num_results: u32`, 0 meaning "all" | #2567: `Option<NonZeroU32>`; streaming requires it to be omitted |
-| `ClpSQueryOption` built field by field in the job handle | #2561: `ClpSQueryOption::try_from(&SearchJobConfig)` |
-| Coordinator and job-handle code from the pre-squash #2552/#2553/#2564 | The squashed versions on `main`, plus #2565 (unsupported jobs fail) and #2573 (cancellation monitor, a `cancel_query_job` submitter method) |
-| `OutputHandler::write` returns `void` and the network handler throws | `write` returns `ErrorCode`; the network handler must return `ErrorCodeFailureNetwork` instead of throwing |
-| The advertised host defaults through Python's `transform_for_container` | Python is being deprecated (decision D5) |
+The work lands as seven pull requests against `main`. Sizes are rough estimates, including tests.
 
 ### PR 1. `feat(clp-rust-utils): Add network output types for streaming search; share query job submission and cancellation requests.`
 
-Depends on: nothing. Reference: `clp-rust-utils/src/job_config/search.rs`, `task_io/query.rs`,
-`database/mysql.rs`, `clp_config/package/config.rs`.
+Depends on: nothing. Size: about 400 lines.
 
-* `job_config::NetworkOutput { host, port, session_token }` and `SessionToken` (a `Uuid`
-  serialized as a hyphenated string, so Python and the database see a string).
-* `SearchJobConfig.network_address` → `network_output: Option<NetworkOutput>`. Mirror the rename
-  in `job_orchestration/scheduler/job_config.py` and in the Celery task that reads the field, so
-  Celery results-cache searches keep working.
-* `task_io::query::OutputHandle::Network { host, port, session_token }` and `QueryTaskIndex = u64`.
-* `database::mysql::submit_query_job`, moved from `api-server/src/client.rs`.
-* `database::mysql::request_query_job_cancellation`: PENDING/RUNNING → `CancelRequested`, shared by
-  `DELETE /query/{id}` and the streaming disconnect path (new; the reference's `cancel_query_job`
-  predates #2573).
-* Package config: `Package::scheduler` in the Rust mirror (not on `main` yet), and
-  `ApiServer::search_result_listener { port: 3003, advertised_host }`, with the Python mirror and
-  the commented template entry.
-* Tests: serde round trips (msgpack, and against the Python mirror's field names), config defaults.
-* Size: about +350/−20 Rust, +40 Python.
+* `NetworkOutput { host, port, session_token }`, and a `network_output` field in
+  `SearchJobConfig` replacing the unused `network_address`. The token is a UUID stored as a string,
+  so the Python mirror of the job config and the database see a readable value. Update the Python
+  mirror in `job_orchestration` so the existing search paths keep reading the job config.
+* `OutputHandle::Network { host, port, session_token }`, the task's output destination.
+* Move query job submission (`INSERT INTO query_jobs`) from the API server into
+  `clp-rust-utils`, so the API server and the CLI share it.
+* A shared helper that requests cancellation of a pending or running job (`CancelRequested`, the
+  state the coordinator's cancellation monitor from #2573 acts on).
+* Package config: `package.scheduler` in the Rust config, and
+  `api_server.search_result_listener` with the listener's `port` (default 3003) and
+  `advertised_host`, in Rust, in Python, and in the config template.
 
-### PR 2. `feat(clp-s)!: Stream network search results with protocol v2 (session handshake, result indices, timestamps, trailer and acknowledgement).`
+### PR 2. `feat(clp-s)!: Send network search results with a handshake, result indices, timestamps, a trailer and an acknowledgement.`
 
-Depends on: nothing; runs in parallel with PR 1. Reference:
-`core/src/clp_s/OutputHandlerImpl.{hpp,cpp}`, `clp-s.cpp`, `CommandLineArguments.cpp`,
-`clp/networking/socket_utils.cpp`, and the Catch2 test
-`core/src/clp_s/tests/test-clp_s-network_output_handler.cpp`.
+Depends on: nothing; runs in parallel with PR 1. Size: about 550 lines, including a Catch2 test.
 
-* `--session-token` and `--task-index` required for `network` output; more than one input archive
-  rejected.
-* Lazy connect on the first result; handshake `[2, token, task_index, archive_id]`; results
-  `[result_index, timestamp, message]`; metadata output always on.
-* The trailer and acknowledgement live in `NetworkOutputHandler::finish()`, which
-  `Output::filter()` calls after the scan: if a connection was opened, send `[num_results]`,
-  `shutdown(SHUT_WR)`, read exactly 10 bytes (retrying `EINTR`), check `0x91 0xcf` and the count,
-  close. Any failure returns `ErrorCodeFailureNetwork`, so `filter()` fails and `clp-s` exits
-  non-zero. An archive without results never connects, so `finish()` returns success at once.
-* `clp::networking::try_send`: short writes, `EINTR`, `MSG_NOSIGNAL` (shared with the reducer and
-  `clo`).
-* Follow `main`'s error-code `OutputHandler` interface: the reference's `write()` still throws and
-  its `finish()` catches `OperationFailed` from `send_buffer()`; on `main` both return error codes
-  (this branch's port of the v1 handler shows the shape).
-* Tests: the reference's Catch2 test (frames, trailer, correct, malformed, short and mismatched
-  acknowledgements, a peer that closes). It adds `OutputHandlerImpl`, `MongoDBUtils` and
-  `ResultsCacheUtils` to the `clp_s` unit-test sources, which links `mongocxx` into the test
-  binary; a reviewer may prefer splitting the network handler into its own translation unit
-  first. The listener crate's real-`clp-s` test (PR 4b) covers the end-to-end path.
-* Size: about +200/−40 C++ plus about 330 lines of tests.
-* **Breaking:** `sbin/search.sh` in Celery mode can no longer read `clp-s`'s network output.
+* `clp-s s ... network` requires `--session-token` and `--task-index`, and accepts a single
+  archive.
+* Connect when the first result is found; send the handshake and the results as described above;
+  always include each result's timestamp.
+* In the output handler's `finish()` step, which runs after the search, send the trailer, stop
+  writing, wait for the acknowledgement, check it, and close. Any failure makes the search fail
+  and `clp-s` exit with an error.
+* Make sending robust: retry partial writes and interrupted calls, and don't let a closed
+  connection kill the process with `SIGPIPE`.
+* A Catch2 test with a local socket covering the messages, the trailer, a correct, malformed or
+  mismatched acknowledgement, and a listener that closes the connection early.
 
-### PR 3. `feat(query-coordinator): Stream search results to a job's network output through the Spider search tasks.`
+### PR 3. `feat(query-coordinator): Send search results to a job's network output through the Spider search tasks.`
 
-Depends on: PR 1. Reference: `query-coordinator/src/{coordination.rs,job_handle.rs}`,
-`query_job_submitter/spider.rs`, `clp-tdl-package/src/task/query/search.rs`. The reference's
-coordinator is the pre-squash version; apply its change (the output handle per job) to `main`'s
-coordinator, as this branch's merge did.
+Depends on: PR 1. Size: about 600 lines.
 
-* Coordinator: derive the output handle per job from its config (network output or results
-  cache); move the results-cache URI into `QueryJobHandleContext`; fail a job that sets both a
-  network output and `max_num_results` as `UnsupportedJobConfig` (new).
-* Task graph: append each task's index (its position in `archives_to_search`) as a per-task input,
-  declared `int64` in the TDL. Spider persists it, so reruns and a re-attached coordinator reuse it.
-* TDL `query::clp_s_search`: accept `OutputHandle::Network` and the index; build the `clp-s`
-  `network` argv.
-* Optional (decision D4, new): `PR_SET_PDEATHSIG(SIGKILL)` on the spawned `clp-s`, so a hard
-  timeout no longer leaves an orphaned producer (issue 20). Under v2 an orphan also blocks in
-  `finish()` waiting for an acknowledgement until the listener closes its connection.
-* Tests: argv building, input order, handle selection, rejection of `max_num_results`.
-* Size: about +400/−100 coordinator, +200/−35 TDL.
+* Choose each job's output from its config: the network output if set, otherwise the results
+  cache.
+* Reject a job that sets both a network output and `max_num_results`.
+* Add each task's index to the Spider task graph as a per-task input.
+* In the Spider search task, accept the network output and the index, and build the `clp-s`
+  command line for it.
+* Tests: the command line, the task inputs, and the output selection.
 
-### PR 4a. `feat(search-result-listener): Add the protocol v2 decoder and the per-task result cursor.`
+### PR 4a. `feat(search-result-listener): Add the wire protocol decoder and the per-task result cursor.`
 
-Depends on: PR 1. Reference: `search-result-listener/src/{protocol.rs,cursor.rs,error.rs}`.
+Depends on: PR 1. Size: about 800 lines.
 
-* The new crate's pure parts, no I/O: handshake, result and trailer frame decoding (generic
-  integer reads with range checks; version checked before arity; a 1-element array is the
-  trailer; 64-byte cap on handshake strings), the 10-byte acknowledgement encoding, and
-  `TaskCursor` (one compare-and-swap per result; `claim` is infallible and asserts, because each
-  connection checks its own order first).
-* Error taxonomy as in the reference: protocol errors `UnexpectedResultIndex`,
-  `ResultCountMismatch`, `DataAfterTrailer`, `ArchiveIdMismatch`, `UnknownSession`,
-  `UnsupportedVersion`, `MalformedFrame`, invalid UUIDs; connection outcomes `MissingTrailer`,
-  `TruncatedFrame`, `DrainTimedOut`, `HandshakeTimeout`, I/O.
-* Workspace member, `dashmap` workspace dependency, CI path filter.
-* Tests: the protocol and cursor unit tests, including truncated frames and out-of-range integers.
-* Size: about 760 lines including the in-file tests (`protocol.rs` 615, `cursor.rs` 147).
+* A new crate, `components/search-result-listener`, starting with the parts that do no I/O:
+  decoding the handshake, result and trailer messages, encoding the acknowledgement, and the
+  per-task cursor.
+* Clear protocol errors: unknown session, archive ID that doesn't match the task, unexpected
+  result index, count mismatch, data after the trailer, unsupported version, malformed message.
+* Unit tests for the decoder and the cursor, including cut-off messages and out-of-range values.
 
-### PR 4b. `feat(search-result-listener): Add the listener that delivers each streamed search result exactly once and acknowledges complete tasks.`
+### PR 4b. `feat(search-result-listener): Add the listener that delivers each search result exactly once.`
 
-Depends on: PR 4a. Reference: `search-result-listener/src/{connection.rs,session.rs,listener.rs,
-encoding.rs,job_status.rs}` and `tests/{listener.rs,clp_s.rs}`.
+Depends on: PR 4a. Size: about 3,500 lines, about 2,000 of them tests.
 
-* `ResultListener`, `Session`, the connection task, and `JobStatusSource` with its MariaDB
-  implementation.
-* `ResultEncoding` / `ResultEncoder` and `SearchResultEncoding`. Connections encode the results
-  they claim and send one batch per socket read (reads capped at 64 KiB) on a channel bounded in
-  batches (default 16).
-* Per socket read: claim the buffered frames, send the pending batch, *then* surface a protocol
-  error from that read, so results claimed before the error are delivered.
-* Acknowledgement: sent only when the read after the trailer returns EOF (the producer's
-  half-close), which is after the connection's last batch was sent or discarded; so "nothing
-  after the trailer" and "last batch delivered" hold by construction. Otherwise the connection
-  closes without an ack. `MissingTrailer`, `TruncatedFrame`, `DrainTimedOut` and I/O errors count
-  in `num_incomplete_connections`.
-* Shutdown: poll to a terminal status, accept barrier, unregister, drain (zero grace once the job
-  has succeeded, since every task was acknowledged; otherwise grace counted as socket-wait time
-  since the last claim), close the stream, resolve the outcome. Discard mode after the stream is
-  dropped. 10 s handshake timeout.
-* Tests: the TCP integration suite (overlapping attempts, retries, unexpected indices, malformed
-  frames, unknown sessions, slow consumers, the drain rules, discard mode, the acknowledgement
-  cases) and the real-`clp-s` test (ignored unless `CLP_S_BINARY` is set).
-* Size: about 1,500 lines of source and 2,000 lines of tests.
+* `ResultListener` (the TCP listener, shared by all jobs in a process), `Session` (one per job),
+  and the per-connection task.
+* A pluggable output format (`ResultEncoding`), so each caller receives ready-to-send batches.
+* The acknowledgement rules, the shutdown sequence described under "How it works", and a 10 s
+  limit for a new connection to send its handshake.
+* A job-status source that polls the database, behind a trait so callers and tests can supply
+  their own.
+* Integration tests over real TCP: overlapping attempts of one task, reruns, protocol errors,
+  slow clients, shutdown, client disconnects and the acknowledgement cases; plus a test against a
+  real `clp-s` binary that runs when `CLP_S_BINARY` is set.
 
-### PR 5. `feat(api-server): Add POST /query/stream to submit a search and stream its results as Server-Sent Events.`
+### PR 5. `feat(api-server): Add POST /query/stream to run a search and stream its results as Server-Sent Events.`
 
-Depends on: PR 1, PR 4b. Reference: `api-server/src/{sse.rs,streaming_search.rs,routes.rs,
-client.rs}`.
+Depends on: PR 1 and PR 4b. Size: about 1,800 lines, most of them tests.
 
-* Bind the listener at startup in Spider mode only; answer 501 otherwise.
-* `SseEncoding` and `SseResponse`: pre-encoded `data:` events byte-identical to axum's rendering,
-  15 s keep-alive. The reference's oracle tests compare against axum itself.
-* Validation before any insert: non-empty query, `begin <= end`, `max_num_results` omitted, no
-  MongoDB buffering, no count-by-time, valid dataset names.
-* Run the insert and the session in a spawned task (a disconnect during the insert must not orphan
-  the job). Events: `job`, results, then `end` (status, emitted, duplicates dropped, protocol
-  errors, incomplete connections) or `error`.
-* Request cancellation (`CancelRequested`, new) when the stream is dropped before `end`, or when
-  the outcome is an error. `DELETE /query/{id}` uses `main`'s transactional cancel; the reference's
-  direct `Cancelling` update must not come back.
-* `max_num_results` must be omitted (`main`'s `Option<NonZeroU32>`), not "0" as in the reference.
-* Advertised host (decision D5) without the Python `transform_for_container` step.
-* Regenerate the OpenAPI document and the web UI's TypeScript client schema.
-* Tests: the route tests (validation, 501, events, disconnect → cancel, keep-alive, byte identity
-  with axum).
-* Size: `sse.rs` about 300 lines, `streaming_search.rs` about 330, the route handler and tests
-  about 1,200.
+* Start the listener with the API server when the package runs the Spider scheduler; otherwise the
+  endpoint answers 501.
+* Check the request before creating a job: a non-empty query, a valid time range, no
+  `max_num_results`, no MongoDB buffering, no count-by-time, valid dataset names.
+* The response is an SSE stream: a `job` event with the job ID, one event per result
+  (`archive_id`, `timestamp`, `message`), and a final `end` event with the status and the
+  statistics, or an `error` event if the job's status can't be determined.
+* If the client disconnects before the `end` event, request the job's cancellation.
+* Default the listener's advertised host to the API server's container hostname, so workers can
+  reach it without extra configuration.
+* Regenerate the OpenAPI document and the web UI's API client.
 
 ### PR 6. `feat(clp-package): Add sbin/streaming-search.sh.`
 
-Depends on: decision D1.
+Depends on: PR 5. Size: about 300 lines.
 
-* Option A (recommended): a small Rust client of `POST /query/stream`. It needs no listener, no
-  database credentials and no host networking, works wherever the API server is reachable, and
-  Ctrl-C cancels the job by closing the stream. About 250 lines of Rust plus the shell script.
-  Depends on PR 5.
-* Option B: the reference's `clp-streaming-search` (`clp-package-cli`, about 430 lines, with its
-  own `OutputEncoding`), which embeds the listener and is started by a Python wrapper (about 250
-  lines). It keeps a Python layer that is being deprecated, and needs database credentials and
-  host networking. Depends on PR 4b.
-* Either way: `--raw` prints the message only; the default prefixes the archive ID and timestamp
-  (decision D6 for the timestamp format); exit 0 only if the job succeeded.
+* A small Rust command-line client of `POST /query/stream`. It takes the same arguments as
+  `sbin/search.sh` without the aggregation options, prints each result (`--raw` prints only the
+  message; otherwise the archive ID and timestamp come first), and exits with 0 only if the job
+  succeeded.
+* Pressing Ctrl-C closes the stream, which cancels the job.
 
 ### PR 7. `docs: Document streaming search.`
 
-Depends on: PR 5, PR 6.
+Depends on: PR 5 and PR 6.
 
-* User guide: the API section (from the prototype), the CLI, and the known limitations below.
-* Config template comments for `api_server.search_result_listener`.
-* Dev docs: the design, with this branch's review findings that were accepted as limitations.
+* The API server guide: the request, the events, and what streaming search doesn't support.
+* The CLI usage.
+* Comments for `api_server.search_result_listener` in the config template.
 
-## Dependency graph and critical path
+## Order of work
 
 ```text
 PR 1 ──┬── PR 3
-       ├── PR 4a ── PR 4b ──┬── PR 5 ── PR 6 (option A) ── PR 7
-       │                    └── PR 6 (option B)
-PR 2 ──┘ (parallel; needed for package validation)
+       └── PR 4a ── PR 4b ── PR 5 ── PR 6 ── PR 7
+PR 2 (in parallel)
 ```
 
-Critical path: PR 1 → PR 4a → PR 4b → PR 5 → PR 6 → validation. PR 2 and PR 3 run in parallel
-and must be merged before the package validation in week 2.
+The longest chain is PR 1 → PR 4a → PR 4b → PR 5 → PR 6. PR 2 and PR 3 run alongside it and must
+be merged before the end-to-end testing in week 2.
 
 ## Schedule
 
-| Day | Date | Track A (Rust) | Track B (C++ / coordinator) | Milestone |
+| Day | Date | Rust track | C++ and coordinator track | Milestone |
 |---|---|---|---|---|
-| 1 | Mon 10-26 | Decisions D1 and D3-D6. Open PR 1. Start PR 4a. | Start PR 2. | Decisions recorded |
-| 2 | Tue 10-27 | PR 1 review. Open PR 4a. | PR 2: trailer and ack. | |
-| 3 | Wed 10-28 | PR 1 merged. Start PR 4b. | Open PR 2. Open PR 3. | PR 1 merged |
-| 4 | Thu 10-29 | Open PR 4b. | PR 2 and PR 3 review. | |
-| 5 | Fri 10-30 | PR 4a merged. Start PR 5. | PR 2 and PR 3 merged. Build a package from the full stack; harness smoke run. | Producer side merged |
-| 6 | Mon 11-02 | PR 4b review. Open PR 5. | Harness updates (v2 statistics, throttled client). | |
-| 7 | Tue 11-03 | PR 4b merged. Open PR 6. | Full harness run on a Docker host (stack branch). | Listener merged |
-| 8 | Wed 11-04 | PR 5 review and merge. | Fixes from validation. | API merged |
-| 9 | Thu 11-05 | PR 6 merged. PR 7. | Full harness run on `main`. | Feature complete |
-| 10 | Fri 11-06 | Buffer: review follow-ups, release notes. | Buffer. | Done |
+| 1 | Mon 10-26 | Settle the open questions. Open PR 1. Start PR 4a. | Start PR 2. | |
+| 2 | Tue 10-27 | Review PR 1. Open PR 4a. | Finish PR 2. | |
+| 3 | Wed 10-28 | Merge PR 1. Start PR 4b. | Open PR 2 and PR 3. | PR 1 merged |
+| 4 | Thu 10-29 | Open PR 4b. | Review PR 2 and PR 3. | |
+| 5 | Fri 10-30 | Merge PR 4a. Start PR 5. | Merge PR 2 and PR 3. Build a package with all open PRs and run a first end-to-end check. | Task side merged |
+| 6 | Mon 11-02 | Review PR 4b. Open PR 5. | Prepare the end-to-end tests. | |
+| 7 | Tue 11-03 | Merge PR 4b. Open PR 6. | Run the end-to-end tests on the combined branch. | Listener merged |
+| 8 | Wed 11-04 | Review and merge PR 5. | Fix what the tests found. | API merged |
+| 9 | Thu 11-05 | Merge PR 6. Write PR 7. | Run the end-to-end tests on `main`. | Feature complete |
+| 10 | Fri 11-06 | Spare day for review follow-ups and release notes. | | Done |
 
-The schedule assumes two engineers (or one engineer plus the prototype author for review) and a
-reviewer slot every day. PRs are opened as soon as their dependency is up for review, stacked on
-it, and rebased when it merges.
-
-## Known limitations shipped (documented, not fixed)
-
-1. **Slow or stalled clients can fail the job.** Under v2 a task holds its worker slot until the
-   listener has acknowledged its results, so its run time depends on the client's read rate.
-   Spider's hard timeout (60 s + 0.5 s per MiB of the archive) then fails the task, and the job
-   once retries run out. Measured under v1: a 270 s stall failed a job at 160.9 s. Issues 1 and 21.
-2. **A failed job-status poll ends the stream.** The client receives `error` and the job is
-   cancelled. Issue 6.
-3. **With the C++ engine, a hard timeout orphans `clp-s`** unless D4 adds `PR_SET_PDEATHSIG`. The
-   orphan keeps streaming; deduplication keeps the results exact; zombies accumulate until the
-   worker restarts. Issue 20.
-4. No `max_num_results` for streaming searches; no aggregation; Spider only; no Helm; no ordering
-   across archives, nor within an archive when two attempts overlap; a listener crash is not
-   survived.
-5. The session token is not a security boundary.
+The schedule assumes two engineers and a reviewer available every day. Each PR is opened as soon
+as the PR it depends on is up for review, and rebased when that one merges.
 
 ## Breaking changes
 
-* `clp-s`'s `network` output speaks protocol v2 and waits for an acknowledgement. The Celery
-  `sbin/search.sh` (Python) can no longer read it. PR 2's title carries `!`.
-* `SearchJobConfig.network_address` is replaced by `network_output` (internal job config).
+* The `network` output of `clp-s` uses the new protocol and waits for an acknowledgement, so
+  programs that read the old format can no longer use it. This includes `sbin/search.sh` on the
+  Celery query path. PR 2's title is marked with `!`.
+* `SearchJobConfig.network_address` is replaced by `network_output`. It is an internal field that
+  nothing reads today.
 
 ## Risks
 
 | Risk | Mitigation |
 |---|---|
-| Review bandwidth: about 8,700 lines including tests in seven to eight PRs in two weeks (the reference's size). | Split the listener (4a/4b); follow the reference's tested behaviour; open PRs early and stacked; a daily review slot. |
-| The reference predates `main` (cancellation, result limits, `ClpSQueryOption`, the error-code `OutputHandler`), so copying it reintroduces old behaviour. | The table under "Work breakdown" lists each difference; reviewers check against it. This branch's merge onto `main` already resolved each one for protocol v1. |
-| The reference's Catch2 test pulls `mongocxx` into the `clp_s` unit-test binary. | Agree on the test layout in PR 2's review; splitting the network handler into its own translation unit removes the dependency. |
-| Upstream churn in the coordinator and the TDL (cancellation, V3). | Land PR 3 in week 1; keep it small. |
-| C++ build and CI time for PR 2. | Start PR 2 on day 1 in parallel. |
-| Validation only on a single WSL2 host. | The gates are correctness checks, not absolute timings. |
+| About 7,000 to 8,000 lines to review in two weeks. | Split the listener into two PRs; open PRs early and stack them; reserve a reviewer slot every day. |
+| Other work on the `query-coordinator` and the Spider search task conflicts with PR 3. | Land PR 3 in the first week and keep it small. |
+| The C++ build and tests make PR 2 slow to iterate on. | Start PR 2 on day 1, in parallel with the Rust work. |
 
-## Decisions needed on day 1
+## Open questions
 
-| # | Decision | Recommendation |
-|---|---|---|
-| D1 | Shape of `sbin/streaming-search.sh`: an SSE client of the API server, or the embedded listener with a Python wrapper. | The SSE client (Python is being deprecated; no host networking or credentials in the CLI). |
-| D2 | Source of the v2 and encoding code. | Resolved: the reference at `63927f0` includes both; it is a behavioural reference, and each PR is written against `main`. |
-| D3 | Engine for this milestone. | The C++ `clp-s`; V3 later on the same protocol (its adapter needs a v2 network sink). |
-| D4 | `PR_SET_PDEATHSIG` on the spawned `clp-s` in PR 3. | Yes: a few lines, and it removes the orphaned producers. |
-| D5 | Default advertised host for the API server's listener without the Python config transform. | Default to the API server's container hostname (`api_server`) in the Rust config when running in the package. |
-| D6 | CLI timestamp format (design open question 1). | Epoch milliseconds, as the API returns. |
+1. **Shape of `sbin/streaming-search.sh`.** The plan above makes it a client of the API server.
+   The alternative is a tool that runs its own listener, which needs database credentials, a
+   network route from the workers back to the machine running the tool, and the Python wrapper
+   that the other `sbin` scripts use. Settle on day 1.
+2. **Timestamp format in the CLI output.** Epoch milliseconds, as the API returns them, or a
+   formatted date and time.
 
 # Checklist
 
 * [ ] The PRs satisfy the [contribution guidelines][yscope-contrib-guidelines].
-* [ ] Breaking changes are indicated in the PR titles (PR 2), OR the PR isn't breaking.
-* [ ] Necessary docs have been updated (PR 7), OR no docs need to be updated.
-* [ ] Decisions D1 and D3-D6 are recorded in the tracking issue.
-* [ ] Every gate under "Validation performed" passes on `main` after the last merge.
+* [ ] Breaking changes are indicated in the PR titles (PR 2).
+* [ ] Necessary docs have been updated (PR 7).
+* [ ] The open questions are answered in the tracking issue.
+* [ ] Every end-to-end test below passes on `main` after the last merge.
 
 # Validation performed
 
-Planned. Each PR runs the repository's own checks: `task lint:check-rust`, `cargo nextest run
---workspace`, the C++ build and the `clp_s` unit tests (including the network handler's Catch2
-test) for PR 2, and the Python lint for the mirror changes. Before PR 4b and PR 5 merge, the
-real-`clp-s` listener test runs locally with `CLP_S_BINARY` set.
+Planned.
 
-Prior evidence from the reference: its fault test (client throttled to 40 MB/s, 16 workers, two
-workers killed between 1 and 8 s) delivered exactly 1,875,605 results and SUCCEEDED in all 18
-runs under v2, against 19,747 to 26,272 missing results per run under v1; the acknowledgement cost
-about 40 µs per task. The gates below repeat the fault test on the PRs' code.
+Each PR runs the repository's checks: `task lint:check-rust`, `cargo nextest run --workspace`,
+and, for PR 2, the C++ build and the `clp_s` unit tests. Before PR 4b and PR 5 merge, the
+listener's test against a real `clp-s` runs locally.
 
-Package-level validation runs the harness in `tools/scripts/streaming-search-experiments/` on a
-Docker host, first on the stacked branch (day 7) and then on `main` (day 9). Gates:
+End-to-end tests, run on a package deployed with the Spider scheduler, first on a branch that
+combines all PRs (day 7) and then on `main` (day 9):
 
-| Check | Gate |
+| Test | Passes when |
 |---|---|
-| `correctness`: 3 streaming runs and 1 results-cache run against `clp-s`'s own results | Identical result multisets (sha256) in every run |
-| `fault`: SIGKILL every running `clp-s` twice during a stall | Identical results, duplicates dropped > 0, 0 protocol errors, job SUCCEEDED |
-| Throttled client (`curl --limit-rate 40M`) plus a killed worker (the recipe that found the v1 silent loss) | No missing results in 3 runs; job SUCCEEDED; `num_incomplete_connections` > 0 for the killed attempts |
-| `disconnect`: client closes after the first result | `CancelRequested` within 1 s, then `Cancelled`; the Spider job stops and the workers go idle |
-| Client disconnects before the job is dispatched | The job ends `Cancelled` (regression check for the API report's stuck-`CANCELLING` case) |
-| `latency` | Time to first result recorded; well below the results-cache path |
-| `stall` at 40 s and at more than twice the hard timeout | Recorded for the docs; not a gate (known limitation 1) |
-
-Harness changes needed (day 6): read `num_incomplete_connections` from the `end` event, add a
-throttled-client mode, and check that the Spider job is cancelled after a disconnect.
+| The same query through `POST /query/stream` (3 times), through the results cache, and with `clp-s` directly | All five result sets are identical |
+| Kill the running `clp-s` processes twice during a streaming search | The results are identical to `clp-s`'s own results, some duplicates were dropped, and the job succeeds |
+| A slow client (`curl --limit-rate 40M`) while a worker is killed | No results are missing in 3 runs, and the job succeeds |
+| The client disconnects after the first result | The job is cancelled within about a second, and its Spider tasks stop |
+| The client disconnects before the job starts | The job ends as cancelled |
+| Time to the first result | Recorded; well below the time to the first result through the results cache |
 
 [yscope-contrib-guidelines]: https://docs.yscope.com/dev-guide/contrib-guides-overview.html

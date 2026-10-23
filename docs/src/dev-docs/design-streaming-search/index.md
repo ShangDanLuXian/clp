@@ -60,7 +60,7 @@ What of the in-process Rust reader is on this branch, where it attaches, and wha
 :link: implementation-plan
 Implementation plan
 ^^^
-The two-week plan: the PR breakdown, schedule, known limitations and validation gates.
+How streaming search works, and the two-week plan to build it: PRs, schedule and tests.
 :::
 ::::
 
