@@ -1,5 +1,6 @@
 //! Protocol types exchanged with the Spider (Huntsman) tasks that run CLP query jobs.
 
+use std::num::NonZeroU16;
 use std::num::NonZeroU32;
 
 use non_empty_string::NonEmptyString;
@@ -7,6 +8,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::job_config::SearchJobConfig;
+use crate::job_config::SessionToken;
 use crate::types::PositiveI64;
 
 /// `clp-s` options for a query job.
@@ -79,6 +81,16 @@ pub enum OutputHandle {
     #[serde(rename = "results_cache")]
     ResultsCache { uri: NonEmptyString },
 
+    /// A listener, at `host` and `port`, that `clp-s` streams the results to. `clp-s` sends
+    /// `session_token` in its handshake to identify the session that receives them. Not yet
+    /// supported by the Spider query flow.
+    #[serde(rename = "network")]
+    Network {
+        host: NonEmptyString,
+        port: NonZeroU16,
+        session_token: SessionToken,
+    },
+
     /// A file per archive. Not yet supported by the Spider query flow.
     #[serde(rename = "file")]
     File,
@@ -86,6 +98,7 @@ pub enum OutputHandle {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU16;
     use std::num::NonZeroU32;
 
     use non_empty_string::NonEmptyString;
@@ -93,6 +106,7 @@ mod tests {
     use super::ClpSQueryOption;
     use super::OutputHandle;
     use super::QueryOptionError;
+    use crate::job_config::SessionToken;
     use crate::types::PositiveI64;
     use crate::types::non_empty_string::ExpectedNonEmpty;
 
@@ -316,6 +330,32 @@ mod tests {
         };
 
         let serialized = rmp_serde::to_vec(&expected).expect("output handle should serialize");
+        let actual: OutputHandle =
+            rmp_serde::from_slice(&serialized).expect("output handle should deserialize");
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn output_handle_network_round_trips_through_msgpack() {
+        const SESSION_TOKEN: &str = "6f1d3b52-8a4e-4c1b-9f6e-2d7a5c0b9e13";
+
+        let expected = OutputHandle::Network {
+            host: NonEmptyString::from_static_str("10.0.0.7"),
+            port: NonZeroU16::new(40_123).expect("40,123 is nonzero"),
+            session_token: SessionToken::from(
+                uuid::Uuid::parse_str(SESSION_TOKEN).expect("valid session token UUID"),
+            ),
+        };
+
+        // Spider serializes each task input with `rmp_serde::to_vec`.
+        let serialized = rmp_serde::to_vec(&expected).expect("output handle should serialize");
+        let stored: serde_json::Value =
+            rmp_serde::from_slice(&serialized).expect("msgpack should deserialize as a value");
+        assert_eq!(
+            stored,
+            serde_json::json!(["network", "10.0.0.7", 40_123, SESSION_TOKEN])
+        );
         let actual: OutputHandle =
             rmp_serde::from_slice(&serialized).expect("output handle should deserialize");
 
