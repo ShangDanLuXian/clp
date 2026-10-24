@@ -87,7 +87,14 @@ impl From<clp_rust_utils::Error> for ClientError {
             clp_rust_utils::Error::MsgpackEncode(_)
             | clp_rust_utils::Error::MsgpackDecode(_)
             | clp_rust_utils::Error::SerdeYaml(_)
-            | clp_rust_utils::Error::Zstd(_) => Self::MalformedData,
+            | clp_rust_utils::Error::Zstd(_)
+            | clp_rust_utils::Error::InvalidQueryJobStatus(_) => Self::MalformedData,
+            clp_rust_utils::Error::QueryJobNotFound(query_job_id) => {
+                Self::QueryJobNotFound(query_job_id)
+            }
+            clp_rust_utils::Error::QueryJobAlreadyTerminated(query_job_id) => {
+                Self::QueryJobAlreadyTerminated(query_job_id)
+            }
             clp_rust_utils::Error::UnsupportedS3Endpoint(_) => {
                 Self::InvalidInput(value.to_string())
             }

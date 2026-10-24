@@ -2,6 +2,8 @@
 
 use thiserror::Error;
 
+use crate::job_config::QueryJobStatus;
+
 #[derive(Error, Debug)]
 pub enum Error {
     #[error("`rmp_serde::encode::Error`: {0}")]
@@ -21,6 +23,15 @@ pub enum Error {
 
     #[error("`sqlx::Error`: {0}")]
     Sqlx(#[from] sqlx::Error),
+
+    #[error("query job not found: {0}")]
+    QueryJobNotFound(u64),
+
+    #[error("query job already terminated: {0}")]
+    QueryJobAlreadyTerminated(u64),
+
+    #[error("invalid query job status: {0}")]
+    InvalidQueryJobStatus(#[from] num_enum::TryFromPrimitiveError<QueryJobStatus>),
 
     #[error("unsupported S3 endpoint: {0}")]
     UnsupportedS3Endpoint(String),
