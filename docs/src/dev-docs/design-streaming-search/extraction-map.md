@@ -12,6 +12,14 @@ This is our working map from the prototype to the PRs of the
 
 ## Rules for every PR
 
+* **Method.** Start from the prototype's own text: apply its changes to `main` (for example
+  `git diff ab2e5600 63927f0 -- <files> | git apply -3`), resolve conflicts by keeping both sides
+  where they don't overlap, then make only the changes an adjustment below calls for. Don't
+  reword, restyle or add code beyond that. Add a test only where an adjustment changes behavior.
+  Check the result by diffing it against the prototype's changes applied to `main`.
+* **Commits.** Each PR is two commits, the implementation and then its tests. Each one builds and
+  passes the checks on its own. The author and committer are Xuhui Chen
+  `<xuhui.chen@yscope.com>`, and there are no Claude lines in the messages.
 * **Naming.** `search-result-listener` → `query-result-listener`, `search_result_listener` →
   `query_result_listener`, `SearchResult*` → `QueryResult*`, `StreamingSearch*` →
   `StreamingQuery*`, and "search task" → "query task" in docs and logs.
@@ -61,17 +69,24 @@ This is our working map from the prototype to the PRs of the
   * `SO_NOSIGPIPE` where `MSG_NOSIGNAL` is missing, including in the test;
   * golden bytes instead of expected bytes built with the same packer;
   * a failed-connection test.
-* **Status:** branch `streaming-search/clp-s-network-protocol` (`45c1fce`) is this port with these
-  adjustments. Diff it against the prototype once more, then keep it.
+* **Status:** branch `streaming-search/clp-s-network-protocol` (`45c1fce`) is a port in its own
+  words. Redo it by the method above.
 
 ### PR 2. Network output types
 
-* **Take:**
-  * `clp-rust-utils/src/job_config/search.rs:32-38, 51`;
-  * `task_io/query.rs:55`.
-* **Adjust:** `SessionToken` becomes a `#[serde(transparent)]` newtype instead of a `Uuid` alias,
-  so it is a string inside `OutputHandle` too.
-* **Status:** done, on branch `streaming-search/network-output` (`6482927`).
+* **Take** the prototype's changes to `clp-rust-utils/src/job_config/search.rs` and
+  `task_io/query.rs`, including `From<NetworkOutput> for OutputHandle` and their three tests.
+* **Adjust:**
+  * `SessionToken` becomes a `#[serde(transparent)]` newtype instead of a `Uuid` alias, so it is a
+    string inside `OutputHandle` too. It has `From<Uuid>` and `Display`, so the prototype's later
+    code (`session_token.to_string()`, `*session_token`) works unchanged. Code that builds a token
+    from a `Uuid` (PRs 8 and 10) wraps it with `SessionToken::from`.
+  * Leave out `QueryTaskIndex`.
+  * Docs: no Python `NetworkOutput` mirror, and "query tasks".
+  * Tests: `DatasetName` for the datasets, plus one test that the token is text inside
+    `OutputHandle`.
+* **Status:** done, by the method above, on branch `streaming-search/network-output`
+  (`d6e08c6`, `e7f80d7`), based on `main` at `a12b9b3`.
 
 ### PR 3. Shared query-job operations
 
@@ -81,7 +96,8 @@ This is our working map from the prototype to the PRs of the
   * the status read from the API server's `Client::get_status`.
 * **Adjust:** cancellation with upstream's semantics (`CancelRequested`, not found, already
   terminated), not the prototype's direct `Cancelling`.
-* **Status:** done, on branch `streaming-search/shared-query-job-operations` (`6f893e9`).
+* **Status:** branch `streaming-search/shared-query-job-operations` (`6f893e9`) was written in its
+  own words. Redo it by the method above.
 
 ### PR 4. Streaming job config validation
 
@@ -111,7 +127,7 @@ This is our working map from the prototype to the PRs of the
 * **Tests:** the 10 unit tests of `protocol.rs`.
 * **Adjust:** rename the crate; version 1; only the error variants this PR needs.
 * **Status:** branch `streaming-search/query-result-listener-protocol` (`dd9ecd1`) was written
-  fresh, not moved. Redo it from `protocol.rs`.
+  fresh, not moved. Redo it by the method above.
 
 ### PR 6. Cursor and encodings
 
