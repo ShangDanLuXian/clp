@@ -22,7 +22,8 @@ This is our working map from the prototype to the PRs of the
   text, the guide wins. In particular:
   * test only hand-written logic, once, where it's defined; no tests of derived serde behavior;
   * a new test must fail when the behavior it covers is deliberately broken;
-  * explain a non-obvious attribute with a *why* comment, not a test;
+  * a hand-written serde adapter (for example a `with` attribute) is covered by a test, without a
+    comment explaining it;
   * Rust code a PR adds or changes doesn't refer to Python, not even in docstrings; existing
     "Mirror of `job_orchestration…`" docstrings the PR doesn't otherwise touch stay as they are;
   * don't add docstrings or comments that explain how the new feature behaves unless asked; only
@@ -104,7 +105,8 @@ This is our working map from the prototype to the PRs of the
   * Tests: one test of the token's `Display` and msgpack form, in `types.rs`; none of the
     prototype's round-trip tests.
 * **Status:** y-scope/clp#2613, branch `streaming-search/network-output`. Review addressed in
-  `5996665`, `09e7bd6` and `7630da7`; approved by the reviewer session.
+  `5996665`, `09e7bd6`, `7630da7` and `2a14922`; approved by the reviewer
+  session.
 
 ### PR 3. Shared query-job operations
 
