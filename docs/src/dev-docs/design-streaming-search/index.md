@@ -62,6 +62,13 @@ Implementation plan
 ^^^
 The pull requests that build streaming search in Rust, with their contents, sizes and dependencies.
 :::
+
+:::{grid-item-card}
+:link: extraction-map
+Extraction map (internal)
+^^^
+Which prototype code goes into each PR, what to adjust while moving it, and what to leave out.
+:::
 ::::
 
 :::{toctree}
@@ -73,4 +80,5 @@ backpressure
 reproduction
 rust-reader
 implementation-plan
+extraction-map
 :::
