@@ -121,7 +121,8 @@ This is our working map from the prototype to the PRs of the
   since the column is an `INT`. The functions live in `database::mysql::query_job`, and
   `Cancellability` in `job_config`.
 * **Status:** y-scope/clp#2617, branch `streaming-search/shared-query-job-operations`, commits
-  `12161a8` (API server IDs, rejecting path IDs below 1) and `62752fb` (the move).
+  `7936db5` (API server IDs) and `c3c3703` (the move). Rejecting path IDs below 1 was tried and
+  dropped: a negative ID is answered like any missing job.
 
 ### PR 4. Streaming job config validation
 
