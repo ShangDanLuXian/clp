@@ -17,6 +17,17 @@ This is our working map from the prototype to the PRs of the
   where they don't overlap, then make only the changes an adjustment below calls for. Don't
   reword, restyle or add code beyond that. Add a test only where an adjustment changes behavior.
   Check the result by diffing it against the prototype's changes applied to `main`.
+* **The style guide is stricter than the prototype.** Where Lin's Rust guide
+  (`LinZhihao-723/claude-instruction`, `rust/coding-style.md`) disagrees with the prototype's
+  text, the guide wins. In particular:
+  * test only hand-written logic, once, where it's defined; no tests of derived serde behavior;
+  * a new test must fail when the behavior it covers is deliberately broken;
+  * explain a non-obvious attribute with a *why* comment, not a test;
+  * Python mirrors use the `# NOTE` docstring format;
+  * don't add docstrings or comments that explain how the new feature behaves unless asked; only
+    update docs that the change makes stale.
+* **Reviews.** Address review comments as new commits on top of the PR branch; don't rewrite a
+  branch that has an open PR.
 * **Commits.** Each PR is two commits, the implementation and then its tests. Each one builds and
   passes the checks on its own. The author and committer are Xuhui Chen
   `<xuhui.chen@yscope.com>`, and there are no Claude lines in the messages.
@@ -75,18 +86,23 @@ This is our working map from the prototype to the PRs of the
 ### PR 2. Network output types
 
 * **Take** the prototype's changes to `clp-rust-utils/src/job_config/search.rs` and
-  `task_io/query.rs`, including `From<NetworkOutput> for OutputHandle` and their three tests.
+  `task_io/query.rs`.
 * **Adjust:**
-  * `SessionToken` becomes a `#[serde(transparent)]` newtype instead of a `Uuid` alias, so it is a
-    string inside `OutputHandle` too. It has `From<Uuid>` and `Display`, so the prototype's later
-    code (`session_token.to_string()`, `*session_token`) works unchanged. Code that builds a token
-    from a `Uuid` (PRs 8 and 10) wraps it with `SessionToken::from`.
+  * `SessionToken` becomes a `#[serde(transparent)]` newtype in `types.rs`, next to `ArchiveId`,
+    instead of a `Uuid` alias, so it is a string inside `OutputHandle` too. It has
+    `From<uuid::Uuid>` and `Display`, so the prototype's later code (`session_token.to_string()`,
+    `*session_token`) works unchanged. Later PRs import it from `clp_rust_utils::types`, and code
+    that builds a token from a `Uuid` (PRs 8 and 10) wraps it with `SessionToken::from`.
+  * `OutputHandle::Network(NetworkOutput)` instead of the struct variant, so the prototype's
+    `From<NetworkOutput> for OutputHandle` goes away: the coordinator (PR 10) uses
+    `network_output.map(OutputHandle::Network)` where the prototype has `OutputHandle::from`. The
+    msgpack layout is unchanged.
   * Leave out `QueryTaskIndex`.
-  * Docs: no Python `NetworkOutput` mirror, and "query tasks".
-  * Tests: `DatasetName` for the datasets, plus one test that the token is text inside
-    `OutputHandle`.
-* **Status:** done, by the method above, on branch `streaming-search/network-output`
-  (`d6e08c6`, `e7f80d7`), based on `main` at `a12b9b3`.
+  * Docs: no Python `NetworkOutput` mirror, "query tasks", and the `# NOTE` mirror format.
+  * Tests: one test of the token's `Display` and msgpack form, in `types.rs`; none of the
+    prototype's round-trip tests.
+* **Status:** y-scope/clp#2613, branch `streaming-search/network-output`. Review addressed in
+  `5996665` and `09e7bd6`.
 
 ### PR 3. Shared query-job operations
 

@@ -54,17 +54,17 @@ from 0, in the order `clp-s` finds them. The other numbers are unsigned integers
 
 ### Shared Rust code
 
-#### PR 2. `feat(clp-rust-utils): Add the network output of a query job.`
+#### PR 2. ``feat(clp-rust-utils): Add `SessionToken` and `NetworkOutput` for streaming query results; Replace `SearchJobConfig::network_address` with `network_output`.``
 
-Depends on: nothing. Size: about 200 lines.
+Depends on: nothing. Size: about 100 lines.
 
-* `SessionToken`, a UUID that serializes as a hyphenated string in every format: the form `clp-s`
-  receives on its command line and sends back in the handshake.
+* `SessionToken`, in `types` next to `ArchiveId`: a UUID that serializes as a hyphenated string in
+  every format, the form `clp-s` receives on its command line and sends back in the handshake.
 * `NetworkOutput { host, port, session_token }`, and a `network_output` field in
   `QueryJobConfig` (`SearchJobConfig` until #2590 is merged) replacing `network_address`, which
   only the Python search path sets and no Rust code reads.
-* `OutputHandle::Network { host, port, session_token }`, the task's output destination.
-* Unit tests: serialization round trips.
+* `OutputHandle::Network(NetworkOutput)`, the task's output destination.
+* Unit test: the session token's string form, in `Display` and in msgpack.
 
 #### PR 3. `refactor(clp-rust-utils): Move inserting, cancelling and reading the status of query jobs out of the API server.`
 
