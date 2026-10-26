@@ -116,9 +116,9 @@ This is our working map from the prototype to the PRs of the
   * the status read from the API server's `Client::get_status`.
 * **Adjust:** cancellation with upstream's semantics (`CancelRequested`, not found, already
   terminated), not the prototype's direct `Cancelling`.
-* **Adjust (review):** the API server uses `QueryJobId` instead of `u64`, so the shared functions need
-  no ID conversions; `query_job::submit` converts sqlx's `u64` insert ID with an `expect`, since the
-  column is an `INT`. The functions live in `database::mysql::query_job`, and `Cancellability` in
+* **Adjust (review):** the API server uses `QueryJobId` instead of `u64`, so the shared functions
+  need no ID conversions; `query_job::submit` converts sqlx's `u64` insert ID with an `expect`,
+  since the column is an `INT`. The functions live in `database::mysql::query_job`, and `Cancellability` in
   `job_config`.
 * **Status:** y-scope/clp#2617, branch `streaming-search/shared-query-job-operations`, commits
   `7936db5` (API server IDs) and `c3c3703` (the move).
