@@ -72,8 +72,8 @@ Depends on: nothing. Size: about 300 lines.
 
 * The API server takes `QueryJobId`, the type of the `query_jobs.id` column that the rest of the
   Rust code already uses, for query job IDs instead of `u64`: in its routes, `Client` and errors.
-  Breaking: a path ID that isn't a valid `i32` gets `400`, and the OpenAPI type of `query_job_id` is
-  `int32`.
+  Breaking: a path ID below 1 or above `i32::MAX` gets `400`, and the OpenAPI type of `query_job_id`
+  is `int32` with a minimum of 1.
 * `clp_rust_utils::database::mysql::query_job` with `submit`, `cancel` and `get_status`, moved from
   the API server's `Client`. `cancel` keeps the API server's semantics (`CancelRequested` in one
   transaction) and returns the job's `Cancellability`, which moves next to `QueryJobStatus`, or
