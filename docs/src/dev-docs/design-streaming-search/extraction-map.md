@@ -111,8 +111,7 @@ This is our working map from the prototype to the PRs of the
 * **Status:** y-scope/clp#2613, branch `streaming-search/network-output`. Review addressed in
   `5996665`, `09e7bd6`, `7630da7` and `2a14922`; approved by the reviewer
   session. Lin's review: `deny_unknown_fields` on `NetworkOutput` (`a142a7a`, his suggestion);
-  the docstring and the `SessionToken` change are one commit, `9853e78`, on
-  `streaming-search/network-output-review`, not on the PR branch, as the user asked. The output
+  the docstring and the `SessionToken` change are `3c3444f` ("Address PR comments."). The output
   enum is a follow-up issue.
 
 ### PR 3. Shared query-job operations
