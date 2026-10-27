@@ -31,6 +31,8 @@ This is our working map from the prototype to the PRs of the
     update docs that the change makes stale.
 * **Reviews.** Address review comments as new commits on top of the PR branch; don't rewrite a
   branch that has an open PR.
+* **Never force-push.** To reshape commits that are already pushed, put the result on a new
+  branch.
 * **PR text.** Don't hard-wrap PR descriptions or issue bodies: one line per paragraph or bullet.
 * **Commits.** Each PR is two commits, the implementation and then its tests. Each one builds and
   passes the checks on its own. The author and committer are Xuhui Chen
@@ -109,9 +111,9 @@ This is our working map from the prototype to the PRs of the
 * **Status:** y-scope/clp#2613, branch `streaming-search/network-output`. Review addressed in
   `5996665`, `09e7bd6`, `7630da7` and `2a14922`; approved by the reviewer
   session. Lin's review: `deny_unknown_fields` on `NetworkOutput` (`a142a7a`, his suggestion);
-  the docstring and the `SessionToken` change are on `streaming-search/network-output-review-fixes`
-  (`83061fd`, `56db212`), not on the PR branch, as the user asked. The output enum is a follow-up
-  issue.
+  the docstring and the `SessionToken` change are one commit, `9853e78`, on
+  `streaming-search/network-output-review`, not on the PR branch, as the user asked. The output
+  enum is a follow-up issue.
 
 ### PR 3. Shared query-job operations
 
