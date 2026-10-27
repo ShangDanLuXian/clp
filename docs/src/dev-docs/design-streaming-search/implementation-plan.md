@@ -72,17 +72,19 @@ Depends on: nothing. Size: about 100 lines.
 
 #### PR 3a. ``refactor!: Use `u64` for query job IDs; Make `query_jobs.id` and `query_tasks.job_id` `BIGINT UNSIGNED`.``
 
-Depends on: nothing. Size: about 10 lines.
+Depends on: nothing. Size: about 100 lines.
 
 * `QueryJobId` becomes `u64`, the type sqlx returns for an inserted row's ID, so no code converts
   query job IDs. The API server's public routes already use `u64`.
 * `query_jobs.id` and `query_tasks.job_id` become `BIGINT UNSIGNED`, since sqlx decodes `u64` only
-  from unsigned columns. Breaking: an existing database must be recreated; there's no in-place
-  upgrade.
+  from unsigned columns. `initialize-orchestration-db.py` also upgrades existing databases: it drops
+  the foreign key between the two columns, changes both, and adds it back, each step only if it's
+  still needed.
 * The coordinator declares the query task's job ID input as `int64`, since Spider has no unsigned
   types; msgpack encodes the value the same way.
 * The WebUI's query-speed route documents its `query_job_id` as `u64`.
-* No automated test, since it needs a database; checked by hand on MariaDB 10.11.
+* No automated test, since it needs a database; checked by hand on MariaDB 10.11, including the
+  upgrade.
 
 #### PR 3. ``refactor(rust)!: Use `QueryJobId` for query job IDs in the API server; Move inserting, cancelling and reading the status of query jobs into `clp-rust-utils`.``
 

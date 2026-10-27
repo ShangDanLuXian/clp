@@ -123,9 +123,15 @@ This is our working map from the prototype to the PRs of the
   `int64`, and the WebUI query-speed route's `value_type = u64`.
 * **Why:** sqlx returns an inserted row's ID as a `u64` and decodes `u64` only from unsigned
   columns, so with `u64` everywhere no code converts query job IDs. Spider has no unsigned types.
-* **Status:** branch `streaming-search/query-job-id-u64`, commit `4df8ff7`. Checked by hand on
-  MariaDB 10.11: the tables and their foreign key, `last_insert_id` as `QueryJobId`, decoding `id`
-  as `u64`, an ID above `u32::MAX`; the old `INT` column fails to decode as `u64`.
+* **Upgrade:** `initialize-orchestration-db.py` upgrades existing databases. MariaDB refuses to
+  change a column a foreign key uses, even with `FOREIGN_KEY_CHECKS = 0`, so the script drops the
+  foreign key, changes both columns and adds it back, each step only if it's still needed.
+* **Status:** branch `streaming-search/query-job-id-u64`, commits `4df8ff7` (types and schema) and
+  `df0c9a0` (the upgrade). Checked by hand on MariaDB 10.11: the tables and their foreign key,
+  `last_insert_id` as `QueryJobId`, decoding `id` as `u64`, an ID above `u32::MAX`; the old `INT`
+  column fails to decode as `u64`. The script upgrades an old database with its rows and
+  auto-increment counter intact, finishes a half-done upgrade, does nothing on a rerun, and creates
+  a fresh database directly.
 
 ### PR 3. Shared query-job operations
 
