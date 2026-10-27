@@ -25,11 +25,13 @@ This is our working map from the prototype to the PRs of the
   * a hand-written serde adapter (for example a `with` attribute) is covered by a test, without a
     comment explaining it;
   * Rust code a PR adds or changes doesn't refer to Python, not even in docstrings; existing
-    "Mirror of `job_orchestration…`" docstrings the PR doesn't otherwise touch stay as they are;
+    "Mirror of `job_orchestration…`" docstrings the PR doesn't otherwise touch stay as they are; a
+    type whose mirror docstring a PR removes gets a short docstring of its own;
   * don't add docstrings or comments that explain how the new feature behaves unless asked; only
     update docs that the change makes stale.
 * **Reviews.** Address review comments as new commits on top of the PR branch; don't rewrite a
   branch that has an open PR.
+* **PR text.** Don't hard-wrap PR descriptions or issue bodies: one line per paragraph or bullet.
 * **Commits.** Each PR is two commits, the implementation and then its tests. Each one builds and
   passes the checks on its own. The author and committer are Xuhui Chen
   `<xuhui.chen@yscope.com>`, and there are no Claude lines in the messages.
@@ -90,23 +92,26 @@ This is our working map from the prototype to the PRs of the
 * **Take** the prototype's changes to `clp-rust-utils/src/job_config/search.rs` and
   `task_io/query.rs`.
 * **Adjust:**
-  * `SessionToken` becomes a `#[serde(transparent)]` newtype in `types.rs`, next to `ArchiveId`,
-    instead of a `Uuid` alias, so it is a string inside `OutputHandle` too. It has
-    `From<uuid::Uuid>` and `Display`, so the prototype's later code (`session_token.to_string()`,
-    `*session_token`) works unchanged. Later PRs import it from `clp_rust_utils::types`, and code
-    that builds a token from a `Uuid` (PRs 8 and 10) wraps it with `SessionToken::from`.
+  * `SessionToken` becomes a `#[serde(transparent)]` newtype in `types.rs`, next to `ArchiveId`
+    and serialized like it, instead of a `Uuid` alias. It has `From<uuid::Uuid>` and `Display`, so
+    the prototype's later code (`session_token.to_string()`, `*session_token`) works unchanged.
+    Later PRs import it from `clp_rust_utils::types`, and code that builds a token from a `Uuid`
+    (PRs 8 and 10) wraps it with `SessionToken::from`. The listener PR adds `FromStr` for the
+    handshake, following `ArchiveId`.
   * `OutputHandle::Network(NetworkOutput)` instead of the struct variant, so the prototype's
     `From<NetworkOutput> for OutputHandle` goes away: the coordinator (PR 10) uses
     `network_output.map(OutputHandle::Network)` where the prototype has `OutputHandle::from`. The
     msgpack layout is unchanged.
   * Leave out `QueryTaskIndex`.
-  * Docs: no Python `NetworkOutput` mirror, "query tasks", and no Python mirror docstring on
-    `SearchJobConfig`.
-  * Tests: one test of the token's `Display` and msgpack form, in `types.rs`; none of the
-    prototype's round-trip tests.
+  * Docs: no Python `NetworkOutput` mirror, "query tasks", and `SearchJobConfig`'s Python mirror
+    docstring replaced by its own.
+  * Tests: none; the prototype's round-trip tests only check derived serde behavior.
 * **Status:** y-scope/clp#2613, branch `streaming-search/network-output`. Review addressed in
   `5996665`, `09e7bd6`, `7630da7` and `2a14922`; approved by the reviewer
-  session.
+  session. Lin's review: `deny_unknown_fields` on `NetworkOutput` (`a142a7a`, his suggestion);
+  the docstring and the `SessionToken` change are on `streaming-search/network-output-review-fixes`
+  (`83061fd`, `56db212`), not on the PR branch, as the user asked. The output enum is a follow-up
+  issue.
 
 ### PR 3. Shared query-job operations
 
@@ -121,8 +126,10 @@ This is our working map from the prototype to the PRs of the
   since the column is an `INT`. The functions live in `database::mysql::query_job`, and
   `Cancellability` in `job_config`.
 * **Status:** y-scope/clp#2617, branch `streaming-search/shared-query-job-operations`, commits
-  `7936db5` (API server IDs) and `c3c3703` (the move). Rejecting path IDs below 1 was tried and
-  dropped: a negative ID is answered like any missing job.
+  `7936db5` (API server IDs) and `c3c3703` (the move), then `main` merged in (`524c4ff`).
+  Rejecting path IDs below 1 was tried and dropped: a negative ID is answered like any missing
+  job. Open: whether `submit` returns the prototype's `QueryJobIdOutOfRange` instead of the
+  `expect`, as `main`'s log-ingestor does for compression job IDs.
 
 ### PR 4. Streaming job config validation
 

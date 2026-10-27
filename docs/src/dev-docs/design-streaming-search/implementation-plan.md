@@ -58,13 +58,17 @@ from 0, in the order `clp-s` finds them. The other numbers are unsigned integers
 
 Depends on: nothing. Size: about 100 lines.
 
-* `SessionToken`, in `types` next to `ArchiveId`: a UUID that serializes as a hyphenated string in
-  every format, the form `clp-s` receives on its command line and sends back in the handshake.
+* `SessionToken`, in `types` next to `ArchiveId`, and serialized like it: a UUID newtype. Every
+  msgpack path the token takes is Rust to Rust; `clp-s` gets it through `Display` on its command
+  line.
 * `NetworkOutput { host, port, session_token }`, and a `network_output` field in
   `QueryJobConfig` (`SearchJobConfig` until #2590 is merged) replacing `network_address`, which
   only the Python search path sets and no Rust code reads.
 * `OutputHandle::Network(NetworkOutput)`, the task's output destination.
-* Unit test: the session token's string form, in `Display` and in msgpack.
+* No unit tests: the new types only use derived serde behavior.
+* Follow-up issue (Lin's review): before the Celery path is removed, the job config names its
+  output through one enum (network, results cache or file), instead of `network_output` and
+  `write_to_file`.
 
 #### PR 3. ``refactor(rust)!: Use `QueryJobId` for query job IDs in the API server; Move inserting, cancelling and reading the status of query jobs into `clp-rust-utils`.``
 
