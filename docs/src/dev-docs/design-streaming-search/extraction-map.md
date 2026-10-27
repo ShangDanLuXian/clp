@@ -43,7 +43,9 @@ This is our working map from the prototype to the PRs of the
 * **Protocol version 1** (the prototype uses 2).
 * **No Python.** Leave out every `.py` change and the config template change:
   `fs_search_task.py`, `job_config.py`, `native/search.py`, `streaming_search.py`,
-  `clp_config.py` and `clp-config.template.json.yaml`.
+  `clp_config.py` and `clp-config.template.json.yaml`. The one exception is PR 3a's change to the
+  query tables in `initialize-orchestration-db.py`, which no Rust code can make instead.
+* **Breaking changes are fine** for now, including databases that must be recreated.
 * **Adapt to `main`:**
   * `SearchJobConfig` (until #2590), `DatasetName`, and `max_num_results: Option<NonZeroU32>`;
   * `QueryJobStatus` with `CancelRequested`, and cancellation through PR 3's function;
@@ -114,6 +116,17 @@ This is our working map from the prototype to the PRs of the
   the docstring and the `SessionToken` change are `3c3444f` ("Address PR comments."). The output
   enum is a follow-up issue.
 
+### PR 3a. Query job IDs as `u64`
+
+* **New code**, not from the prototype: `QueryJobId = u64`, `query_jobs.id` and
+  `query_tasks.job_id` as `BIGINT UNSIGNED`, the coordinator's job ID task input declared as
+  `int64`, and the WebUI query-speed route's `value_type = u64`.
+* **Why:** sqlx returns an inserted row's ID as a `u64` and decodes `u64` only from unsigned
+  columns, so with `u64` everywhere no code converts query job IDs. Spider has no unsigned types.
+* **Status:** branch `streaming-search/query-job-id-u64`, commit `4df8ff7`. Checked by hand on
+  MariaDB 10.11: the tables and their foreign key, `last_insert_id` as `QueryJobId`, decoding `id`
+  as `u64`, an ID above `u32::MAX`; the old `INT` column fails to decode as `u64`.
+
 ### PR 3. Shared query-job operations
 
 * **Take:**
@@ -129,8 +142,10 @@ This is our working map from the prototype to the PRs of the
 * **Status:** y-scope/clp#2617, branch `streaming-search/shared-query-job-operations`, commits
   `7936db5` (API server IDs) and `c3c3703` (the move), then `main` merged in (`524c4ff`).
   Rejecting path IDs below 1 was tried and dropped: a negative ID is answered like any missing
-  job. Open: whether `submit` returns the prototype's `QueryJobIdOutOfRange` instead of the
-  `expect`, as `main`'s log-ingestor does for compression job IDs.
+  job. After PR 3a, `QueryJobId` is `u64`: `submit` needs no conversion (so no `expect` or
+  `QueryJobIdOutOfRange`), and the routes' `params(("query_job_id" = i32, Path))` become `u64`.
+  Lin's review (rename to `request_cancellation`, `get_status` returning `None`, the
+  `Cancellability` test) is on hold until then.
 
 ### PR 4. Streaming job config validation
 

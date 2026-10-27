@@ -70,20 +70,36 @@ Depends on: nothing. Size: about 100 lines.
   output through one enum (network, results cache or file), instead of `network_output` and
   `write_to_file`.
 
+#### PR 3a. ``refactor!: Use `u64` for query job IDs; Make `query_jobs.id` and `query_tasks.job_id` `BIGINT UNSIGNED`.``
+
+Depends on: nothing. Size: about 10 lines.
+
+* `QueryJobId` becomes `u64`, the type sqlx returns for an inserted row's ID, so no code converts
+  query job IDs. The API server's public routes already use `u64`.
+* `query_jobs.id` and `query_tasks.job_id` become `BIGINT UNSIGNED`, since sqlx decodes `u64` only
+  from unsigned columns. Breaking: an existing database must be recreated; there's no in-place
+  upgrade.
+* The coordinator declares the query task's job ID input as `int64`, since Spider has no unsigned
+  types; msgpack encodes the value the same way.
+* The WebUI's query-speed route documents its `query_job_id` as `u64`.
+* No automated test, since it needs a database; checked by hand on MariaDB 10.11.
+
 #### PR 3. ``refactor(rust)!: Use `QueryJobId` for query job IDs in the API server; Move inserting, cancelling and reading the status of query jobs into `clp-rust-utils`.``
 
-Depends on: nothing. Size: about 300 lines.
+Depends on: PR 3a. Size: about 300 lines.
 
-* The API server takes `QueryJobId`, the type of the `query_jobs.id` column that the rest of the
-  Rust code already uses, for query job IDs instead of `u64`: in its routes, `Client` and errors.
-  Breaking: a path ID above `i32::MAX` gets `400`, a negative one is answered like any missing job,
-  and the OpenAPI type of `query_job_id` is `int32`.
+* The API server takes `QueryJobId` for query job IDs: in its routes, `Client` and errors. After
+  PR 3a it is `u64`, so the API itself doesn't change.
 * `clp_rust_utils::database::mysql::query_job` with `submit`, `cancel` and `get_status`, moved from
   the API server's `Client`. `cancel` keeps the API server's semantics (`CancelRequested` in one
   transaction) and returns the job's `Cancellability`, which moves next to `QueryJobStatus`, or
   `None` if the job doesn't exist. The API server calls them and still answers `404` and `409` as
   before.
-* No new tests: the moved code has no new behavior, and the database functions need a MySQL server.
+* Pending from Lin's review: `cancel` becomes `request_cancellation`; `get_status` returns `None`
+  for a missing job; `Cancellability::from_status` is tested where it's defined, replacing the
+  API server's mock-route cancellation tests.
+* No other new tests: the moved code has no new behavior, and the database functions need a MySQL
+  server.
 
 #### PR 4. `feat(clp-rust-utils): Validate streaming query job configs.`
 
