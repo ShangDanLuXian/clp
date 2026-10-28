@@ -127,18 +127,17 @@ This is our working map from the prototype to the PRs of the
 
 * **New code**, not from the prototype: `QueryJobId = u64`, `query_jobs.id` and
   `query_tasks.job_id` as `BIGINT UNSIGNED`, the coordinator's job ID task input declared as
-  `int64`, and the WebUI query-speed route's `value_type = u64`.
+  `int64`, the WebUI query-speed route's `value_type = u64`, and the API server using
+  `QueryJobId` (taken from PR 3's former first commit, `7936db5`, with `u64`).
 * **Why:** sqlx returns an inserted row's ID as a `u64` and decodes `u64` only from unsigned
   columns, so with `u64` everywhere no code converts query job IDs. Spider has no unsigned types.
-* **Upgrade:** `initialize-orchestration-db.py` upgrades existing databases. MariaDB refuses to
-  change a column a foreign key uses, even with `FOREIGN_KEY_CHECKS = 0`, so the script drops the
-  foreign key, changes both columns and adds it back, each step only if it's still needed.
-* **Status:** branch `streaming-search/query-job-id-u64`, commits `4df8ff7` (types and schema) and
-  `df0c9a0` (the upgrade). Checked by hand on MariaDB 10.11: the tables and their foreign key,
-  `last_insert_id` as `QueryJobId`, decoding `id` as `u64`, an ID above `u32::MAX`; the old `INT`
-  column fails to decode as `u64`. The script upgrades an old database with its rows and
-  auto-increment counter intact, finishes a half-done upgrade, does nothing on a rerun, and creates
-  a fresh database directly.
+* **No upgrade of existing databases:** `query_tasks` is the Celery path's table, and Celery is
+  treated as removed. The upgrade written in `df0c9a0` was reverted in `37a33d1`.
+* **Status:** branch `streaming-search/query-job-id-u64`: `4df8ff7` (types and schema), `df0c9a0`
+  and its revert `37a33d1`, and `5cfeeb8` (the API server). The OpenAPI document is unchanged.
+  Checked by hand on MariaDB 10.11: the new tables and their foreign key, `last_insert_id` as
+  `QueryJobId`, decoding `id` as `u64`, an ID above `u32::MAX`; on the old `INT` columns, the
+  coordinator's reads fail to decode `id` as `u64`, so it can't start.
 
 ### PR 3. Shared query-job operations
 
@@ -147,18 +146,14 @@ This is our working map from the prototype to the PRs of the
   * `mysql.rs:127-143`, the cancellation;
   * the status read from the API server's `Client::get_status`.
 * **Adjust:** cancellation with upstream's semantics (`CancelRequested`, not found, already
-  terminated), not the prototype's direct `Cancelling`.
-* **Adjust (review):** the API server uses `QueryJobId` instead of `u64`, so the shared functions
-  need no ID conversions; `query_job::submit` converts sqlx's `u64` insert ID with an `expect`,
-  since the column is an `INT`. The functions live in `database::mysql::query_job`, and
-  `Cancellability` in `job_config`.
-* **Status:** y-scope/clp#2617, branch `streaming-search/shared-query-job-operations`, commits
-  `7936db5` (API server IDs) and `c3c3703` (the move), then `main` merged in (`524c4ff`).
-  Rejecting path IDs below 1 was tried and dropped: a negative ID is answered like any missing
-  job. After PR 3a, `QueryJobId` is `u64`: `submit` needs no conversion (so no `expect` or
-  `QueryJobIdOutOfRange`), and the routes' `params(("query_job_id" = i32, Path))` become `u64`.
-  Lin's review (rename to `request_cancellation`, `get_status` returning `None`, the
-  `Cancellability` test) is on hold until then.
+  terminated), not the prototype's direct `Cancelling`. The functions live in
+  `database::mysql::query_job`, and `Cancellability` in `job_config`. They use the API server's
+  `u64` IDs; the ID type is PR 3a's.
+* **Status:** y-scope/clp#2617, branch `streaming-search/shared-query-job-operations`: `7936db5`
+  (API server IDs) and `c3c3703` (the move), `main` merged in (`524c4ff`), then `3424554` and
+  `5120a9b` take the ID-type change back out, leaving only the move. Lin's review (rename to
+  `request_cancellation`, `get_status` returning `None`, the `Cancellability` test) is on hold; its
+  work in progress is on the local branch `local/pr3-lin-review-wip` (`276e969`).
 
 ### PR 4. Streaming job config validation
 
