@@ -29,8 +29,9 @@ This is our working map from the prototype to the PRs of the
     type whose mirror docstring a PR removes gets a short docstring of its own;
   * don't add docstrings or comments that explain how the new feature behaves unless asked; only
     update docs that the change makes stale.
-* **Reviews.** Address review comments as new commits on top of the PR branch; don't rewrite a
-  branch that has an open PR.
+* **Don't edit a PR branch.** Put review fixes and any other change for an open PR on a separate
+  reference branch, as new commits on top of the PR's head; the PR's author applies them. Don't
+  revert anything.
 * **Never force-push.** To reshape commits that are already pushed, put the result on a new
   branch.
 * **PR text.** Don't hard-wrap PR descriptions or issue bodies: one line per paragraph or bullet.
