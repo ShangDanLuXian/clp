@@ -46,6 +46,8 @@ This is our working map from the prototype to the PRs of the
   `clp_config.py` and `clp-config.template.json.yaml`. The one exception is PR 3a's change to the
   query tables in `initialize-orchestration-db.py`, which no Rust code can make instead.
 * **Breaking changes are fine** for now, including databases that must be recreated.
+* **Ignore Celery.** Treat the Celery query path as if it didn't exist: don't design around it,
+  and don't qualify names with "Spider" to tell the two paths apart.
 * **Adapt to `main`:**
   * `SearchJobConfig` (until #2590), `DatasetName`, and `max_num_results: Option<NonZeroU32>`;
   * `QueryJobStatus` with `CancelRequested`, and cancellation through PR 3's function;
@@ -170,13 +172,15 @@ This is our working map from the prototype to the PRs of the
   The CLI's own check of begin after end (`clp_streaming_search.rs:169-178`) is replaced by this.
 * **Leave for PR 14:** the API-only rules, MongoDB buffering and count-by-time. Dataset names
   are already checked by `DatasetName`.
-* **Adjust:** the rules move from the API server's `QueryConfig` to
-  `SearchJobConfig::validate_for_streaming` in `clp-rust-utils`, with a
-  `StreamingQueryJobConfigError` per rule, and `max_num_results` must be unset (`main`'s
-  `Option<NonZeroU32>`) instead of 0. It doesn't require a network output, since the API server
-  validates before it opens a listener session.
-* **Status:** branch `streaming-search/streaming-job-config-validation`, commits `a9d468e`
-  (implementation) and `63fb355` (tests).
+* **Adjust:** the rules move from the API server's `QueryConfig` into `clp-rust-utils`:
+  * `SearchJobConfig::validate`, shared with the query coordinator: no aggregation, no
+    `write_to_file`, a non-empty query, and begin <= end, in the coordinator's order and with its
+    messages. `QueryJobHandle::new` calls it, and its errors map to the coordinator's old `Error`
+    variants.
+  * `StreamingQueryJobConfig::validate_and_create` adds `max_num_results` must be unset (`main`'s
+    `Option<NonZeroU32>`), and `into_search_job_config` sets the network output after validation.
+* **Status:** y-scope/clp#2627, branch `streaming-search/streaming-job-config-validation`:
+  `a9d468e` and `63fb355`, then review fixes `57b80be` and `7e3a6b6`, and the rename `8b7116a`.
 
 ### PR 5. Listener crate and wire protocol
 
