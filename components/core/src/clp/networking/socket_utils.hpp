@@ -16,7 +16,10 @@ namespace clp::networking {
 int connect_to_server(std::string const& host, std::string const& port);
 
 /**
- * Tries to send a buffer of data over the socket
+ * Tries to send an entire buffer of data over the socket. Sending over a connection closed by the
+ * peer fails with `EPIPE` instead of raising `SIGPIPE` on platforms that support `MSG_NOSIGNAL`,
+ * and on other platforms for sockets opened by `connect_to_server`.
+ *
  * @param fd
  * @param buf
  * @param buf_len
