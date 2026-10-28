@@ -88,8 +88,13 @@ This is our working map from the prototype to the PRs of the
   * `SO_NOSIGPIPE` where `MSG_NOSIGNAL` is missing, including in the test;
   * golden bytes instead of expected bytes built with the same packer;
   * a failed-connection test.
-* **Status:** branch `streaming-search/clp-s-network-protocol` (`45c1fce`) is a port in its own
-  words. Redo it by the method above.
+* **Status:** redone by the method on branch `streaming-search/clp-s-network-output`, commits
+  `1161c27` (implementation) and `2e5eb58` (tests). The old own-words branch,
+  `streaming-search/clp-s-network-protocol`, is superseded. `SO_NOSIGPIPE` is set in
+  `connect_to_server`; the prototype's `try`/`catch` around `Output::filter` is left out, since
+  the handler no longer throws. To build locally: symlink the worktree's `build/deps` to the
+  shared deps, set `PKG_CONFIG_PATH` to the static LibLZMA's `pkgconfig` directory, and configure
+  with `CLP_USE_STATIC_LIBS=OFF` (the system's static `libarchive` doesn't link here).
 
 ### PR 2. Network output types
 
@@ -114,7 +119,7 @@ This is our working map from the prototype to the PRs of the
   `5996665`, `09e7bd6`, `7630da7` and `2a14922`; approved by the reviewer
   session. Lin's review: `deny_unknown_fields` on `NetworkOutput` (`a142a7a`, his suggestion);
   the docstring and the `SessionToken` change are `3c3444f` ("Address PR comments."). The output
-  enum is a follow-up issue.
+  enum is a follow-up issue. Merged into `main` as `095e90ee`.
 
 ### PR 3a. Query job IDs as `u64`
 
@@ -165,6 +170,13 @@ This is our working map from the prototype to the PRs of the
   The CLI's own check of begin after end (`clp_streaming_search.rs:169-178`) is replaced by this.
 * **Leave for PR 14:** the API-only rules, MongoDB buffering and count-by-time. Dataset names
   are already checked by `DatasetName`.
+* **Adjust:** the rules move from the API server's `QueryConfig` to
+  `SearchJobConfig::validate_for_streaming` in `clp-rust-utils`, with a
+  `StreamingQueryJobConfigError` per rule, and `max_num_results` must be unset (`main`'s
+  `Option<NonZeroU32>`) instead of 0. It doesn't require a network output, since the API server
+  validates before it opens a listener session.
+* **Status:** branch `streaming-search/streaming-job-config-validation`, commits `a9d468e`
+  (implementation) and `63fb355` (tests).
 
 ### PR 5. Listener crate and wire protocol
 
