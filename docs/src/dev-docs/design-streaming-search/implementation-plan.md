@@ -72,15 +72,16 @@ Depends on: nothing. Size: about 100 lines.
 
 #### PR 3a. ``refactor!: Use `u64` for query job IDs; Make `query_jobs.id` and `query_tasks.job_id` `BIGINT UNSIGNED`.``
 
-Depends on: PR 3. Size: about 30 lines.
+Depends on: nothing. Size: about 30 lines.
 
 * `QueryJobId` becomes `u64`, the type sqlx returns for an inserted row's ID, so no code converts
-  query job IDs, and `submit` drops its `expect`.
+  query job IDs.
 * `query_jobs.id` and `query_tasks.job_id` become `BIGINT UNSIGNED`, since sqlx decodes `u64` only
   from unsigned columns; `query_tasks.job_id` changes only because its foreign key must match.
   Breaking: an existing database must be recreated. There's no upgrade, since `query_tasks` belongs
   to the Celery path, which we treat as removed.
-* The API server's path IDs, `QueryJobId` since PR 3, are documented as `u64` again.
+* The API server takes `QueryJobId` in its routes, `Client` and errors. It was already `u64`, so
+  its API and OpenAPI document don't change.
 * The coordinator declares the query task's job ID input as `int64`, since Spider has no unsigned
   types; msgpack encodes the value the same way.
 * The WebUI's query-speed route documents its `query_job_id` as `u64`.
@@ -91,13 +92,12 @@ Depends on: PR 3. Size: about 30 lines.
 Depends on: nothing. Size: about 150 lines.
 
 * `clp_rust_utils::database::mysql::query_job` with `submit`, `request_cancellation` and
-  `get_status`, moved from the API server's `Client`. They take `QueryJobId` (`i32`), and `submit`
-  converts the inserted ID with `expect`. `request_cancellation` keeps the API server's semantics
+  `get_status`, moved from the API server's `Client`. They take the API server's `u64` query job
+  IDs, as on `main`, so nothing converts IDs. `request_cancellation` keeps the API server's semantics
   (`CancelRequested` in one transaction) and returns the job's `Cancellability`, which moves next
   to `QueryJobStatus`; both it and `get_status` return `None` for a missing job.
-* Breaking: the API server takes `QueryJobId` in its routes, `Client` and errors, so its path IDs
-  are `int32`, and `GET /query_results/{query_job_id}` answers `404` instead of `500` for a missing
-  job.
+* Breaking: `GET /query_results/{query_job_id}` answers `404` instead of `500` for a missing job.
+  The API server's ID types don't change.
 * `Cancellability::from_status` is tested where it's defined, replacing the API server's
   mock-route cancellation tests.
 * No other new tests: the moved code has no new behavior, and the database functions need a MySQL
