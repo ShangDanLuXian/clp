@@ -129,14 +129,16 @@ This is our working map from the prototype to the PRs of the
 
 * **New code**, not from the prototype: `QueryJobId = u64`, `query_jobs.id` and
   `query_tasks.job_id` as `BIGINT UNSIGNED`, the coordinator's job ID task input declared as
-  `int64`, the WebUI query-speed route's `value_type = u64`, and the API server using
-  `QueryJobId` (taken from PR 3's former first commit, `7936db5`, with `u64`).
+  `int64`, the WebUI query-speed route's `value_type = u64`, and, on top of PR 3, `submit`
+  returning the inserted ID without its `expect` and the API server documenting its path IDs as
+  `u64`.
 * **Why:** sqlx returns an inserted row's ID as a `u64` and decodes `u64` only from unsigned
   columns, so with `u64` everywhere no code converts query job IDs. Spider has no unsigned types.
 * **No upgrade of existing databases:** `query_tasks` is the Celery path's table, and Celery is
   treated as removed. The upgrade written in `df0c9a0` was reverted in `37a33d1`.
 * **Status:** branch `streaming-search/query-job-id-u64`: `4df8ff7` (types and schema), `df0c9a0`
-  and its revert `37a33d1`, and `5cfeeb8` (the API server). The OpenAPI document is unchanged.
+  and its revert `37a33d1`, and `5cfeeb8` (the API server). It's cut from `main`, so it still has
+  to be redone on top of PR 3, which now has the API server on `QueryJobId`.
   Checked by hand on MariaDB 10.11: the new tables and their foreign key, `last_insert_id` as
   `QueryJobId`, decoding `id` as `u64`, an ID above `u32::MAX`; on the old `INT` columns, the
   coordinator's reads fail to decode `id` as `u64`, so it can't start.
@@ -149,13 +151,16 @@ This is our working map from the prototype to the PRs of the
   * the status read from the API server's `Client::get_status`.
 * **Adjust:** cancellation with upstream's semantics (`CancelRequested`, not found, already
   terminated), not the prototype's direct `Cancelling`. The functions live in
-  `database::mysql::query_job`, and `Cancellability` in `job_config`. They use the API server's
-  `u64` IDs; the ID type is PR 3a's.
+  `database::mysql::query_job`, and `Cancellability` in `job_config`. They and the API server use
+  `QueryJobId` (`i32`), and `submit` converts the inserted ID with `expect`; moving to `u64` is
+  PR 3a's.
 * **Status:** y-scope/clp#2617, branch `streaming-search/shared-query-job-operations`: `7936db5`
-  (API server IDs) and `c3c3703` (the move), `main` merged in (`524c4ff`), then `3424554` and
-  `5120a9b` take the ID-type change back out, leaving only the move. Lin's review (rename to
-  `request_cancellation`, `get_status` returning `None`, the `Cancellability` test) is on hold; its
-  work in progress is on the local branch `local/pr3-lin-review-wip` (`276e969`).
+  (API server IDs) and `c3c3703` (the move), `main` merged in (`524c4ff`), `3424554` and `5120a9b`
+  (`u64`, by mistake), Lin's review in `4735be1` (`request_cancellation`, `get_status` returning
+  `None` and the API server answering `404`, the `Cancellability` test), and `main` merged in
+  again (`1bfb16b`). On the reference branch `streaming-search/shared-query-job-operations-review`
+  and not yet on the PR: `6929c1d` restores the test imports the second merge broke, and `e43ecde`
+  brings back `QueryJobId` and the `expect`.
 
 ### PR 4. Streaming job config validation
 
