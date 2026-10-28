@@ -4,6 +4,7 @@ use aws_sdk_s3::error::DisplayErrorContext;
 use aws_sdk_s3::error::SdkError;
 use aws_sdk_s3::primitives::ByteStreamError;
 use clp_rust_utils::dataset::DatasetName;
+use clp_rust_utils::job_config::QueryJobId;
 use clp_rust_utils::job_config::QueryJobStatus;
 use clp_rust_utils::types::ArchiveId;
 use num_enum::TryFromPrimitive;
@@ -33,10 +34,10 @@ pub enum ClientError {
     Aws { description: String },
 
     #[error("query job not found: {0}")]
-    QueryJobNotFound(u64),
+    QueryJobNotFound(QueryJobId),
 
     #[error("query job already terminated: {0}")]
-    QueryJobAlreadyTerminated(u64),
+    QueryJobAlreadyTerminated(QueryJobId),
 
     #[error("Invalid input: {0}")]
     InvalidInput(String),
