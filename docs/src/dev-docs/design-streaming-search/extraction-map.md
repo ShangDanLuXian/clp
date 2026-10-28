@@ -32,8 +32,9 @@ This is our working map from the prototype to the PRs of the
 * **Don't edit a PR branch.** Put review fixes and any other change for an open PR on a separate
   reference branch, as new commits on top of the PR's head; the PR's author applies them. Don't
   revert anything.
-* **Never force-push.** To reshape commits that are already pushed, put the result on a new
-  branch.
+* **Force-push only when asked,** and only to a reference branch or to a PR branch that nobody
+  except the agent reviewer has reviewed. Never force-push a PR branch that someone has left a
+  review on.
 * **PR text.** Don't hard-wrap PR descriptions or issue bodies: one line per paragraph or bullet.
 * **Commits.** Each PR is two commits, the implementation and then its tests. Each one builds and
   passes the checks on its own. The author and committer are Xuhui Chen
