@@ -35,92 +35,6 @@ logging_console_handler.setFormatter(logging_formatter)
 logger.addHandler(logging_console_handler)
 
 
-def _upgrade_query_job_id_columns(db_cursor) -> None:
-    """
-    Upgrades `query_jobs.id` and `query_tasks.job_id` to `BIGINT UNSIGNED` in databases created
-    before they were. MariaDB can't change a column that a foreign key uses, so the foreign key is
-    dropped before the change and added back after it. Each step runs only if it's still needed, so
-    an upgrade that fails partway through is completed by the next run.
-
-    :param db_cursor:
-    """
-    columns_to_upgrade = [
-        (table_name, column_name, column_definition)
-        for table_name, column_name, column_definition in (
-            (QUERY_JOBS_TABLE_NAME, "id", "BIGINT UNSIGNED NOT NULL AUTO_INCREMENT"),
-            (QUERY_TASKS_TABLE_NAME, "job_id", "BIGINT UNSIGNED NOT NULL"),
-        )
-        if not _is_bigint_unsigned_column(db_cursor, table_name, column_name)
-    ]
-    has_foreign_key = _has_foreign_key(db_cursor, QUERY_TASKS_TABLE_NAME, QUERY_TASKS_TABLE_NAME)
-    if len(columns_to_upgrade) > 0:
-        if has_foreign_key:
-            db_cursor.execute(
-                f"""
-                ALTER TABLE `{QUERY_TASKS_TABLE_NAME}`
-                DROP FOREIGN KEY `{QUERY_TASKS_TABLE_NAME}`
-                """
-            )
-            has_foreign_key = False
-        for table_name, column_name, column_definition in columns_to_upgrade:
-            logger.info("Upgrading `%s`.`%s` to BIGINT UNSIGNED.", table_name, column_name)
-            db_cursor.execute(
-                f"ALTER TABLE `{table_name}` MODIFY `{column_name}` {column_definition}"
-            )
-    if not has_foreign_key:
-        db_cursor.execute(
-            f"""
-            ALTER TABLE `{QUERY_TASKS_TABLE_NAME}`
-            ADD CONSTRAINT `{QUERY_TASKS_TABLE_NAME}` FOREIGN KEY (`job_id`)
-            REFERENCES `{QUERY_JOBS_TABLE_NAME}` (`id`)
-            ON UPDATE NO ACTION ON DELETE NO ACTION
-            """
-        )
-
-
-def _is_bigint_unsigned_column(db_cursor, table_name: str, column_name: str) -> bool:
-    """
-    :param db_cursor:
-    :param table_name:
-    :param column_name:
-    :return: Whether the column exists and is a `BIGINT UNSIGNED`.
-    """
-    db_cursor.execute(
-        """
-        SELECT COUNT(*) AS `num_matches`
-        FROM `information_schema`.`COLUMNS`
-        WHERE `TABLE_SCHEMA` = DATABASE()
-            AND `TABLE_NAME` = %s
-            AND `COLUMN_NAME` = %s
-            AND `DATA_TYPE` = 'bigint'
-            AND LOCATE('unsigned', `COLUMN_TYPE`) > 0
-        """,
-        (table_name, column_name),
-    )
-    return db_cursor.fetchone()["num_matches"] > 0
-
-
-def _has_foreign_key(db_cursor, table_name: str, constraint_name: str) -> bool:
-    """
-    :param db_cursor:
-    :param table_name:
-    :param constraint_name:
-    :return: Whether the table has a foreign key with the given name.
-    """
-    db_cursor.execute(
-        """
-        SELECT COUNT(*) AS `num_matches`
-        FROM `information_schema`.`TABLE_CONSTRAINTS`
-        WHERE `CONSTRAINT_SCHEMA` = DATABASE()
-            AND `TABLE_NAME` = %s
-            AND `CONSTRAINT_NAME` = %s
-            AND `CONSTRAINT_TYPE` = 'FOREIGN KEY'
-        """,
-        (table_name, constraint_name),
-    )
-    return db_cursor.fetchone()["num_matches"] > 0
-
-
 def main(argv):
     args_parser = argparse.ArgumentParser(
         description="Sets up metadata tables for job orchestration."
@@ -257,8 +171,6 @@ def main(argv):
                 ) ROW_FORMAT=DYNAMIC
                 """
             )
-
-            _upgrade_query_job_id_columns(scheduling_db_cursor)
 
             scheduling_db.commit()
     except:
