@@ -141,8 +141,8 @@ public:
      * acknowledgement. Returns immediately if no result was written.
      *
      * @return ErrorCodeFailureNetwork if an earlier call failed to connect or send, if sending the
-     * trailer, shutting down the write side, or receiving the acknowledgement fails, or if the
-     * acknowledgement is malformed or doesn't match the number of results sent.
+     * trailer, shutting down the write side, or receiving the acknowledgement fails or times out,
+     * or if the acknowledgement is malformed or doesn't match the number of results sent.
      */
     [[nodiscard]] auto finish() -> ErrorCode override;
 
@@ -169,7 +169,8 @@ private:
      * Receives the listener's acknowledgement and validates it against the number of results sent.
      *
      * @return ErrorCodeSuccess on success.
-     * @return ErrorCodeFailureNetwork if receiving fails, the listener closes the connection before
+     * @return ErrorCodeFailureNetwork if setting the receive timeout or receiving fails, the
+     * listener doesn't acknowledge within the timeout or closes the connection before
      * acknowledging, or the acknowledgement is malformed or doesn't match the number of results
      * sent.
      */

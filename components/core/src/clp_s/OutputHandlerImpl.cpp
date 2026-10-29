@@ -1,6 +1,7 @@
 #include "OutputHandlerImpl.hpp"
 
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 #include <array>
@@ -47,6 +48,7 @@ constexpr uint8_t cAckArrayHeader{0x91};
 constexpr uint8_t cAckUint64Marker{0xcf};
 constexpr size_t cAckPrefixSize{2};
 constexpr size_t cAckSize{cAckPrefixSize + sizeof(uint64_t)};
+constexpr timeval cAckTimeout{.tv_sec = 60, .tv_usec = 0};
 
 /**
  * Receives exactly enough bytes over the socket to fill the given buffer, retrying interrupted
@@ -220,6 +222,18 @@ auto NetworkOutputHandler::send_buffer() -> ErrorCode {
 }
 
 auto NetworkOutputHandler::receive_ack() const -> ErrorCode {
+    if (0 != setsockopt(m_socket_fd, SOL_SOCKET, SO_RCVTIMEO, &cAckTimeout, sizeof(cAckTimeout))) {
+        auto const error{std::error_code{errno, std::generic_category()}};
+        SPDLOG_ERROR(
+                "Failed to set the acknowledgement timeout for {}:{} - ({}) {}",
+                m_host,
+                m_port,
+                error.value(),
+                error.message()
+        );
+        return ErrorCode::ErrorCodeFailureNetwork;
+    }
+
     std::array<char, cAckSize> ack{};
     auto const error_code{receive_exact(m_socket_fd, ack)};
     if (clp::ErrorCode_EndOfFile == error_code) {
@@ -227,6 +241,15 @@ auto NetworkOutputHandler::receive_ack() const -> ErrorCode {
                 "Failed to receive the acknowledgement from {}:{} - connection closed by the peer",
                 m_host,
                 m_port
+        );
+        return ErrorCode::ErrorCodeFailureNetwork;
+    }
+    if (clp::ErrorCode_errno == error_code && EAGAIN == errno) {
+        SPDLOG_ERROR(
+                "Failed to receive the acknowledgement from {}:{} - timed out after {} seconds",
+                m_host,
+                m_port,
+                cAckTimeout.tv_sec
         );
         return ErrorCode::ErrorCodeFailureNetwork;
     }
