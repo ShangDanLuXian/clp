@@ -117,14 +117,8 @@ public:
 
     // Methods inherited from OutputHandler
     /**
-     * Sends a result to the network destination, connecting to it and sending the handshake first
-     * if this is the first result.
+     * Connects to the network destination and sends the handshake before the first result.
      *
-     * @param message
-     * @param timestamp
-     * @param archive_id
-     * @param log_event_idx Unused.
-     * @return ErrorCodeSuccess on success.
      * @return ErrorCodeFailureNetwork if connecting or sending to the network destination fails, or
      * if an earlier call failed to.
      */
@@ -138,7 +132,6 @@ public:
     /**
      * Unsupported, since the handshake must carry the archive ID and each result its timestamp.
      *
-     * @param message
      * @return ErrorCodeUnsupported unconditionally.
      */
     [[nodiscard]] auto write(std::string_view message) -> ErrorCode override;
@@ -147,7 +140,6 @@ public:
      * Sends the trailer, shuts down the write side of the connection, and waits for the listener's
      * acknowledgement. Returns immediately if no result was written.
      *
-     * @return ErrorCodeSuccess on success.
      * @return ErrorCodeFailureNetwork if an earlier call failed to connect or send, if sending the
      * trailer, shutting down the write side, or receiving the acknowledgement fails, or if the
      * acknowledgement is malformed or doesn't match the number of results sent.

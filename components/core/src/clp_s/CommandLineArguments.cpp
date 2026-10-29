@@ -1167,21 +1167,21 @@ void CommandLineArguments::parse_network_dest_output_handler_options(
         throw std::invalid_argument("port must be greater than zero.");
     }
 
-    if (parsed_options.count("session-token") == 0) {
+    if (0 == parsed_options.count("session-token")) {
         throw std::invalid_argument("session-token must be specified.");
     }
     if (network_options.session_token.empty()) {
         throw std::invalid_argument("session-token cannot be an empty string.");
     }
 
-    if (parsed_options.count("task-index") == 0) {
+    if (0 == parsed_options.count("task-index")) {
         throw std::invalid_argument("task-index must be specified.");
     }
 
     if (m_input_paths.size() > 1) {
         throw std::invalid_argument(
                 fmt::format(
-                        "The {} output handler only supports searching a single archive.",
+                        "{} output handler only supports searching a single archive.",
                         cNetworkOutputHandlerName
                 )
         );
