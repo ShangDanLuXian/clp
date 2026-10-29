@@ -69,7 +69,8 @@ auto NetworkOutputHandler::write(
     msgpack::pack(m, src);
 
     if (-1 == send(m_socket_fd, m.data(), m.size(), 0)) {
-        throw OperationFailed(ErrorCode::ErrorCodeFailureNetwork, __FILENAME__, __LINE__);
+        SPDLOG_ERROR("Failed to send a search result to the server, errno={}", errno);
+        return ErrorCode::ErrorCodeFailureNetwork;
     }
     return ErrorCodeSuccess;
 }
