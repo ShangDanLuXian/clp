@@ -91,7 +91,9 @@ This is our working map from the prototype to the PRs of the
   * sticky failure;
   * `SO_NOSIGPIPE` where `MSG_NOSIGNAL` is missing, including in the test;
   * golden bytes instead of expected bytes built with the same packer;
-  * a failed-connection test.
+  * a failed-connection test;
+  * decode the acknowledgement with msgpack-c's unpacker, accepting any valid encoding of
+    `[num_results]`, instead of the fixed 10 bytes of `.cpp:47-50`, `:62-81` and `:231-257`.
 * **Status:** redone by the method on branch `streaming-search/clp-s-network-output`, commits
   `1161c27` (implementation) and `2e5eb58` (tests). The old own-words branch,
   `streaming-search/clp-s-network-protocol`, is superseded. `SO_NOSIGPIPE` is set in
@@ -197,7 +199,9 @@ This is our working map from the prototype to the PRs of the
 * **`test-utils`:** the encoders of `tests/listener.rs:324-386`: `ack`, `encode_handshake`,
   `encode_result(s)` and `encode_trailer`.
 * **Tests:** the 10 unit tests of `protocol.rs`.
-* **Adjust:** rename the crate; version 1; only the error variants this PR needs.
+* **Adjust:** rename the crate; version 1; only the error variants this PR needs; encode the
+  acknowledgement with `rmp` instead of the hand-written 10 bytes of `protocol.rs:142-172`, in
+  `Ack` and in the `test-utils` `ack` encoder.
 * **Status:** branch `streaming-search/query-result-listener-protocol` (`dd9ecd1`) was written
   fresh, not moved. Redo it by the method above.
 

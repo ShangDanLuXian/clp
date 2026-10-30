@@ -30,7 +30,7 @@ reimplementation of the clp-s reader running inside the Spider task executor ins
 | 3 (determinism precondition) | **A concrete trigger appeared with V3**: see issue 22. |
 | 6 (status polling) | Unchanged; the report lists the 100 ms poll as the end-of-stream floor (about 50 ms). |
 | 5, 7, 9, 11, 12 | Unchanged. |
-| 9 (extensibility) | v2 adds a 1-element trailer told apart by array length and a fixed 10-byte acknowledgement; still positional. |
+| 9 (extensibility) | v2 adds a 1-element trailer told apart by array length and a 1-element acknowledgement, `[num_results]` in any valid msgpack encoding (the prototype's fixed 10 bytes are replaced); still positional. |
 
 The report's own open issues that this review had not listed: memory under backpressure is
 O(blocked connections) and 2.2-2.5x the old build after the funnel fix (its acceptance criterion

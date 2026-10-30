@@ -2,7 +2,7 @@
 
 ## Work breakdown
 
-The work lands as fifteen pull requests against `main`. Each one:
+The work lands as seventeen pull requests against `main`. Each one:
 
 * has a single purpose and makes sense on its own;
 * builds, passes the repository's checks, and leaves `main` working, apart from the breaking
@@ -17,7 +17,7 @@ rough estimates including tests, and exclude generated files.
 
 #### PR 1. `feat(clp-s)!: Send network search results with a handshake, result indices, timestamps, a trailer and an acknowledgement.`
 
-Depends on: nothing. Size: about 700 lines, about 350 of them tests.
+Depends on: nothing. Size: about 370 lines.
 
 `clp-s` sends its results to a listener (PRs 5 to 9). A connection carries four kinds of
 messages, each a msgpack array:
@@ -27,30 +27,54 @@ messages, each a msgpack array:
 | Handshake | `clp-s`, once | `[protocol_version, session_token, task_index, archive_id]` |
 | Result | `clp-s`, once per result | `[result_index, timestamp, message]` |
 | Trailer | `clp-s`, once after the last result | `[num_results]` |
-| Acknowledgement | the listener, once | `[num_results]`, always 10 bytes: `0x91 0xcf` and the count as a big-endian u64 |
+| Acknowledgement | the listener, once | `[num_results]`, in any valid msgpack encoding |
 
 `session_token` and `archive_id` are strings, and `timestamp` is an integer in epoch milliseconds.
 `task_index` identifies the query task within its job (PR 10). `result_index` counts the results
 from 0, in the order `clp-s` finds them. The other numbers are unsigned integers.
+
+msgpack writes each integer in the smallest form that fits, so one array has several valid
+encodings: `[5]` is `0x91 0x05`, while writing the count as a u64 gives `0x91 0xcf` and 8 more
+bytes. `clp-s` already writes its trailer in the smallest form. Both sides use a msgpack library for
+the acknowledgement: the listener encodes it with `rmp` (PR 5), and `clp-s` decodes it with
+msgpack-c's unpacker, accepting any valid encoding of `[num_results]`. The prototype wrote and read
+a fixed 10-byte sequence by hand on both sides.
 
 * `clp-s s ... network` requires `--session-token` and `--task-index`, and accepts a single
   archive.
 * Connect when the first result is found, so an archive without results never opens a
   connection; then send the handshake and one result message per result.
 * In the output handler's `finish()` step, which runs after the search, send the trailer, shut
-  down the write side of the socket, wait for the acknowledgement, and check that its count equals
-  the number of results sent. Any failure makes the search fail and `clp-s` exit with an error, so
-  the task fails and Spider reruns it, up to `query_task_max_retry` times.
+  down the write side of the socket, wait for the acknowledgement, decode it, and check that it's a
+  1-element array whose count equals the number of results sent. Any failure makes the search fail
+  and `clp-s` exit with an error, so the task fails and Spider reruns it, up to
+  `query_task_max_retry` times.
 * Once a write fails, every later write and `finish()` fail the same way, so a lost result can
   never be acknowledged.
-* Make the shared `clp::networking::try_send`, which `clo` and the reducer also use, reliable:
-  loop until the whole buffer is written (a send interrupted part-way otherwise drops the rest of a
-  message), retry `EINTR`, and pass `MSG_NOSIGNAL` (or set `SO_NOSIGPIPE` where that flag doesn't
-  exist) so a closed connection returns an error instead of killing the process with `SIGPIPE`.
+* Until PR 1a lands, a listener that closes the connection while `clp-s` is still sending can kill
+  `clp-s` with `SIGPIPE` instead of failing the search. The task fails and is rerun either way.
 * Breaking: `sbin/search.sh` on the `query-scheduler` path runs the `network` output without the
   new options and doesn't acknowledge, so it no longer works with `clp-s`.
-* Catch2 unit tests over a socket pair: the exact bytes of every message, a correct, malformed or
-  mismatched acknowledgement, a peer that closes early, and a failed connection.
+* No automated test. Checked by hand against local listeners: the bytes of every message,
+  acknowledgements in the smallest and the u64 encodings, a wrong or malformed acknowledgement, a
+  peer that closes early, and a failed connection.
+
+#### PR 1a. ``fix(core): Send the whole buffer, retry interrupted sends, and don't raise `SIGPIPE` in `clp::networking::try_send`.``
+
+Depends on: nothing. Size: about 40 lines.
+
+* Make the shared `clp::networking::try_send` reliable: loop until the whole buffer is sent (a send
+  interrupted part-way otherwise drops the rest of a message), retry `EINTR`, and pass
+  `MSG_NOSIGNAL` (or set `SO_NOSIGPIPE` in `connect_to_server` where that flag doesn't exist) so a
+  closed connection returns an error instead of killing the process with `SIGPIPE`.
+* On `main`, `clp-s` reaches it through its reducer output handler, and `clo` uses it too. PR 1
+  makes the network output handler use it.
+* Split out of PR 1, since it fixes a bug `main` already has, in code shared beyond streaming
+  search. Streaming search stays correct without it: a `clp-s` killed by `SIGPIPE` still fails its
+  task, and a message cut short by a partial send is never acknowledged.
+* No automated test. Checked by hand with a listener that shuts down its side of the connection:
+  without the fix, `clp-s` (on top of PR 1) and `clo` are killed by `SIGPIPE`; with it, both get
+  `EPIPE` and exit without a signal.
 
 ### Shared Rust code
 
@@ -120,9 +144,10 @@ Depends on: nothing. Size: about 800 lines, about 350 of them tests.
 
 * A new crate, `components/query-result-listener`, with no I/O yet: decoding the handshake,
   result and trailer messages of PR 1 from a buffer that may end in the middle of a message,
-  encoding the acknowledgement, and the protocol errors: unsupported version, malformed message,
-  invalid session token or archive ID, result index out of order, an archive ID that differs from
-  the task's earlier attempts, count mismatch, and data after the trailer.
+  encoding the acknowledgement with `rmp` instead of by hand, and the protocol errors: unsupported
+  version, malformed message, invalid session token or archive ID, result index out of order, an
+  archive ID that differs from the task's earlier attempts, count mismatch, and data after the
+  trailer.
 * A `test-utils` feature, enabled only by tests, with encoders for the messages `clp-s` sends.
   Later PRs add to it, and the API server's tests use it too.
 * Workspace member, CI path filter.
