@@ -331,6 +331,34 @@ Depends on: PR 10 and PR 14. Size: about 700 lines, about 350 of them tests.
 * Unit tests through the router: 501 without the listener, rejected requests, the order of the
   events, the response body byte for byte, and cancellation when the client closes the connection.
 
+## Future work
+
+### Returning the latest results early
+
+A query with `max_num_results` asks for the latest results by timestamp. The Celery path searches
+archives newest first, in batches, and ends the job once it holds that many results and no
+remaining archive can hold a later one. The Spider path submits every archive as one job, so it
+always searches all of them before the results cache can be read. Streaming search, as planned
+above, delivers every result in arrival order, so PR 4 rejects `max_num_results` for it.
+
+Streaming search gives a caller what it needs to end such a query early:
+
+* every result carries its timestamp;
+* a task's trailer and acknowledgement tell the listener exactly when an archive's results are
+  complete;
+* results reach the caller as they're found, not after the job ends.
+
+A later mode can use these to return the latest results early: the caller keeps the latest
+`max_num_results` results, returns them once every archive whose end timestamp is later than the
+oldest of them has completed, and then cancels the job. This mode accepts `max_num_results`, so it
+replaces PR 4's check for it. It needs pieces the PRs above don't add:
+
+* each task's archive end timestamp at the caller, since the listener only knows archive IDs;
+* running tasks roughly newest first, so that the condition holds early;
+* cancelling the job once the results are returned, as PR 14 does when a client disconnects;
+* optionally, a per-archive limit in `clp-s`, so tasks send fewer results. Its ties on timestamps
+  must break the same way on every attempt, or deduplicating by result index breaks.
+
 ## Open questions
 
 1. **Default output format.** Should `sbin/streaming-search.sh` print each result's timestamp as
