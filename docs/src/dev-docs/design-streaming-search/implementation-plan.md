@@ -359,6 +359,17 @@ replaces PR 4's check for it. It needs pieces the PRs above don't add:
 * optionally, a per-archive limit in `clp-s`, so tasks send fewer results. Its ties on timestamps
   must break the same way on every attempt, or deduplicating by result index breaks.
 
+### Naming a query job's output through one enum
+
+Tracked in y-scope/clp#2619. `SearchJobConfig` names its output through two independent fields,
+`network_output` and `write_to_file`, with the results cache as the default when neither is set,
+so a config can set both. It should name its output through one enum (network, results cache, or
+file), the way `OutputHandle` does for the query task. Both fields are part of the serialized job
+config, which the Celery path's Python mirror also reads, so the change is its own PR, timed with
+the Celery path's removal. When it lands, PR 4's check that rejects `write_to_file` becomes a check
+on the output's variant, and `StreamingQueryJobConfig::into_search_job_config` sets the network
+variant.
+
 ## Open questions
 
 1. **Default output format.** Should `sbin/streaming-search.sh` print each result's timestamp as
