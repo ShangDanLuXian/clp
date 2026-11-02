@@ -2,6 +2,7 @@
 
 CLP is currently split across a few different components in the [components] directory:
 
+* [admin-tools] contains tools to manage the archives and datasets of the CLP package.
 * [api-server] contains code for the API server of the CLP package.
 * [clp-mcp-server] contains code for CLP MCP server.
 * [clp-package-utils] contains Python utilities for operating the CLP package.
@@ -19,6 +20,7 @@ CLP is currently split across a few different components in the [components] dir
 * [package-template] contains the base directory structure and files of the CLP package.
 * [webui] contains the web interface for the CLP package.
 
+[admin-tools]: https://github.com/y-scope/clp/tree/DOCS_VAR_CLP_GIT_REF/components/admin-tools
 [api-server]: https://github.com/y-scope/clp/tree/DOCS_VAR_CLP_GIT_REF/components/api-server
 [components]: https://github.com/y-scope/clp/tree/DOCS_VAR_CLP_GIT_REF/components
 [clp-mcp-server]: https://github.com/y-scope/clp/tree/DOCS_VAR_CLP_GIT_REF/components/clp-mcp-server

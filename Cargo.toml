@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "components/admin-tools",
     "components/api-server",
     "components/clp-rust-libs/clp-rust-utils",
     "components/clp-tdl-package",

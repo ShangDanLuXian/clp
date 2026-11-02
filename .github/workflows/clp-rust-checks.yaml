@@ -7,6 +7,7 @@ on:
       - "Cargo.lock"
       - "Cargo.toml"
       - ".github/workflows/clp-rust-checks.yaml"
+      - "components/admin-tools/**"
       - "components/api-server/**"
       - "components/clp-rust-libs/**"
       - "components/clp-tdl-package/**"
