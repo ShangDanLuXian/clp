@@ -1353,7 +1353,6 @@ dependencies = [
  "anyhow",
  "clap",
  "clp-rust-utils",
- "secrecy",
  "sqlx",
  "tokio",
  "tracing",
