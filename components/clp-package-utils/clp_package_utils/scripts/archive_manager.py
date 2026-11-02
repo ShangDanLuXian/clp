@@ -12,6 +12,7 @@ from clp_py_utils.clp_config import (
     CLP_DEFAULT_CONFIG_FILE_RELATIVE_PATH,
     CLP_DEFAULT_DATASET_NAME,
     ClpDbUserType,
+    CONTAINER_CLP_HOME,
     StorageEngine,
     StorageType,
 )
@@ -233,11 +234,17 @@ def main(argv: list[str]) -> int:
     )
 
     # fmt: off
-    archive_manager_cmd: list[str] = [
-        "python3",
-        "-m", "clp_package_utils.scripts.native.archive_manager",
-        "--config", str(generated_config_path_on_container),
-    ]
+    if StorageEngine.CLP_S == storage_engine:
+        archive_manager_cmd: list[str] = [
+            str(CONTAINER_CLP_HOME / "bin" / "archive-manager"),
+            "--config", str(generated_config_path_on_container),
+        ]
+    else:
+        archive_manager_cmd = [
+            "python3",
+            "-m", "clp_package_utils.scripts.native.archive_manager",
+            "--config", str(generated_config_path_on_container),
+        ]
     # fmt : on
     if parsed_args.verbose:
         archive_manager_cmd.append("--verbose")
