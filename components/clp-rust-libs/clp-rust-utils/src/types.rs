@@ -15,7 +15,8 @@ use sqlx::mysql::MySqlValueRef;
 
 pub type UuidBytes = uuid::Bytes;
 
-/// An archive's UUID. External storage keys and database values use its canonical text form.
+/// An archive's UUID. External storage keys and database values use its canonical text form,
+/// except for the clp-s archives table, which stores its bytes.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(transparent)]
 pub struct ArchiveId {
