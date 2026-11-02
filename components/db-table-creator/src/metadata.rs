@@ -23,8 +23,8 @@ pub async fn create_tables(
             r"
             CREATE TABLE IF NOT EXISTS `{datasets_table}` (
                 `id` SMALLINT unsigned NOT NULL AUTO_INCREMENT,
-                `name` VARCHAR(255) NOT NULL,
-                `archive_storage_path` VARCHAR(4096) NOT NULL,
+                `name` VARCHAR(255) CHARACTER SET utf8mb4 NOT NULL,
+                `archive_storage_path` VARCHAR(4096) CHARACTER SET utf8mb4 NOT NULL,
                 `retention_period_minutes` INT unsigned DEFAULT NULL,
                 `is_deleted` BOOLEAN NOT NULL DEFAULT FALSE,
                 UNIQUE KEY `dataset_name` (`name`) USING BTREE,
@@ -44,6 +44,7 @@ pub async fn create_tables(
                 `num_uncompressed_bytes` BIGINT unsigned NOT NULL,
                 `num_compressed_bytes` BIGINT unsigned NOT NULL,
                 `creation_time_millis` BIGINT NOT NULL,
+                `compression_job_id` INT NOT NULL,
                 `pack_id` BIGINT unsigned DEFAULT NULL,
                 `is_deleted` BOOLEAN NOT NULL DEFAULT FALSE,
                 PRIMARY KEY (`dataset_id`, `timestamp_range_begin_millis`, `id`),
@@ -72,7 +73,7 @@ pub async fn create_tables(
             r"
             CREATE TABLE IF NOT EXISTS `{column_metadata_table}` (
                 `dataset_id` SMALLINT unsigned NOT NULL,
-                `name` VARCHAR(512) NOT NULL,
+                `name` VARCHAR(512) CHARACTER SET utf8mb4 NOT NULL,
                 `type` TINYINT NOT NULL,
                 PRIMARY KEY (`dataset_id`, `name`, `type`)
             )"
