@@ -26,7 +26,7 @@ pub async fn fetch_existing(
     database_config: &DatabaseConfig,
 ) -> Result<Vec<Dataset>, sqlx::Error> {
     sqlx::query_as(&format!(
-        "SELECT `id`, `name`, `archive_storage_path` FROM `{}` WHERE NOT `is_deleted`",
+        "SELECT `id`, `name`, `archive_storage_path` FROM `{}` WHERE `is_deleted` = FALSE",
         database_config.datasets_table_name()
     ))
     .fetch_all(db_pool)

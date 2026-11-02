@@ -23,7 +23,7 @@ pub async fn get_id(
 ) -> Result<Option<DatasetId>, crate::Error> {
     let datasets_table = database_config.datasets_table_name();
     Ok(sqlx::query_scalar(&format!(
-        "SELECT `id` FROM `{datasets_table}` WHERE `name` = ? AND NOT `is_deleted`"
+        "SELECT `id` FROM `{datasets_table}` WHERE `name` = ? AND `is_deleted` = FALSE"
     ))
     .bind(dataset)
     .fetch_optional(executor)

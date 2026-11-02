@@ -15,7 +15,6 @@ path = "src/bin/db_table_creator.rs"
 anyhow = { workspace = true }
 clap = { workspace = true }
 clp-rust-utils = { workspace = true }
-secrecy = { workspace = true }
 sqlx = { workspace = true }
 tokio = { workspace = true, features = ["macros"] }
 tracing = { workspace = true }

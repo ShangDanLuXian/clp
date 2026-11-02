@@ -30,24 +30,7 @@ async fn main() -> anyhow::Result<()> {
         anyhow::bail!(ERROR_MESSAGE);
     }
 
-    let credentials = package::credentials::Database {
-        password: secrecy::SecretString::new(
-            std::env::var("CLP_DB_PASS")
-                .inspect_err(|e| {
-                    tracing::error!(
-                        error = % e,
-                        "Failed to read the database password from `CLP_DB_PASS`."
-                    );
-                })?
-                .into_boxed_str(),
-        ),
-        user: std::env::var("CLP_DB_USER").inspect_err(|e| {
-            tracing::error!(
-                error = % e,
-                "Failed to read the database user from `CLP_DB_USER`."
-            );
-        })?,
-    };
+    let credentials = package::credentials::Database::from_env()?;
 
     let db_pool = create_clp_db_mysql_pool(&config.database, &credentials, 1)
         .await

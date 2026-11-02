@@ -11,6 +11,7 @@ use clp_rust_utils::clp_config::package::config::ArchiveOutputStorage;
 use clp_rust_utils::clp_config::package::config::Config;
 use clp_rust_utils::clp_config::package::config::Database as DatabaseConfig;
 use clp_rust_utils::clp_config::package::config::StorageEngine;
+use clp_rust_utils::clp_config::package::credentials;
 use clp_rust_utils::database::mysql::create_clp_db_mysql_pool;
 use clp_rust_utils::dataset::DatasetId;
 use clp_rust_utils::dataset::DatasetName;
@@ -121,7 +122,7 @@ async fn main() -> ExitCode {
 ///   * `archive_output.directory` doesn't exist.
 ///   * Some of the given archive IDs are not valid UUIDs.
 /// * Forwards [`yaml::from_path`]'s return values on failure.
-/// * Forwards [`admin_tools::read_db_credentials_from_env`]'s return values on failure.
+/// * Forwards [`credentials::Database::from_env`]'s return values on failure.
 /// * Forwards [`create_clp_db_mysql_pool`]'s return values on failure.
 /// * Forwards [`clp_rust_utils::database::mysql::dataset::get_id`]'s return values on failure.
 /// * Forwards [`find_archives`]'s return values on failure.
@@ -143,7 +144,7 @@ async fn run(args: Cli) -> anyhow::Result<()> {
         anyhow::bail!(ERROR_MESSAGE);
     };
 
-    let db_credentials = admin_tools::read_db_credentials_from_env()?;
+    let db_credentials = credentials::Database::from_env()?;
     let db_pool = create_clp_db_mysql_pool(&config.database, &db_credentials, 1)
         .await
         .inspect_err(|e| tracing::error!(error = % e, "Failed to create the database pool."))?;
