@@ -276,7 +276,7 @@ impl ArchiveGarbageCollector {
             "SELECT `archives`.`id`, `archives`.`uuid`, `archives`.`dataset_id`, \
              `datasets`.`name` AS `dataset_name` FROM `{archives_table}` AS `archives` JOIN \
              `{datasets_table}` AS `datasets` ON `archives`.`dataset_id` = `datasets`.`id` WHERE \
-             `datasets`.`is_deleted` = FALSE AND `datasets`.`retention_period_minutes` IS NOT \
+             `datasets`.`deleted_at_millis` = 0 AND `datasets`.`retention_period_minutes` IS NOT \
              NULL AND `archives`.`creation_time_millis` < ? - \
              CAST(`datasets`.`retention_period_minutes` AS SIGNED) * {MILLISECS_PER_MINUTE}"
         ))

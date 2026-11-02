@@ -26,8 +26,8 @@ pub async fn create_tables(
                 `name` VARCHAR(255) CHARACTER SET utf8mb4 NOT NULL,
                 `archive_storage_path` VARCHAR(4096) CHARACTER SET utf8mb4 NOT NULL,
                 `retention_period_minutes` INT unsigned DEFAULT NULL,
-                `is_deleted` BOOLEAN NOT NULL DEFAULT FALSE,
-                UNIQUE KEY `dataset_name` (`name`) USING BTREE,
+                `deleted_at_millis` BIGINT NOT NULL DEFAULT 0,
+                UNIQUE KEY `dataset_name` (`name`, `deleted_at_millis`) USING BTREE,
                 PRIMARY KEY (`id`)
             )"
         ),
@@ -46,7 +46,6 @@ pub async fn create_tables(
                 `creation_time_millis` BIGINT NOT NULL,
                 `compression_job_id` INT NOT NULL,
                 `pack_id` BIGINT unsigned DEFAULT NULL,
-                `is_deleted` BOOLEAN NOT NULL DEFAULT FALSE,
                 PRIMARY KEY (`dataset_id`, `timestamp_range_begin_millis`, `id`),
                 KEY `auto_inc` (`id`),
                 KEY `archive_uuid` (`dataset_id`, `uuid`),

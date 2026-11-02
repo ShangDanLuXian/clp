@@ -20,7 +20,7 @@ pub async fn get_names(
 ) -> Result<Vec<DatasetName>, crate::Error> {
     let datasets_table = database_config.datasets_table_name();
     Ok(sqlx::query_scalar(&format!(
-        "SELECT `name` FROM `{datasets_table}` WHERE `is_deleted` = FALSE ORDER BY `name`"
+        "SELECT `name` FROM `{datasets_table}` WHERE `deleted_at_millis` = 0 ORDER BY `name`"
     ))
     .fetch_all(db_pool)
     .await?)
@@ -41,7 +41,7 @@ pub async fn get_deleted_ids(
 ) -> Result<Vec<DatasetId>, crate::Error> {
     let datasets_table = database_config.datasets_table_name();
     Ok(sqlx::query_scalar(&format!(
-        "SELECT `id` FROM `{datasets_table}` WHERE `is_deleted` = TRUE"
+        "SELECT `id` FROM `{datasets_table}` WHERE `deleted_at_millis` <> 0"
     ))
     .fetch_all(db_pool)
     .await?)
@@ -65,14 +65,14 @@ pub async fn get_id_by_name(
 ) -> Result<Option<DatasetId>, crate::Error> {
     let datasets_table = database_config.datasets_table_name();
     Ok(sqlx::query_scalar(&format!(
-        "SELECT `id` FROM `{datasets_table}` WHERE `name` = ? AND `is_deleted` = FALSE"
+        "SELECT `id` FROM `{datasets_table}` WHERE `name` = ? AND `deleted_at_millis` = 0"
     ))
     .bind(name)
     .fetch_optional(db_pool)
     .await?)
 }
 
-/// Marks a dataset as deleted.
+/// Marks a dataset as deleted, unless it's already deleted.
 ///
 /// # Errors
 ///
@@ -86,7 +86,9 @@ pub async fn mark_deleted(
 ) -> Result<(), crate::Error> {
     let datasets_table = database_config.datasets_table_name();
     sqlx::query(&format!(
-        "UPDATE `{datasets_table}` SET `is_deleted` = TRUE WHERE `id` = ?"
+        "UPDATE `{datasets_table}` SET `deleted_at_millis` = \
+         CAST(UNIX_TIMESTAMP(CURRENT_TIMESTAMP(3)) * 1000 AS SIGNED) WHERE `id` = ? AND \
+         `deleted_at_millis` = 0"
     ))
     .bind(id)
     .execute(db_pool)
