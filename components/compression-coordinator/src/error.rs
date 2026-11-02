@@ -1,5 +1,6 @@
 //! The crate-level error type for the compression coordinator.
 
+use clp_rust_utils::dataset::RegisterDatasetError;
 use clp_rust_utils::job_config::ingestion::JobId as IngestionJobId;
 use clp_rust_utils::s3::S3ObjectMetadataId;
 use spider_core::types::resource_group::ExternalResourceGroupCredentialsError;
@@ -7,6 +8,9 @@ use spider_core::types::resource_group::ExternalResourceGroupCredentialsError;
 /// Errors returned by the compression coordinator.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("failed to register the dataset: {0}")]
+    DatasetRegistration(#[from] RegisterDatasetError),
+
     #[error(
         "duplicate S3 object metadata IDs {ids:?} requested for ingestion job {ingestion_job_id}"
     )]
@@ -26,13 +30,6 @@ pub enum Error {
 
     #[error("invalid endpoint: {0}")]
     InvalidEndpoint(String),
-
-    #[error("failed to create metadata table `{table}`: {source}")]
-    MetadataTableCreation {
-        table: String,
-        #[source]
-        source: sqlx::Error,
-    },
 
     #[error("missing S3 object metadata {id} for ingestion job {ingestion_job_id}")]
     MissingS3ObjectMetadata {

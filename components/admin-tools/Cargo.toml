@@ -1,0 +1,25 @@
+[package]
+name = "admin-tools"
+version = { workspace = true }
+edition = { workspace = true }
+
+[lib]
+name = "admin_tools"
+path = "src/lib.rs"
+
+[[bin]]
+name = "archive-manager"
+path = "src/bin/archive_manager.rs"
+
+[[bin]]
+name = "dataset-manager"
+path = "src/bin/dataset_manager.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+clp-rust-utils = { workspace = true }
+non-empty-string = { workspace = true }
+sqlx = { workspace = true }
+tokio = { workspace = true, features = ["macros"] }
+tracing = { workspace = true }

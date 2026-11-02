@@ -395,6 +395,7 @@ services:
       CLP_LOGGING_LEVEL: "${CLP_GARBAGE_COLLECTOR_LOGGING_LEVEL:-INFO}"
       CLP_LOGS_DIR: "/var/log/garbage_collector"
       PYTHONPATH: "/opt/clp/lib/python3/site-packages"
+      RUST_LOG: "${CLP_GARBAGE_COLLECTOR_LOGGING_LEVEL:-INFO}"
     volumes:
       - *volume_clp_config_readonly
       - *volume_clp_logs

@@ -73,6 +73,11 @@ archive_output:
 By default, `archive_output.retention_period` is `null`, which means that archives will be retained
 indefinitely.
 
+:::{note}
+`archive_output.retention_period` only applies to the `clp` storage engine. With the `clp-s` storage
+engine, archives are retained according to their dataset's retention period instead.
+:::
+
 :::{warning}
 If your log events use timestamps that *aren't* in the UTC time zone, you will need to adjust the
 configured retention period to ensure expired archives are deleted at the correct time. See
@@ -184,7 +189,8 @@ $sweep\_interval$ minutes longer than the configured retention period.
 :::{note}
 If the value of `archive_output.retention_period` is `null`, the corresponding garbage collection
 task will not run even if `garbage_collector.sweep_interval.archive` is configured. The same applies
-for `results_cache.retention_period` and `garbage_collector.sweep_interval.search_result`.
+for `results_cache.retention_period` and `garbage_collector.sweep_interval.search_result`. With the
+`clp-s` storage engine, however, the archive garbage collection task always runs.
 :::
 
 ---

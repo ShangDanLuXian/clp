@@ -14,13 +14,13 @@ use sqlx::error::BoxDynError;
 use sqlx::mysql::MySqlTypeInfo;
 use sqlx::mysql::MySqlValueRef;
 
-use crate::clp_config::package::config::CLP_METADATA_TABLE_PREFIX;
+/// The ID of a dataset in the datasets table.
+pub type DatasetId = u16;
 
 /// A validated dataset name.
 ///
 /// A dataset name is non-empty, only contains `_` or Unicode letters and numbers (general
-/// categories L and N) in the Basic Multilingual Plane, and is short enough for its longest
-/// metadata table name to fit MySQL's 64-character table-name limit.
+/// categories L and N) in the Basic Multilingual Plane, and is at most 255 characters long.
 ///
 /// A dataset name serializes as a plain string. It deserializes from a string, validated by the
 /// same rules as its [`FromStr`] implementation, or from a `null` or missing value, which gives the
@@ -161,22 +161,86 @@ pub enum ParseDatasetNameError {
     TooLong(String),
 }
 
+/// An error returned when registering a dataset fails.
+#[derive(Debug, thiserror::Error)]
+pub enum RegisterDatasetError {
+    #[error("dataset `{0}` is deleted")]
+    Deleted(DatasetName),
+
+    #[error("inserted dataset ID {0} overflows `DatasetId`")]
+    IdOverflow(u64),
+
+    #[error("`sqlx::Error`: {0}")]
+    Sqlx(#[from] sqlx::Error),
+}
+
+/// Idempotently registers `dataset` in `datasets_table`, with `archive_storage_path` as its archive
+/// storage path.
+///
+/// # Returns
+///
+/// The dataset's ID on success.
+///
+/// # Errors
+///
+/// Returns an error if:
+///
+/// * [`RegisterDatasetError::Deleted`] if `dataset` is registered but deleted.
+/// * [`RegisterDatasetError::IdOverflow`] if the ID of the inserted dataset doesn't fit in
+///   [`DatasetId`].
+/// * Forwards [`sqlx::query::QueryAs::fetch_optional`]'s return values on failure.
+/// * Forwards [`sqlx::query::Query::execute`]'s return values on failure, other than a unique key
+///   violation.
+/// * Forwards [`sqlx::query::QueryAs::fetch_one`]'s return values on failure.
+pub async fn register_dataset(
+    db_connection: &mut sqlx::MySqlConnection,
+    datasets_table: &str,
+    dataset: &DatasetName,
+    archive_storage_path: &str,
+) -> Result<DatasetId, RegisterDatasetError> {
+    let select_query =
+        format!("SELECT `id`, `is_deleted` FROM `{datasets_table}` WHERE `name` = ?");
+    let existing_dataset = sqlx::query_as::<_, (DatasetId, bool)>(&select_query)
+        .bind(dataset)
+        .fetch_optional(&mut *db_connection)
+        .await?;
+    let (id, is_deleted) = if let Some(existing_dataset) = existing_dataset {
+        existing_dataset
+    } else {
+        let insert_result = sqlx::query(&format!(
+            "INSERT INTO `{datasets_table}` (`name`, `archive_storage_path`) VALUES (?, ?)"
+        ))
+        .bind(dataset)
+        .bind(archive_storage_path)
+        .execute(&mut *db_connection)
+        .await;
+        match insert_result {
+            Ok(query_result) => {
+                let id = query_result.last_insert_id();
+                return DatasetId::try_from(id).map_err(|_| RegisterDatasetError::IdOverflow(id));
+            }
+            Err(sqlx::Error::Database(e)) if e.is_unique_violation() => {
+                sqlx::query_as(&format!("{select_query} LOCK IN SHARE MODE"))
+                    .bind(dataset)
+                    .fetch_one(&mut *db_connection)
+                    .await?
+            }
+            Err(e) => return Err(e.into()),
+        }
+    };
+    if is_deleted {
+        return Err(RegisterDatasetError::Deleted(dataset.clone()));
+    }
+    Ok(id)
+}
+
 /// The name of the dataset used when none is specified.
 const CLP_DEFAULT_DATASET_NAME: &str = "default";
 
 /// The maximum number of characters in a dataset name.
 ///
-/// The bound ensures that the longest metadata table name, `<table prefix><dataset>_<longest
-/// suffix>` with the table prefix [`CLP_METADATA_TABLE_PREFIX`], fits MySQL's 64-character
-/// table-name limit.
-const DATASET_NAME_MAX_LEN: usize =
-    MYSQL_TABLE_NAME_MAX_LEN - CLP_METADATA_TABLE_PREFIX.len() - 1 - TABLE_SUFFIX_MAX_LEN;
-
-/// The maximum number of characters in a MySQL table name.
-const MYSQL_TABLE_NAME_MAX_LEN: usize = 64;
-
-/// The length of the longest metadata table name suffix.
-const TABLE_SUFFIX_MAX_LEN: usize = "column_metadata".len();
+/// The bound matches the length of the datasets table's `name` column.
+const DATASET_NAME_MAX_LEN: usize = 255;
 
 #[cfg(test)]
 mod tests {

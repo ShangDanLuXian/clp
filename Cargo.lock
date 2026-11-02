@@ -3,6 +3,19 @@
 version = 4
 
 [[package]]
+name = "admin-tools"
+version = "0.13.1-dev"
+dependencies = [
+ "anyhow",
+ "clap",
+ "clp-rust-utils",
+ "non-empty-string",
+ "sqlx",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1347,6 +1360,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a4ae5f15dda3c708c0ade84bfee31ccab44a3da4f88015ed22f63732abe300c8"
 
 [[package]]
+name = "db-table-creator"
+version = "0.13.1-dev"
+dependencies = [
+ "anyhow",
+ "clap",
+ "clp-rust-utils",
+ "sqlx",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "delegate"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1725,6 +1750,20 @@ dependencies = [
  "memchr",
  "pin-project-lite",
  "slab",
+]
+
+[[package]]
+name = "garbage-collector"
+version = "0.13.1-dev"
+dependencies = [
+ "anyhow",
+ "clap",
+ "clp-rust-utils",
+ "non-empty-string",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

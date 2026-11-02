@@ -32,9 +32,11 @@ pub struct Config {
     pub package: Package,
     pub database: Database,
     pub results_cache: ResultsCache,
+    pub garbage_collector: GarbageCollector,
     pub api_server: Option<ApiServer>,
     pub log_ingestor: Option<LogIngestor>,
     pub logs_directory: String,
+    pub tmp_directory: String,
     pub stream_output: StreamOutput,
     pub logs_input: LogsInput,
     pub archive_output: ArchiveOutput,
@@ -50,9 +52,11 @@ impl Default for Config {
             package: Package::default(),
             database: Database::default(),
             results_cache: ResultsCache::default(),
+            garbage_collector: GarbageCollector::default(),
             api_server: None,
             log_ingestor: None,
             logs_directory: "var/log".to_owned(),
+            tmp_directory: "var/tmp".to_owned(),
             stream_output: StreamOutput::default(),
             logs_input: LogsInput::Fs {
                 config: FsIngestion::default(),
@@ -179,22 +183,6 @@ impl Default for Database {
 impl Database {
     /// # Returns
     ///
-    /// The archives table name (`<prefix><dataset>_archives`).
-    #[must_use]
-    pub fn archives_table_name(&self, dataset: &DatasetName) -> String {
-        format!("{}{dataset}_archives", self.table_prefix)
-    }
-
-    /// # Returns
-    ///
-    /// The column-metadata table name (`<prefix><dataset>_column_metadata`).
-    #[must_use]
-    pub fn column_metadata_table_name(&self, dataset: &DatasetName) -> String {
-        format!("{}{dataset}_column_metadata", self.table_prefix)
-    }
-
-    /// # Returns
-    ///
     /// The datasets table name `<prefix>datasets`.
     #[must_use]
     pub fn datasets_table_name(&self) -> String {
@@ -203,19 +191,27 @@ impl Database {
 
     /// # Returns
     ///
-    /// The files table name (`<prefix><dataset>_files`).
+    /// The long-span archives table name (`<prefix>long_span_archives`).
     #[must_use]
-    pub fn files_table_name(&self, dataset: &DatasetName) -> String {
-        format!("{}{dataset}_files", self.table_prefix)
+    pub fn long_span_archives_table_name(&self) -> String {
+        format!("{}long_span_archives", self.table_prefix)
     }
 
     /// # Returns
     ///
     /// The archives table name without a dataset (`<prefix>archives`), used by the CLP storage
-    /// engine.
+    /// engine and by the clp-s tables that every dataset shares.
     #[must_use]
     pub fn unscoped_archives_table_name(&self) -> String {
         format!("{}archives", self.table_prefix)
+    }
+
+    /// # Returns
+    ///
+    /// The column-metadata table name without a dataset (`<prefix>column_metadata`).
+    #[must_use]
+    pub fn unscoped_column_metadata_table_name(&self) -> String {
+        format!("{}column_metadata", self.table_prefix)
     }
 
     /// # Returns
@@ -417,7 +413,6 @@ pub struct ArchiveOutput {
     pub target_encoded_file_size: u64,
     pub target_segment_size: u64,
     pub compression_level: u8,
-    pub retention_period: Option<NonZeroU64>,
 }
 
 impl ArchiveOutput {
@@ -471,7 +466,6 @@ impl Default for ArchiveOutput {
             target_encoded_file_size: 256 * 1024 * 1024,
             target_segment_size: 256 * 1024 * 1024,
             compression_level: 3,
-            retention_period: None,
         }
     }
 }
@@ -553,6 +547,42 @@ impl Default for Telemetry {
         Self {
             disable: false,
             endpoint: "https://telemetry.yscope.io".to_owned(),
+        }
+    }
+}
+
+/// Mirror of `clp_py_utils.clp_config.GarbageCollector`.
+///
+/// # NOTE
+///
+/// * This type is partially defined: unused fields are omitted and discarded through
+///   deserialization.
+/// * The default values must be kept in sync with the Python definition.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(default)]
+pub struct GarbageCollector {
+    pub sweep_interval: SweepInterval,
+}
+
+/// Mirror of `clp_py_utils.clp_config.SweepInterval`.
+///
+/// # NOTE
+///
+/// * This type is partially defined: unused fields are omitted and discarded through
+///   deserialization.
+/// * The default values must be kept in sync with the Python definition.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(default)]
+pub struct SweepInterval {
+    #[serde(rename = "archive")]
+    pub archive_minutes: NonZeroU64,
+}
+
+impl Default for SweepInterval {
+    fn default() -> Self {
+        Self {
+            archive_minutes: NonZeroU64::new(60)
+                .expect("default archive sweep interval should not be zero"),
         }
     }
 }

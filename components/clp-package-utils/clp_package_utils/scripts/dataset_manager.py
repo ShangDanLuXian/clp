@@ -12,6 +12,7 @@ from clp_py_utils.clp_config import (
     CLP_DB_USER_ENV_VAR_NAME,
     CLP_DEFAULT_CONFIG_FILE_RELATIVE_PATH,
     ClpDbUserType,
+    CONTAINER_CLP_HOME,
     StorageEngine,
     StorageType,
 )
@@ -120,10 +121,8 @@ def main(argv: list[str]) -> int:
             args_parser.error("The -a/--all flag cannot be used together with a dataset name.")
 
         try:
-            clp_db_connection_params = clp_config.database.get_clp_connection_params_and_type(True)
-            table_prefix = clp_db_connection_params["table_prefix"]
             for dataset in datasets:
-                validate_dataset_name(table_prefix, dataset)
+                validate_dataset_name(dataset)
         except:
             logger.exception("Invalid dataset name.")
             return -1
@@ -167,8 +166,7 @@ def main(argv: list[str]) -> int:
 
     # fmt: off
     dataset_manager_cmd = [
-        "python3",
-        "-m", "clp_package_utils.scripts.native.dataset_manager",
+        str(CONTAINER_CLP_HOME / "bin" / "dataset-manager"),
         "--config", str(generated_config_path_on_container),
     ]
     # fmt: on

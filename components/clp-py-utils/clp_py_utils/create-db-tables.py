@@ -4,7 +4,7 @@ import pathlib
 import subprocess
 import sys
 
-from clp_py_utils.clp_config import StorageEngine
+from clp_py_utils.clp_config import CONTAINER_CLP_HOME, StorageEngine
 
 # Setup logging
 # Create logger
@@ -32,13 +32,21 @@ def main(argv):
     config_file_path = pathlib.Path(parsed_args.config)
     storage_engine = StorageEngine(parsed_args.storage_engine)
 
-    # fmt: off
-    cmd = [
-        "python3", "-m", "clp_py_utils.initialize-clp-metadata-db",
-        "--config", str(config_file_path),
-        "--storage-engine", str(storage_engine),
-    ]
-    # fmt: on
+    if StorageEngine.CLP_S == storage_engine:
+        # fmt: off
+        cmd = [
+            str(CONTAINER_CLP_HOME / "bin" / "db-table-creator"),
+            "--config", str(config_file_path),
+        ]
+        # fmt: on
+    else:
+        # fmt: off
+        cmd = [
+            "python3", "-m", "clp_py_utils.initialize-clp-metadata-db",
+            "--config", str(config_file_path),
+            "--storage-engine", str(storage_engine),
+        ]
+        # fmt: on
     subprocess.run(cmd, check=True)
 
     # fmt: off

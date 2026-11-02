@@ -5,19 +5,12 @@ from pathlib import Path
 from clp_py_utils.clp_config import ArchiveOutput, StorageType
 
 # Constants
-MYSQL_TABLE_NAME_MAX_LEN = 64
+DATASET_NAME_MAX_LEN = 255
 
 ARCHIVES_TABLE_SUFFIX = "archives"
 COLUMN_METADATA_TABLE_SUFFIX = "column_metadata"
 DATASETS_TABLE_SUFFIX = "datasets"
 FILES_TABLE_SUFFIX = "files"
-
-TABLE_SUFFIX_MAX_LEN = max(
-    len(ARCHIVES_TABLE_SUFFIX),
-    len(COLUMN_METADATA_TABLE_SUFFIX),
-    len(DATASETS_TABLE_SUFFIX),
-    len(FILES_TABLE_SUFFIX),
-)
 
 
 def _create_archives_table(db_cursor, archives_table_name: str) -> None:
@@ -148,12 +141,17 @@ def fetch_existing_datasets(
     table_prefix: str,
 ) -> set[str]:
     """
-    Gets the names of all existing datasets.
+    Gets the names of all existing datasets, excluding deleted ones.
 
     :param db_cursor:
     :param table_prefix:
     """
-    db_cursor.execute(f"SELECT name FROM `{get_datasets_table_name(table_prefix)}`")
+    db_cursor.execute(
+        f"""
+        SELECT name FROM `{get_datasets_table_name(table_prefix)}`
+        WHERE is_deleted = FALSE
+        """
+    )
     rows = db_cursor.fetchall()
     return {row["name"] for row in rows}
 

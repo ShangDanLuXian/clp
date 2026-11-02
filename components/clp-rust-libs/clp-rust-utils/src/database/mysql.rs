@@ -1,3 +1,5 @@
+pub mod archive;
+pub mod dataset;
 pub mod query_job;
 
 use secrecy::ExposeSecret;

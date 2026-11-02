@@ -1,6 +1,9 @@
 #ifndef CLP_S_INDEXER_MYSQLINDEXSTORAGE_HPP
 #define CLP_S_INDEXER_MYSQLINDEXSTORAGE_HPP
 
+#include <string>
+#include <string_view>
+
 #include "../../clp/MySQLDB.hpp"
 #include "../../clp/MySQLPreparedStatement.hpp"
 #include "../SchemaTree.hpp"
@@ -12,7 +15,8 @@ namespace clp_s::indexer {
  */
 class MySQLIndexStorage {
 public:
-    static constexpr char cColumnMetadataTableSuffix[] = "column_metadata";
+    static constexpr std::string_view cColumnMetadataTableSuffix{"column_metadata"};
+    static constexpr std::string_view cDatasetsTableSuffix{"datasets"};
 
     // Types
     class OperationFailed : public TraceableException {
@@ -47,11 +51,12 @@ public:
     void open();
 
     /**
-     * Creates the table if it is required and prepares the insert statement
+     * Prepares the statement that inserts fields into the column metadata table for the given
+     * dataset.
+     *
      * @param dataset_name
-     * @param should_create_table
      */
-    void init(std::string const& dataset_name, bool should_create_table);
+    void init(std::string const& dataset_name);
 
     /**
      * Closes the database connection
@@ -75,6 +80,7 @@ private:
     std::string m_password;
     std::string m_database_name;
     std::string m_table_prefix;
+    std::string m_dataset_name;
 
     clp::MySQLDB m_db;
 

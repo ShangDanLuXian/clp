@@ -1,9 +1,12 @@
 [workspace]
 members = [
+    "components/admin-tools",
     "components/api-server",
     "components/clp-rust-libs/clp-rust-utils",
     "components/clp-tdl-package",
     "components/compression-coordinator",
+    "components/db-table-creator",
+    "components/garbage-collector",
     "components/log-ingestor",
     "components/query-coordinator",
 ]
