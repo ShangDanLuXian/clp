@@ -1,3 +1,5 @@
+mod datasets;
+
 use std::num::NonZeroU32;
 use std::pin::Pin;
 

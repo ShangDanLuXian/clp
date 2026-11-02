@@ -1,3 +1,4 @@
+pub mod datasets;
 mod webui;
 
 use axum::Json;
