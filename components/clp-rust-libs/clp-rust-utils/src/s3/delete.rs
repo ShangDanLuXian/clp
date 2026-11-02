@@ -22,59 +22,79 @@ pub enum DeleteError {
 ///
 /// Returns an error if:
 ///
-/// * [`DeleteError::Sdk`] if:
-///   * [`aws_sdk_s3::operation::list_objects_v2::paginator::ListObjectsV2Paginator::send`]'s stream
-///     yields an error.
-///   * [`aws_sdk_s3::types::builders::ObjectIdentifierBuilder::build`] fails.
+/// * [`DeleteError::Sdk`] if
+///   [`aws_sdk_s3::operation::list_objects_v2::paginator::ListObjectsV2Paginator::send`]'s stream
+///   yields an error.
 /// * Forwards [`delete_objects`]'s return values on failure.
 pub async fn delete_by_key_prefix(
     client: &Client,
     bucket: &str,
     key_prefix: &NonEmptyString,
 ) -> Result<(), DeleteError> {
-    const MAX_NUM_KEYS_PER_REQUEST: i32 = 1000;
-
     let mut pages = client
         .list_objects_v2()
         .bucket(bucket)
         .prefix(key_prefix.as_str())
-        .max_keys(MAX_NUM_KEYS_PER_REQUEST)
+        .max_keys(i32::from(MAX_NUM_KEYS_PER_REQUEST))
         .into_paginator()
         .send();
     while let Some(page) = pages.next().await {
         let page = page.map_err(|e| DeleteError::Sdk(Box::new(e.into())))?;
-        let objects = page
+        let keys: Vec<&str> = page
             .contents()
             .iter()
             .filter_map(|object| object.key())
-            .map(|key| ObjectIdentifier::builder().key(key).build())
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| DeleteError::Sdk(Box::new(e.into())))?;
-        if objects.is_empty() {
+            .collect();
+        if keys.is_empty() {
             continue;
         }
 
-        delete_objects(client, bucket, objects).await?;
+        delete_objects(client, bucket, &keys).await?;
     }
 
     Ok(())
 }
 
-/// Deletes `objects` from `bucket` in one request.
+/// Deletes every object in `bucket` whose key is in `keys`.
+///
+/// # Errors
+///
+/// Returns an error if:
+///
+/// * Forwards [`delete_objects`]'s return values on failure.
+pub async fn delete_by_keys(
+    client: &Client,
+    bucket: &str,
+    keys: &[NonEmptyString],
+) -> Result<(), DeleteError> {
+    for keys in keys.chunks(usize::from(MAX_NUM_KEYS_PER_REQUEST)) {
+        let keys: Vec<&str> = keys.iter().map(NonEmptyString::as_str).collect();
+        delete_objects(client, bucket, &keys).await?;
+    }
+
+    Ok(())
+}
+
+/// The maximum number of keys that a `ListObjectsV2` or `DeleteObjects` request handles.
+const MAX_NUM_KEYS_PER_REQUEST: u16 = 1000;
+
+/// Deletes the objects in `bucket` whose keys are in `keys`, in one request.
 ///
 /// # Errors
 ///
 /// Returns an error if:
 ///
 /// * [`DeleteError::Sdk`] if:
+///   * [`aws_sdk_s3::types::builders::ObjectIdentifierBuilder::build`] fails.
 ///   * [`aws_sdk_s3::types::builders::DeleteBuilder::build`] fails.
 ///   * [`aws_sdk_s3::operation::delete_objects::builders::DeleteObjectsFluentBuilder::send`] fails.
 /// * [`DeleteError::ObjectNotDeleted`] if S3 fails to delete an object.
-async fn delete_objects(
-    client: &Client,
-    bucket: &str,
-    objects: Vec<ObjectIdentifier>,
-) -> Result<(), DeleteError> {
+async fn delete_objects(client: &Client, bucket: &str, keys: &[&str]) -> Result<(), DeleteError> {
+    let objects = keys
+        .iter()
+        .map(|key| ObjectIdentifier::builder().key(*key).build())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| DeleteError::Sdk(Box::new(e.into())))?;
     let delete = Delete::builder()
         .set_objects(Some(objects))
         .quiet(true)
