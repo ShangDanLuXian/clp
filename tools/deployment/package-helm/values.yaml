@@ -328,7 +328,8 @@ clpConfig:
     storage:
       type: "fs"
 
-    # Retention period for archives, in minutes. Set to null to disable automatic deletion.
+    # Retention period for archives, in minutes, for the "clp" storage engine. Set to null to
+    # disable automatic deletion.
     retention_period: null
 
     # How much data CLP should try to compress into each archive
