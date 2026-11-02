@@ -1059,7 +1059,10 @@ class BaseController(ABC):
         :return: Dictionary of environment variables necessary to launch the component.
         """
         component_name = GARBAGE_COLLECTOR_COMPONENT_NAME
-        if not is_retention_period_configured(self._clp_config):
+        if (
+            StorageEngine.CLP_S != self._clp_config.package.storage_engine
+            and not is_retention_period_configured(self._clp_config)
+        ):
             logger.info(
                 f"Retention period is not configured, skipping {component_name} creation..."
             )

@@ -8,7 +8,9 @@ from pathlib import Path
 
 from clp_py_utils.clp_config import (
     ClpConfig,
+    CONTAINER_CLP_HOME,
     GARBAGE_COLLECTOR_COMPONENT_NAME,
+    StorageEngine,
 )
 from clp_py_utils.clp_logging import configure_logging, get_logger
 from clp_py_utils.core import read_yaml_config_file
@@ -24,6 +26,18 @@ from job_orchestration.garbage_collector.search_result_garbage_collector import 
 )
 
 logger = get_logger(GARBAGE_COLLECTOR_COMPONENT_NAME)
+
+
+async def _run_archive_garbage_collector_binary(config_path: Path) -> None:
+    process = await asyncio.create_subprocess_exec(
+        str(CONTAINER_CLP_HOME / "bin" / "archive-garbage-collector"),
+        "--config",
+        str(config_path),
+    )
+    return_code = await process.wait()
+    if 0 != return_code:
+        msg = f"archive-garbage-collector exited with return code {return_code}."
+        raise RuntimeError(msg)
 
 
 async def main(argv: list[str]) -> int:
@@ -49,10 +63,6 @@ async def main(argv: list[str]) -> int:
         return 1
 
     gc_task_configs: dict[str, tuple[int | None, Callable[[ClpConfig], None]]] = {
-        ARCHIVE_GARBAGE_COLLECTOR_NAME: (
-            clp_config.archive_output.retention_period,
-            archive_garbage_collector,
-        ),
         SEARCH_RESULT_GARBAGE_COLLECTOR_NAME: (
             clp_config.results_cache.retention_period,
             search_result_garbage_collector,
@@ -61,6 +71,19 @@ async def main(argv: list[str]) -> int:
     gc_tasks: list[asyncio.Task[None]] = []
 
     # Create GC tasks
+    if StorageEngine.CLP_S == clp_config.package.storage_engine:
+        logger.info("Creating %s.", ARCHIVE_GARBAGE_COLLECTOR_NAME)
+        gc_tasks.append(
+            asyncio.create_task(
+                _run_archive_garbage_collector_binary(config_path),
+                name=ARCHIVE_GARBAGE_COLLECTOR_NAME,
+            )
+        )
+    else:
+        gc_task_configs[ARCHIVE_GARBAGE_COLLECTOR_NAME] = (
+            clp_config.archive_output.retention_period,
+            archive_garbage_collector,
+        )
     for gc_name, (retention_period, task_method) in gc_task_configs.items():
         if retention_period is None:
             logger.info(f"Retention period is not configured, skip creating {gc_name}.")

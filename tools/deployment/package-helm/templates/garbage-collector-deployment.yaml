@@ -1,4 +1,5 @@
 {{- if or
+  (eq .Values.clpConfig.package.storage_engine "clp-s")
   .Values.clpConfig.archive_output.retention_period
   .Values.clpConfig.results_cache.retention_period }}
 apiVersion: "apps/v1"
@@ -54,6 +55,8 @@ spec:
               value: {{ .Values.clpConfig.garbage_collector.logging_level | quote }}
             - name: "PYTHONPATH"
               value: "/opt/clp/lib/python3/site-packages"
+            - name: "RUST_LOG"
+              value: {{ .Values.clpConfig.garbage_collector.logging_level | quote }}
           {{- include "clp.createResourceLimits" (dict
               "root" .
               "component" "garbageCollector"
