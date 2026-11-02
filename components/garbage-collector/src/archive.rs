@@ -2,16 +2,19 @@
 //! expired, and reclaims the metadata of deleted datasets.
 
 use std::collections::BTreeMap;
-use std::collections::BTreeSet;
 use std::convert::Infallible;
+use std::fmt::Display;
+use std::fmt::Formatter;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::time::Duration;
 use std::time::SystemTime;
 
 use clp_rust_utils::aws::AWS_DEFAULT_REGION;
 use clp_rust_utils::clp_config::S3Config;
+use clp_rust_utils::clp_config::package::config::ArchiveOutput;
 use clp_rust_utils::clp_config::package::config::ArchiveOutputStorage;
 use clp_rust_utils::clp_config::package::config::Config;
 use clp_rust_utils::clp_config::package::config::Database as DatabaseConfig;
@@ -23,7 +26,7 @@ use clp_rust_utils::dataset::DatasetId;
 use clp_rust_utils::dataset::DatasetName;
 use clp_rust_utils::job_config::QueryJobStatus;
 use clp_rust_utils::s3::DeleteError;
-use clp_rust_utils::types::non_empty_string::ExpectedNonEmpty;
+use clp_rust_utils::types::ArchiveId;
 use non_empty_string::NonEmptyString;
 
 use crate::deletion_candidates::DeletionCandidatesBuffer;
@@ -32,7 +35,7 @@ use crate::deletion_candidates::DeletionCandidatesBuffer;
 pub struct ArchiveGarbageCollector {
     db_pool: sqlx::MySqlPool,
     database_config: DatabaseConfig,
-    archive_storage: ArchiveOutputStorage,
+    archive_output: ArchiveOutput,
     recovery_file_path: PathBuf,
     sweep_interval: Duration,
 }
@@ -54,7 +57,7 @@ impl ArchiveGarbageCollector {
         Self {
             db_pool,
             database_config: config.database,
-            archive_storage: config.archive_output.storage,
+            archive_output: config.archive_output,
             recovery_file_path: Path::new(&config.tmp_directory).join(RECOVERY_FILE_NAME),
             sweep_interval: Duration::from_secs(
                 config
@@ -177,10 +180,13 @@ impl ArchiveGarbageCollector {
         if !expired_archives.is_empty() {
             let mut archive_ids_by_dataset_id: BTreeMap<DatasetId, Vec<u64>> = BTreeMap::new();
             for expired_archive in expired_archives {
-                candidates_buffer.add_candidate(format!(
-                    "{}/{}",
-                    expired_archive.dataset_name, expired_archive.archive.uuid
-                ));
+                candidates_buffer.add_candidate(
+                    Candidate {
+                        dataset: expired_archive.dataset_name,
+                        archive_id: expired_archive.archive.uuid,
+                    }
+                    .to_string(),
+                );
                 archive_ids_by_dataset_id
                     .entry(expired_archive.dataset_id)
                     .or_default()
@@ -201,15 +207,30 @@ impl ArchiveGarbageCollector {
                 })?;
         }
 
-        let candidates = candidates_buffer.candidates();
-        if candidates.is_empty() {
+        if candidates_buffer.candidates().is_empty() {
             tracing::debug!(
                 "No archives matched the expiry criteria: `creation_time_millis < \
                  {expiry_base_millis} - dataset's retention period`."
             );
             return Ok(());
         }
-        self.delete_from_storage(candidates)
+        let candidates: Vec<Candidate> = candidates_buffer
+            .candidates()
+            .iter()
+            .filter_map(|candidate| {
+                candidate
+                    .parse()
+                    .inspect_err(|e| {
+                        tracing::warn!(
+                            candidate = % candidate,
+                            error = % e,
+                            "Failed to parse a deletion candidate; dropping it."
+                        );
+                    })
+                    .ok()
+            })
+            .collect();
+        self.delete_from_storage(&candidates)
             .await
             .inspect_err(|e| {
                 tracing::error!(
@@ -217,7 +238,14 @@ impl ArchiveGarbageCollector {
                     "Failed to delete the expired archives from the archive storage."
                 );
             })?;
-        tracing::info!("Deleted {} archive(s): {candidates:?}.", candidates.len());
+        tracing::info!(
+            "Deleted {} archive(s): {:?}.",
+            candidates.len(),
+            candidates
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        );
 
         candidates_buffer.clear().inspect_err(|e| {
             tracing::error!(error = % e, "Failed to delete the recovery file.");
@@ -286,13 +314,31 @@ impl ArchiveGarbageCollector {
     ///
     /// * Forwards [`delete_from_fs`]'s return values on failure.
     /// * Forwards [`delete_from_s3`]'s return values on failure.
-    async fn delete_from_storage(&self, candidates: &BTreeSet<String>) -> anyhow::Result<()> {
-        match &self.archive_storage {
-            ArchiveOutputStorage::Fs { directory } => {
-                delete_from_fs(Path::new(directory), candidates).await?;
+    async fn delete_from_storage(&self, candidates: &[Candidate]) -> anyhow::Result<()> {
+        match &self.archive_output.storage {
+            ArchiveOutputStorage::Fs { .. } => {
+                let paths: Vec<PathBuf> = candidates
+                    .iter()
+                    .map(|candidate| {
+                        Path::new(
+                            &self
+                                .archive_output
+                                .dataset_archive_storage_directory(&candidate.dataset),
+                        )
+                        .join(candidate.archive_id.to_string())
+                    })
+                    .collect();
+                delete_from_fs(&paths).await?;
             }
             ArchiveOutputStorage::S3 { s3_config, .. } => {
-                delete_from_s3(s3_config, candidates).await?;
+                let keys: Vec<NonEmptyString> = candidates
+                    .iter()
+                    .map(|candidate| {
+                        self.archive_output
+                            .dataset_archive_object_key(&candidate.dataset, &candidate.archive_id)
+                    })
+                    .collect();
+                delete_from_s3(s3_config, &keys).await?;
             }
         }
         Ok(())
@@ -370,20 +416,59 @@ struct ExpiredArchive {
     dataset_name: DatasetName,
 }
 
-/// Deletes the file or directory at each of `candidates`, relative to `directory`, if it exists.
+/// An archive to delete from the archive storage.
+#[derive(Debug)]
+struct Candidate {
+    dataset: DatasetName,
+    archive_id: ArchiveId,
+}
+
+impl Display for Candidate {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}/{}", self.dataset, self.archive_id)
+    }
+}
+
+impl FromStr for Candidate {
+    type Err = anyhow::Error;
+
+    /// Parses a candidate formatted as `<dataset name>/<archive ID>`.
+    ///
+    /// # Returns
+    ///
+    /// The parsed candidate on success.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    ///
+    /// * [`anyhow::Error`] if `candidate` doesn't contain a `/`.
+    /// * Forwards [`DatasetName::from_str`]'s return values on failure.
+    /// * Forwards [`ArchiveId::from_str`]'s return values on failure.
+    fn from_str(candidate: &str) -> Result<Self, Self::Err> {
+        let Some((dataset, archive_id)) = candidate.split_once('/') else {
+            anyhow::bail!("deletion candidate isn't formatted as `<dataset name>/<archive ID>`");
+        };
+        Ok(Self {
+            dataset: dataset.parse()?,
+            archive_id: archive_id.parse()?,
+        })
+    }
+}
+
+/// Deletes the file or directory at each of `paths`, if it exists.
 ///
 /// # Errors
 ///
 /// Returns an error if:
 ///
 /// * Forwards [`tokio::fs::metadata`]'s return values on failure, unless nothing exists at the
-///   candidate's path.
+///   path.
 /// * Forwards [`tokio::fs::remove_dir_all`]'s return values on failure.
 /// * Forwards [`tokio::fs::remove_file`]'s return values on failure.
-async fn delete_from_fs(directory: &Path, candidates: &BTreeSet<String>) -> std::io::Result<()> {
-    for candidate in candidates {
-        let path = directory.join(candidate);
-        let metadata = match tokio::fs::metadata(&path).await {
+async fn delete_from_fs(paths: &[PathBuf]) -> std::io::Result<()> {
+    for path in paths {
+        let metadata = match tokio::fs::metadata(path).await {
             Ok(metadata) => metadata,
             Err(e) if matches!(e.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) => {
                 continue;
@@ -391,26 +476,22 @@ async fn delete_from_fs(directory: &Path, candidates: &BTreeSet<String>) -> std:
             Err(e) => return Err(e),
         };
         if metadata.is_dir() {
-            tokio::fs::remove_dir_all(&path).await?;
+            tokio::fs::remove_dir_all(path).await?;
         } else {
-            tokio::fs::remove_file(&path).await?;
+            tokio::fs::remove_file(path).await?;
         }
     }
     Ok(())
 }
 
-/// Deletes the objects in `s3_config`'s bucket whose keys are `s3_config`'s key prefix followed by
-/// each of `candidates`.
+/// Deletes every object in `s3_config`'s bucket whose key is in `keys`.
 ///
 /// # Errors
 ///
 /// Returns an error if:
 ///
 /// * Forwards [`clp_rust_utils::s3::delete_by_keys`]'s return values on failure.
-async fn delete_from_s3(
-    s3_config: &S3Config,
-    candidates: &BTreeSet<String>,
-) -> Result<(), DeleteError> {
+async fn delete_from_s3(s3_config: &S3Config, keys: &[NonEmptyString]) -> Result<(), DeleteError> {
     let client = clp_rust_utils::s3::create_new_client(
         s3_config
             .region_code
@@ -420,47 +501,88 @@ async fn delete_from_s3(
         &s3_config.aws_authentication,
     )
     .await;
-    let keys: Vec<NonEmptyString> = candidates
-        .iter()
-        .map(|candidate| {
-            NonEmptyString::from_string(format!("{}{candidate}", s3_config.key_prefix))
-        })
-        .collect();
-    clp_rust_utils::s3::delete_by_keys(&client, s3_config.bucket.as_str(), &keys).await
+    clp_rust_utils::s3::delete_by_keys(&client, s3_config.bucket.as_str(), keys).await
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use clp_rust_utils::clp_config::package::config::ArchiveOutput;
+    use clp_rust_utils::clp_config::package::config::ArchiveOutputStorage;
+    use clp_rust_utils::clp_config::package::config::Config;
+    use clp_rust_utils::types::ArchiveId;
 
-    use super::delete_from_fs;
+    use super::ArchiveGarbageCollector;
+    use super::Candidate;
+
+    const ARCHIVE_ID: &str = "018e90e5-8b2a-4a61-a2fc-cac799936caf";
+
+    #[test]
+    fn candidate_round_trips_through_its_dataset_name_and_archive_id() -> anyhow::Result<()> {
+        let formatted_candidate = format!("logs/{ARCHIVE_ID}");
+
+        let candidate: Candidate = formatted_candidate.parse()?;
+        assert_eq!(candidate.dataset.as_str(), "logs");
+        assert_eq!(candidate.archive_id, ARCHIVE_ID.parse::<ArchiveId>()?);
+        assert_eq!(candidate.to_string(), formatted_candidate);
+        Ok(())
+    }
+
+    #[test]
+    fn candidate_without_a_dataset_name_is_rejected() {
+        assert_eq!(
+            ARCHIVE_ID
+                .parse::<Candidate>()
+                .expect_err("a candidate without a dataset name should be rejected")
+                .to_string(),
+            "deletion candidate isn't formatted as `<dataset name>/<archive ID>`"
+        );
+    }
 
     #[tokio::test]
     async fn fs_deletion_deletes_existing_files_and_directories_and_skips_missing_ones()
     -> anyhow::Result<()> {
+        const OTHER_ARCHIVE_IDS: [&str; 4] = [
+            "018e90e5-8b2a-4a61-a2fc-cac799936ca0",
+            "018e90e5-8b2a-4a61-a2fc-cac799936ca1",
+            "018e90e5-8b2a-4a61-a2fc-cac799936ca2",
+            "018e90e5-8b2a-4a61-a2fc-cac799936ca3",
+        ];
+
         let directory = tempfile::tempdir()?;
+        let garbage_collector = ArchiveGarbageCollector::new(
+            Config {
+                archive_output: ArchiveOutput {
+                    storage: ArchiveOutputStorage::Fs {
+                        directory: directory.path().to_string_lossy().into_owned(),
+                    },
+                    ..ArchiveOutput::default()
+                },
+                ..Config::default()
+            },
+            sqlx::mysql::MySqlPoolOptions::new().connect_lazy("mysql://127.0.0.1:1/clp-db")?,
+        );
         let dataset_directory = directory.path().join("logs");
-        let nested_directory = dataset_directory.join("directory_archive").join("nested");
-        std::fs::create_dir_all(&nested_directory)?;
-        std::fs::write(nested_directory.join("segment"), b"data")?;
-        std::fs::write(dataset_directory.join("file_archive"), b"data")?;
-        std::fs::write(dataset_directory.join("kept_archive"), b"data")?;
+        let directory_archive = dataset_directory.join(ARCHIVE_ID);
+        std::fs::create_dir_all(directory_archive.join("nested"))?;
+        std::fs::write(directory_archive.join("nested").join("segment"), b"data")?;
+        let file_archive = dataset_directory.join(OTHER_ARCHIVE_IDS[0]);
+        std::fs::write(&file_archive, b"data")?;
+        let kept_archive = dataset_directory.join(OTHER_ARCHIVE_IDS[1]);
+        std::fs::write(&kept_archive, b"data")?;
         std::fs::write(directory.path().join("file"), b"data")?;
 
-        // The candidates that don't exist sort first, so skipping them mustn't stop the deletion.
-        delete_from_fs(
-            directory.path(),
-            &BTreeSet::from([
-                "file/archive".to_owned(),
-                "logs/absent_archive".to_owned(),
-                "logs/directory_archive".to_owned(),
-                "logs/file_archive".to_owned(),
-            ]),
-        )
-        .await?;
-        assert!(!dataset_directory.join("directory_archive").exists());
-        assert!(!dataset_directory.join("file_archive").exists());
-        assert!(dataset_directory.join("kept_archive").is_file());
+        // The candidates that don't exist come first, so skipping them mustn't stop the deletion.
+        garbage_collector
+            .delete_from_storage(&[
+                format!("file/{}", OTHER_ARCHIVE_IDS[2]).parse()?,
+                format!("logs/{}", OTHER_ARCHIVE_IDS[3]).parse()?,
+                format!("logs/{ARCHIVE_ID}").parse()?,
+                format!("logs/{}", OTHER_ARCHIVE_IDS[0]).parse()?,
+            ])
+            .await?;
+        assert!(!directory_archive.exists());
+        assert!(!file_archive.exists());
+        assert!(kept_archive.is_file());
         assert!(directory.path().join("file").is_file());
         Ok(())
     }

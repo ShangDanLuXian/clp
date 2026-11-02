@@ -5,15 +5,6 @@ use crate::clp_config::package::config::Database as DatabaseConfig;
 use crate::dataset::DatasetId;
 use crate::dataset::DatasetName;
 
-/// The ID and archive storage path of a dataset in the datasets table.
-#[derive(Debug, sqlx::FromRow)]
-pub struct Dataset {
-    /// The dataset's ID.
-    pub id: DatasetId,
-    /// The path of the dataset's archives in the archive storage.
-    pub archive_storage_path: String,
-}
-
 /// # Returns
 ///
 /// The names of the datasets that aren't deleted, ordered by name, on success.
@@ -56,26 +47,25 @@ pub async fn get_deleted_ids(
     .await?)
 }
 
-/// Looks up a dataset by its name.
+/// Looks up a dataset's ID by its name.
 ///
 /// # Returns
 ///
-/// The dataset on success, or `None` if the dataset doesn't exist or is deleted.
+/// The dataset's ID on success, or `None` if the dataset doesn't exist or is deleted.
 ///
 /// # Errors
 ///
 /// Returns an error if:
 ///
-/// * Forwards [`sqlx::query::QueryAs::fetch_optional`]'s return values on failure.
-pub async fn get_by_name(
+/// * Forwards [`sqlx::query::QueryScalar::fetch_optional`]'s return values on failure.
+pub async fn get_id_by_name(
     db_pool: &sqlx::MySqlPool,
     database_config: &DatabaseConfig,
     name: &DatasetName,
-) -> Result<Option<Dataset>, crate::Error> {
+) -> Result<Option<DatasetId>, crate::Error> {
     let datasets_table = database_config.datasets_table_name();
-    Ok(sqlx::query_as(&format!(
-        "SELECT `id`, `archive_storage_path` FROM `{datasets_table}` WHERE `name` = ? AND \
-         `is_deleted` = FALSE"
+    Ok(sqlx::query_scalar(&format!(
+        "SELECT `id` FROM `{datasets_table}` WHERE `name` = ? AND `is_deleted` = FALSE"
     ))
     .bind(name)
     .fetch_optional(db_pool)

@@ -78,7 +78,7 @@ async fn list_datasets(
     path = "/datasets/{dataset_name}",
     description = "Deletes a dataset: deletes its archives from the archive storage, and then \
         marks it as deleted. For filesystem archive storage, the archives are only deleted if the \
-        dataset's archive storage path is a directory. Only the clp-s storage engine is \
+        dataset's path in the archive storage is a directory. Only the clp-s storage engine is \
         supported.",
     params(DatasetPath),
     responses(

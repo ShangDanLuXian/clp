@@ -11,7 +11,7 @@ use clp_rust_utils::clp_config::package::config::StorageEngine;
 use clp_rust_utils::database::mysql::archive;
 use clp_rust_utils::database::mysql::archive::Archive;
 use clp_rust_utils::database::mysql::dataset;
-use clp_rust_utils::database::mysql::dataset::Dataset;
+use clp_rust_utils::dataset::DatasetId;
 use clp_rust_utils::dataset::DatasetName;
 use clp_rust_utils::s3::DeleteError;
 use clp_rust_utils::types::ArchiveId;
@@ -76,22 +76,26 @@ impl Client {
     /// Returns an error if:
     ///
     /// * Forwards [`Self::check_clp_s_storage_engine`]'s return values on failure.
-    /// * Forwards [`Self::get_dataset`]'s return values on failure.
+    /// * Forwards [`Self::get_dataset_id`]'s return values on failure.
     /// * Forwards [`delete_directory`]'s return values on failure.
     /// * Forwards [`delete_archives_from_s3`]'s return values on failure.
     /// * Forwards [`dataset::mark_deleted`]'s return values on failure.
     pub async fn delete_dataset(&self, name: &DatasetName) -> Result<(), ClientError> {
         self.check_clp_s_storage_engine("dataset deletion")?;
-        let dataset = self.get_dataset(name).await?;
+        let dataset_id = self.get_dataset_id(name).await?;
+        let archive_storage_directory = self
+            .config
+            .archive_output
+            .dataset_archive_storage_directory(name);
         match &self.config.archive_output.storage {
             ArchiveOutputStorage::Fs { .. } => {
-                delete_directory(Path::new(&dataset.archive_storage_path)).await?;
+                delete_directory(Path::new(&archive_storage_directory)).await?;
             }
             ArchiveOutputStorage::S3 { s3_config, .. } => {
-                delete_archives_from_s3(s3_config, &dataset.archive_storage_path).await?;
+                delete_archives_from_s3(s3_config, &archive_storage_directory).await?;
             }
         }
-        dataset::mark_deleted(&self.sql_pool, &self.config.database, dataset.id).await?;
+        dataset::mark_deleted(&self.sql_pool, &self.config.database, dataset_id).await?;
         Ok(())
     }
 
@@ -106,7 +110,7 @@ impl Client {
     ///
     /// * Forwards [`Self::check_clp_s_storage_engine`]'s return values on failure.
     /// * Forwards [`check_time_range`]'s return values on failure.
-    /// * Forwards [`Self::get_dataset`]'s return values on failure.
+    /// * Forwards [`Self::get_dataset_id`]'s return values on failure.
     /// * Forwards [`sqlx::Pool::acquire`]'s return values on failure.
     /// * Forwards [`archive::find_by_time_range`]'s return values on failure.
     pub async fn get_archive_ids(
@@ -117,11 +121,11 @@ impl Client {
     ) -> Result<Vec<ArchiveId>, ClientError> {
         self.check_clp_s_storage_engine("archive listing")?;
         check_time_range(begin_ts, end_ts)?;
-        let dataset = self.get_dataset(dataset_name).await?;
+        let dataset_id = self.get_dataset_id(dataset_name).await?;
         let archives = archive::find_by_time_range(
             &mut *self.sql_pool.acquire().await?,
             &self.config.database,
-            dataset.id,
+            dataset_id,
             begin_ts,
             end_ts,
         )
@@ -143,7 +147,7 @@ impl Client {
     ///
     /// * Forwards [`Self::check_clp_s_storage_engine`]'s return values on failure.
     /// * Forwards [`ArchiveSelection::try_from`]'s return values on failure.
-    /// * Forwards [`Self::get_dataset`]'s return values on failure.
+    /// * Forwards [`Self::get_dataset_id`]'s return values on failure.
     /// * Forwards [`sqlx::Pool::begin`]'s return values on failure.
     /// * Forwards [`archive::find_by_uuids`]'s return values on failure.
     /// * Forwards [`archive::find_by_time_range`]'s return values on failure.
@@ -158,13 +162,13 @@ impl Client {
     ) -> Result<DeletedArchives, ClientError> {
         self.check_clp_s_storage_engine("archive deletion")?;
         let selection = ArchiveSelection::try_from(deletion)?;
-        let dataset = self.get_dataset(dataset_name).await?;
+        let dataset_id = self.get_dataset_id(dataset_name).await?;
 
         let mut tx = self.sql_pool.begin().await?;
         let (archives, not_found_ids) = match selection {
             ArchiveSelection::Ids(ids) => {
                 let archives =
-                    archive::find_by_uuids(&mut tx, &self.config.database, dataset.id, &ids)
+                    archive::find_by_uuids(&mut tx, &self.config.database, dataset_id, &ids)
                         .await?;
                 let not_found_ids = find_not_found_ids(ids, &archives);
                 (archives, not_found_ids)
@@ -173,7 +177,7 @@ impl Client {
                 let archives = archive::find_by_time_range(
                     &mut tx,
                     &self.config.database,
-                    dataset.id,
+                    dataset_id,
                     begin_ts,
                     Some(end_ts),
                 )
@@ -182,27 +186,32 @@ impl Client {
             }
         };
         let ids: Vec<u64> = archives.iter().map(|archive| archive.id).collect();
-        archive::delete(&mut tx, &self.config.database, dataset.id, &ids).await?;
+        archive::delete(&mut tx, &self.config.database, dataset_id, &ids).await?;
         tx.commit().await?;
 
         let deleted_ids: Vec<ArchiveId> =
             archives.into_iter().map(|archive| archive.uuid).collect();
         match &self.config.archive_output.storage {
             ArchiveOutputStorage::Fs { .. } => {
+                let archive_storage_directory = self
+                    .config
+                    .archive_output
+                    .dataset_archive_storage_directory(dataset_name);
                 for id in &deleted_ids {
-                    delete_directory(
-                        &Path::new(&dataset.archive_storage_path).join(id.to_string()),
-                    )
-                    .await?;
+                    delete_directory(&Path::new(&archive_storage_directory).join(id.to_string()))
+                        .await?;
                 }
             }
             ArchiveOutputStorage::S3 { s3_config, .. } => {
-                delete_archive_objects_from_s3(
-                    s3_config,
-                    &dataset.archive_storage_path,
-                    &deleted_ids,
-                )
-                .await?;
+                let keys: Vec<NonEmptyString> = deleted_ids
+                    .iter()
+                    .map(|id| {
+                        self.config
+                            .archive_output
+                            .dataset_archive_object_key(dataset_name, id)
+                    })
+                    .collect();
+                delete_archive_objects_from_s3(s3_config, &keys).await?;
             }
         }
         Ok(DeletedArchives {
@@ -227,20 +236,20 @@ impl Client {
         Ok(())
     }
 
-    /// Looks up a dataset by its name.
+    /// Looks up a dataset's ID by its name.
     ///
     /// # Returns
     ///
-    /// The dataset on success.
+    /// The dataset's ID on success.
     ///
     /// # Errors
     ///
     /// Returns an error if:
     ///
     /// * [`ClientError::DatasetNotFound`] if the dataset doesn't exist or is deleted.
-    /// * Forwards [`dataset::get_by_name`]'s return values on failure.
-    async fn get_dataset(&self, name: &DatasetName) -> Result<Dataset, ClientError> {
-        dataset::get_by_name(&self.sql_pool, &self.config.database, name)
+    /// * Forwards [`dataset::get_id_by_name`]'s return values on failure.
+    async fn get_dataset_id(&self, name: &DatasetName) -> Result<DatasetId, ClientError> {
+        dataset::get_id_by_name(&self.sql_pool, &self.config.database, name)
             .await?
             .ok_or_else(|| ClientError::DatasetNotFound(name.clone()))
     }
@@ -341,7 +350,7 @@ async fn delete_directory(path: &Path) -> std::io::Result<()> {
     tokio::fs::remove_dir_all(tokio::fs::canonicalize(path).await?).await
 }
 
-/// Deletes every object under `archive_storage_path` in `s3_config`'s bucket.
+/// Deletes every object under `archive_storage_directory` in `s3_config`'s bucket.
 ///
 /// # Errors
 ///
@@ -350,7 +359,7 @@ async fn delete_directory(path: &Path) -> std::io::Result<()> {
 /// * Forwards [`clp_rust_utils::s3::delete_by_key_prefix`]'s return values on failure.
 async fn delete_archives_from_s3(
     s3_config: &S3Config,
-    archive_storage_path: &str,
+    archive_storage_directory: &str,
 ) -> Result<(), DeleteError> {
     let client = clp_rust_utils::s3::create_new_client(
         s3_config
@@ -364,12 +373,12 @@ async fn delete_archives_from_s3(
     clp_rust_utils::s3::delete_by_key_prefix(
         &client,
         s3_config.bucket.as_str(),
-        &archive_storage_key_prefix(archive_storage_path),
+        &NonEmptyString::from_string(format!("{archive_storage_directory}/")),
     )
     .await
 }
 
-/// Deletes the objects of the archives `ids` under `archive_storage_path` in `s3_config`'s bucket.
+/// Deletes every object in `s3_config`'s bucket whose key is in `keys`.
 ///
 /// # Errors
 ///
@@ -378,8 +387,7 @@ async fn delete_archives_from_s3(
 /// * Forwards [`clp_rust_utils::s3::delete_by_keys`]'s return values on failure.
 async fn delete_archive_objects_from_s3(
     s3_config: &S3Config,
-    archive_storage_path: &str,
-    ids: &[ArchiveId],
+    keys: &[NonEmptyString],
 ) -> Result<(), DeleteError> {
     let client = clp_rust_utils::s3::create_new_client(
         s3_config
@@ -390,32 +398,7 @@ async fn delete_archive_objects_from_s3(
         &s3_config.aws_authentication,
     )
     .await;
-    let keys: Vec<NonEmptyString> = ids
-        .iter()
-        .map(|id| archive_object_key(archive_storage_path, id))
-        .collect();
-    clp_rust_utils::s3::delete_by_keys(&client, s3_config.bucket.as_str(), &keys).await
-}
-
-/// # Returns
-///
-/// The S3 object key of the archive `id` under `archive_storage_path`.
-fn archive_object_key(archive_storage_path: &str, id: &ArchiveId) -> NonEmptyString {
-    NonEmptyString::from_string(format!(
-        "{}{id}",
-        archive_storage_key_prefix(archive_storage_path).as_str()
-    ))
-}
-
-/// # Returns
-///
-/// `archive_storage_path` with a trailing `/`.
-fn archive_storage_key_prefix(archive_storage_path: &str) -> NonEmptyString {
-    if archive_storage_path.ends_with('/') {
-        NonEmptyString::from_string(archive_storage_path.to_owned())
-    } else {
-        NonEmptyString::from_string(format!("{archive_storage_path}/"))
-    }
+    clp_rust_utils::s3::delete_by_keys(&client, s3_config.bucket.as_str(), keys).await
 }
 
 #[cfg(test)]
@@ -428,8 +411,6 @@ mod tests {
 
     use super::ArchiveDeletion;
     use super::ArchiveSelection;
-    use super::archive_object_key;
-    use super::archive_storage_key_prefix;
     use super::check_time_range;
     use super::delete_directory;
     use super::find_not_found_ids;
@@ -461,30 +442,6 @@ mod tests {
             delete_directory(path).await?;
         }
         assert!(file.is_file());
-        Ok(())
-    }
-
-    #[test]
-    fn archive_storage_key_prefix_appends_a_slash_only_if_missing() {
-        assert_eq!(
-            archive_storage_key_prefix("prefix/dataset").as_str(),
-            "prefix/dataset/"
-        );
-        assert_eq!(
-            archive_storage_key_prefix("prefix/dataset/").as_str(),
-            "prefix/dataset/"
-        );
-    }
-
-    #[test]
-    fn archive_object_key_is_the_archive_id_under_the_archive_storage_path() -> anyhow::Result<()> {
-        let id: ArchiveId = ARCHIVE_ID.parse()?;
-        for archive_storage_path in ["prefix/dataset", "prefix/dataset/"] {
-            assert_eq!(
-                archive_object_key(archive_storage_path, &id).as_str(),
-                format!("prefix/dataset/{ARCHIVE_ID}")
-            );
-        }
         Ok(())
     }
 
