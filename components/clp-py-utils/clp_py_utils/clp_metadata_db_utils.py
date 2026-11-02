@@ -141,12 +141,17 @@ def fetch_existing_datasets(
     table_prefix: str,
 ) -> set[str]:
     """
-    Gets the names of all existing datasets.
+    Gets the names of all existing datasets, excluding deleted ones.
 
     :param db_cursor:
     :param table_prefix:
     """
-    db_cursor.execute(f"SELECT name FROM `{get_datasets_table_name(table_prefix)}`")
+    db_cursor.execute(
+        f"""
+        SELECT name FROM `{get_datasets_table_name(table_prefix)}`
+        WHERE is_deleted = FALSE
+        """
+    )
     rows = db_cursor.fetchall()
     return {row["name"] for row in rows}
 
