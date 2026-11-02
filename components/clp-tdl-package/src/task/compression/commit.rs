@@ -3,6 +3,7 @@
 use anyhow::Context;
 use clp_rust_utils::clp_config::package::credentials;
 use clp_rust_utils::database::mysql::create_clp_db_mysql_pool;
+use clp_rust_utils::dataset::DatasetId;
 use clp_rust_utils::dataset::DatasetName;
 use clp_rust_utils::dataset::register_dataset;
 use clp_rust_utils::job_config::COMPRESSION_JOBS_TABLE_NAME;
@@ -137,7 +138,7 @@ async fn insert_archives(
     tx: &mut sqlx::Transaction<'_, sqlx::MySql>,
     archives_table: &str,
     long_span_archives_table: &str,
-    dataset_id: u64,
+    dataset_id: DatasetId,
     archives: &[ArchiveMetadata],
 ) -> anyhow::Result<()> {
     const LONG_SPAN_THRESHOLD_MILLIS: i64 = 24 * 60 * 60 * 1000;

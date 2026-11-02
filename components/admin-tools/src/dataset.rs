@@ -1,12 +1,13 @@
 //! Lookups and soft deletion of datasets in the datasets table.
 
 use clp_rust_utils::clp_config::package::config::Database as DatabaseConfig;
+use clp_rust_utils::dataset::DatasetId;
 use clp_rust_utils::dataset::DatasetName;
 
 /// A dataset in the datasets table.
 #[derive(Debug, PartialEq, Eq, sqlx::FromRow)]
 pub struct Dataset {
-    pub id: u16,
+    pub id: DatasetId,
     pub name: DatasetName,
     pub archive_storage_path: String,
 }
@@ -42,7 +43,7 @@ pub async fn fetch_existing(
 pub async fn mark_deleted(
     db_pool: &sqlx::MySqlPool,
     database_config: &DatabaseConfig,
-    dataset_id: u16,
+    dataset_id: DatasetId,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(&format!(
         "UPDATE `{}` SET `is_deleted` = TRUE WHERE `id` = ?",

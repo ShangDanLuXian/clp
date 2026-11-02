@@ -1,6 +1,7 @@
 //! Lookups of a dataset's archives in the clp-s archives table.
 
 use clp_rust_utils::clp_config::package::config::Database as DatabaseConfig;
+use clp_rust_utils::dataset::DatasetId;
 use clp_rust_utils::types::ArchiveId;
 use clp_rust_utils::types::UuidBytes;
 use sqlx::Row;
@@ -42,7 +43,7 @@ impl sqlx::FromRow<'_, MySqlRow> for Archive {
 pub async fn find_by_time_range(
     connection: &mut sqlx::MySqlConnection,
     database_config: &DatabaseConfig,
-    dataset_id: u16,
+    dataset_id: DatasetId,
     begin_ts: i64,
     end_ts: Option<i64>,
 ) -> Result<Vec<Archive>, sqlx::Error> {
@@ -76,7 +77,7 @@ pub async fn find_by_time_range(
 pub async fn find_by_uuids(
     connection: &mut sqlx::MySqlConnection,
     database_config: &DatabaseConfig,
-    dataset_id: u16,
+    dataset_id: DatasetId,
     uuids: &[ArchiveId],
 ) -> Result<Vec<Archive>, sqlx::Error> {
     const BATCH_SIZE: usize = 1000;

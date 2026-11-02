@@ -2,6 +2,7 @@
 //! tables.
 
 use crate::clp_config::package::config::Database as DatabaseConfig;
+use crate::dataset::DatasetId;
 use crate::dataset::DatasetName;
 
 /// Looks up the ID of a dataset by its name.
@@ -19,7 +20,7 @@ pub async fn get_id(
     executor: impl sqlx::MySqlExecutor<'_>,
     database_config: &DatabaseConfig,
     dataset: &DatasetName,
-) -> Result<Option<u16>, crate::Error> {
+) -> Result<Option<DatasetId>, crate::Error> {
     let datasets_table = database_config.datasets_table_name();
     Ok(sqlx::query_scalar(&format!(
         "SELECT `id` FROM `{datasets_table}` WHERE `name` = ? AND NOT `is_deleted`"
@@ -40,7 +41,7 @@ pub async fn get_id(
 pub async fn delete_metadata(
     tx: &mut sqlx::Transaction<'_, sqlx::MySql>,
     database_config: &DatabaseConfig,
-    dataset_id: u16,
+    dataset_id: DatasetId,
 ) -> Result<(), crate::Error> {
     for table in [
         database_config.long_span_archives_table_name(),

@@ -12,6 +12,7 @@ use clp_rust_utils::clp_config::package::config::Config;
 use clp_rust_utils::clp_config::package::config::Database as DatabaseConfig;
 use clp_rust_utils::clp_config::package::config::StorageEngine;
 use clp_rust_utils::database::mysql::create_clp_db_mysql_pool;
+use clp_rust_utils::dataset::DatasetId;
 use clp_rust_utils::dataset::DatasetName;
 use clp_rust_utils::serde::yaml;
 use clp_rust_utils::types::ArchiveId;
@@ -225,7 +226,7 @@ async fn find_archives(
     database_config: &DatabaseConfig,
     archive_output_dir: &Path,
     dataset: &DatasetName,
-    dataset_id: u16,
+    dataset_id: DatasetId,
     begin_ts: i64,
     end_ts: Option<i64>,
 ) -> anyhow::Result<()> {
@@ -276,7 +277,7 @@ async fn delete_archives(
     database_config: &DatabaseConfig,
     archive_output_dir: &Path,
     dataset: &DatasetName,
-    dataset_id: u16,
+    dataset_id: DatasetId,
     criteria: DeleteCriteria,
     dry_run: bool,
 ) -> anyhow::Result<()> {
@@ -332,7 +333,7 @@ async fn delete_archives(
 async fn delete_archives_from_database(
     db_pool: &sqlx::MySqlPool,
     database_config: &DatabaseConfig,
-    dataset_id: u16,
+    dataset_id: DatasetId,
     criteria: DeleteCriteria,
     dry_run: bool,
 ) -> anyhow::Result<Option<Vec<Archive>>> {

@@ -14,6 +14,9 @@ use sqlx::error::BoxDynError;
 use sqlx::mysql::MySqlTypeInfo;
 use sqlx::mysql::MySqlValueRef;
 
+/// The ID of a dataset in the datasets table.
+pub type DatasetId = u16;
+
 /// A validated dataset name.
 ///
 /// A dataset name is non-empty, only contains `_` or Unicode letters and numbers (general
@@ -164,7 +167,10 @@ pub enum RegisterDatasetError {
     #[error("dataset `{0}` is deleted")]
     Deleted(DatasetName),
 
-    #[error("sqlx error: {0}")]
+    #[error("inserted dataset ID {0} overflows `DatasetId`")]
+    IdOverflow(u64),
+
+    #[error("`sqlx::Error`: {0}")]
     Sqlx(#[from] sqlx::Error),
 }
 
@@ -180,6 +186,8 @@ pub enum RegisterDatasetError {
 /// Returns an error if:
 ///
 /// * [`RegisterDatasetError::Deleted`] if `dataset` is registered but deleted.
+/// * [`RegisterDatasetError::IdOverflow`] if the ID of the inserted dataset doesn't fit in
+///   [`DatasetId`].
 /// * Forwards [`sqlx::query::QueryAs::fetch_optional`]'s return values on failure.
 /// * Forwards [`sqlx::query::Query::execute`]'s return values on failure, other than a unique key
 ///   violation.
@@ -189,10 +197,10 @@ pub async fn register_dataset(
     datasets_table: &str,
     dataset: &DatasetName,
     archive_storage_path: &str,
-) -> Result<u64, RegisterDatasetError> {
+) -> Result<DatasetId, RegisterDatasetError> {
     let select_query =
         format!("SELECT `id`, `is_deleted` FROM `{datasets_table}` WHERE `name` = ?");
-    let existing_dataset = sqlx::query_as::<_, (u64, bool)>(&select_query)
+    let existing_dataset = sqlx::query_as::<_, (DatasetId, bool)>(&select_query)
         .bind(dataset)
         .fetch_optional(&mut *db_connection)
         .await?;
@@ -207,7 +215,10 @@ pub async fn register_dataset(
         .execute(&mut *db_connection)
         .await;
         match insert_result {
-            Ok(query_result) => return Ok(query_result.last_insert_id()),
+            Ok(query_result) => {
+                let id = query_result.last_insert_id();
+                return DatasetId::try_from(id).map_err(|_| RegisterDatasetError::IdOverflow(id));
+            }
             Err(sqlx::Error::Database(e)) if e.is_unique_violation() => {
                 sqlx::query_as(&format!("{select_query} LOCK IN SHARE MODE"))
                     .bind(dataset)

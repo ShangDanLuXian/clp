@@ -1,6 +1,7 @@
 //! Operations on the clp-s archives tables that every dataset shares.
 
 use crate::clp_config::package::config::Database as DatabaseConfig;
+use crate::dataset::DatasetId;
 
 /// Deletes the metadata of a dataset's archives, identified by their IDs in the archives table,
 /// from the long-span archives table and the archives table.
@@ -13,7 +14,7 @@ use crate::clp_config::package::config::Database as DatabaseConfig;
 pub async fn delete(
     tx: &mut sqlx::Transaction<'_, sqlx::MySql>,
     database_config: &DatabaseConfig,
-    dataset_id: u16,
+    dataset_id: DatasetId,
     archive_ids: &[u64],
 ) -> Result<(), crate::Error> {
     const BATCH_SIZE: usize = 1000;
