@@ -379,9 +379,9 @@ impl From<ClientError> for HandlerError {
             | ClientError::DatasetNotFound(_)
             | ClientError::LogEventNotFound { .. }
             | ClientError::LogsInput(LogsInputError::NotFound(_)) => Self::NotFound,
-            ClientError::QueryJobAlreadyTerminated(_) | ClientError::QueryResultsNotStored(_) => {
-                Self::Conflict
-            }
+            ClientError::QueryJobAlreadyTerminated(_)
+            | ClientError::QueryResultsNotStored(_)
+            | ClientError::DatasetAlreadyExists(_) => Self::Conflict,
             ClientError::InvalidInput(_)
             | ClientError::LogsInput(LogsInputError::OutsideMountPoint(_)) => {
                 Self::BadRequest(format!("{err}"))
@@ -560,6 +560,10 @@ mod tests {
             (
                 ClientError::DatasetNotFound("logs".parse()?),
                 StatusCode::NOT_FOUND,
+            ),
+            (
+                ClientError::DatasetAlreadyExists("logs".parse()?),
+                StatusCode::CONFLICT,
             ),
             (
                 ClientError::LogEventNotFound {

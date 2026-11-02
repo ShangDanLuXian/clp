@@ -14,6 +14,7 @@ use utoipa_axum::routes;
 
 use crate::client::ArchiveDeletion;
 use crate::client::Client;
+use crate::client::DatasetCreation;
 use crate::client::DeletedArchives;
 use crate::routes::AppState;
 use crate::routes::HandlerError;
@@ -25,7 +26,7 @@ use crate::routes::HandlerError;
 /// A newly created [`OpenApiRouter`] with all dataset routes registered.
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
-        .routes(routes!(list_datasets))
+        .routes(routes!(list_datasets, create_dataset))
         .routes(routes!(delete_dataset))
         .routes(routes!(list_archives))
         .routes(routes!(delete_archives))
@@ -71,6 +72,48 @@ async fn list_datasets(
         tracing::error!(error = % err, "Failed to list the datasets.");
     })?;
     Ok(Json(names))
+}
+
+#[utoipa::path(
+    post,
+    path = "/datasets",
+    description = "Creates a dataset, whose archives will be stored in its directory in the \
+        archive storage. Only the clp-s storage engine is supported.",
+    request_body(content = DatasetCreation),
+    responses(
+        (status = CREATED, description = "The dataset was created"),
+        (
+            status = BAD_REQUEST,
+            description = "The request body can't be parsed (e.g., it isn't valid JSON); `name` \
+                is an invalid dataset name; `retention_period_minutes` is 0; or the package's \
+                storage engine isn't clp-s"
+        ),
+        (
+            status = CONFLICT,
+            description = "A dataset with the same name already exists and isn't deleted"
+        ),
+        (
+            status = UNSUPPORTED_MEDIA_TYPE,
+            description = "The request's `Content-Type` isn't `application/json`"
+        ),
+        (
+            status = UNPROCESSABLE_ENTITY,
+            description = "The request body doesn't match the schema (e.g., `name` is missing, a \
+                field has the wrong JSON type or is out of range, or the body has an unknown field)"
+        ),
+        (status = INTERNAL_SERVER_ERROR)
+    )
+)]
+async fn create_dataset(
+    State(client): State<Client>,
+    Json(creation): Json<DatasetCreation>,
+) -> Result<StatusCode, HandlerError> {
+    tracing::info!(dataset = % creation.name, "Creating the dataset.");
+    client.create_dataset(&creation).await.inspect_err(|err| {
+        tracing::error!(dataset = % creation.name, error = % err, "Failed to create the dataset.");
+    })?;
+    tracing::info!(dataset = % creation.name, "Created the dataset.");
+    Ok(StatusCode::CREATED)
 }
 
 #[utoipa::path(
@@ -261,6 +304,27 @@ mod tests {
             client: Client::new(config.clone(), mongodb_client.clone(), sql_pool.clone()),
             webui_client: WebuiClient::new(config, sql_pool, mongodb_client).await,
         })
+    }
+
+    #[tokio::test]
+    async fn dataset_creation_route_rejects_invalid_dataset_name() -> anyhow::Result<()> {
+        let response = clp_s_app_with_unreachable_clients()
+            .await
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/datasets")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"name": "bad-name"}"#))?,
+            )
+            .await?;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = String::from_utf8(response.into_body().collect().await?.to_bytes().to_vec())?;
+        let parse_error = "bad-name"
+            .parse::<DatasetName>()
+            .expect_err("name should be an invalid dataset name");
+        assert_eq!(body, format!("Invalid input: {parse_error}"));
+        Ok(())
     }
 
     #[tokio::test]

@@ -64,6 +64,9 @@ pub enum ClientError {
     #[error("Dataset not found: {0}")]
     DatasetNotFound(DatasetName),
 
+    #[error("dataset already exists: {0}")]
+    DatasetAlreadyExists(DatasetName),
+
     #[error(transparent)]
     LogsInput(#[from] LogsInputError),
 

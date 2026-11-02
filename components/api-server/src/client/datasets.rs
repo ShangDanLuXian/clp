@@ -2,6 +2,7 @@
 
 use std::collections::HashSet;
 use std::io::ErrorKind;
+use std::num::NonZeroU32;
 use std::path::Path;
 
 use clp_rust_utils::aws::AWS_DEFAULT_REGION;
@@ -23,6 +24,19 @@ use utoipa::ToSchema;
 
 use crate::client::Client;
 use crate::error::ClientError;
+
+/// Request body for the dataset creation endpoint.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DatasetCreation {
+    /// The dataset's name.
+    pub name: String,
+
+    /// The dataset's retention period in minutes. Must be positive. Omit or set to `null` to keep
+    /// the dataset's archives forever.
+    #[schema(minimum = 1)]
+    pub retention_period_minutes: Option<u32>,
+}
 
 /// Request body for the archive deletion endpoint, which selects the archives to delete.
 #[derive(Debug, Deserialize, ToSchema)]
@@ -66,6 +80,49 @@ impl Client {
     pub async fn get_dataset_names(&self) -> Result<Vec<DatasetName>, ClientError> {
         self.check_clp_s_storage_engine("dataset listing")?;
         Ok(dataset::get_names(&self.sql_pool, &self.config.database).await?)
+    }
+
+    /// Creates a dataset, whose archives will be stored in its directory in the archive storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    ///
+    /// * [`ClientError::DatasetAlreadyExists`] if a dataset with the same name exists and isn't
+    ///   deleted.
+    /// * Forwards [`Self::check_clp_s_storage_engine`]'s return values on failure.
+    /// * Forwards [`NewDataset::try_from`]'s return values on failure.
+    /// * Forwards [`dataset::get_id_by_name`]'s return values on failure.
+    /// * Forwards [`dataset::create`]'s return values on failure.
+    pub async fn create_dataset(&self, creation: &DatasetCreation) -> Result<(), ClientError> {
+        self.check_clp_s_storage_engine("dataset creation")?;
+        let NewDataset {
+            name,
+            retention_period_minutes,
+        } = NewDataset::try_from(creation)?;
+        if dataset::get_id_by_name(&self.sql_pool, &self.config.database, &name)
+            .await?
+            .is_some()
+        {
+            return Err(ClientError::DatasetAlreadyExists(name));
+        }
+        dataset::create(
+            &self.sql_pool,
+            &self.config.database,
+            &name,
+            &self
+                .config
+                .archive_output
+                .dataset_archive_storage_directory(&name),
+            retention_period_minutes,
+        )
+        .await
+        .map_err(|e| match e {
+            clp_rust_utils::Error::Sqlx(sqlx::Error::Database(e)) if e.is_unique_violation() => {
+                ClientError::DatasetAlreadyExists(name)
+            }
+            e => e.into(),
+        })
     }
 
     /// Deletes a dataset's archives from the archive storage, and then marks the dataset as
@@ -255,6 +312,49 @@ impl Client {
     }
 }
 
+/// The dataset that a [`DatasetCreation`] describes, validated.
+#[derive(Debug, Eq, PartialEq)]
+struct NewDataset {
+    name: DatasetName,
+    retention_period_minutes: Option<NonZeroU32>,
+}
+
+impl TryFrom<&DatasetCreation> for NewDataset {
+    type Error = ClientError;
+
+    /// Validates `value` and parses its name.
+    ///
+    /// # Returns
+    ///
+    /// The validated dataset on success.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    ///
+    /// * [`ClientError::InvalidInput`] if:
+    ///   * `value`'s name isn't a valid dataset name.
+    ///   * `value`'s retention period is 0.
+    fn try_from(value: &DatasetCreation) -> Result<Self, Self::Error> {
+        let name = value
+            .name
+            .parse::<DatasetName>()
+            .map_err(|e| ClientError::InvalidInput(e.to_string()))?;
+        let retention_period_minutes = value
+            .retention_period_minutes
+            .map(|minutes| {
+                NonZeroU32::new(minutes).ok_or_else(|| {
+                    ClientError::InvalidInput("retention_period_minutes must be > 0".to_owned())
+                })
+            })
+            .transpose()?;
+        Ok(Self {
+            name,
+            retention_period_minutes,
+        })
+    }
+}
+
 /// The archives that an [`ArchiveDeletion`] selects, validated.
 #[derive(Debug, Eq, PartialEq)]
 enum ArchiveSelection {
@@ -403,14 +503,19 @@ async fn delete_archive_objects_from_s3(
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU32;
+
     use clp_rust_utils::clp_config::package::config::Config;
     use clp_rust_utils::clp_config::package::config::Package;
     use clp_rust_utils::clp_config::package::config::StorageEngine;
     use clp_rust_utils::database::mysql::archive::Archive;
+    use clp_rust_utils::dataset::DatasetName;
     use clp_rust_utils::types::ArchiveId;
 
     use super::ArchiveDeletion;
     use super::ArchiveSelection;
+    use super::DatasetCreation;
+    use super::NewDataset;
     use super::check_time_range;
     use super::delete_directory;
     use super::find_not_found_ids;
@@ -516,6 +621,55 @@ mod tests {
     }
 
     #[test]
+    fn new_dataset_parses_the_name_and_keeps_the_retention_period() -> anyhow::Result<()> {
+        for retention_period_minutes in [None, Some(NonZeroU32::MIN)] {
+            assert_eq!(
+                NewDataset::try_from(&DatasetCreation {
+                    name: "logs".to_owned(),
+                    retention_period_minutes: retention_period_minutes.map(NonZeroU32::get),
+                })?,
+                NewDataset {
+                    name: "logs".parse()?,
+                    retention_period_minutes,
+                }
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn new_dataset_rejects_an_invalid_name_and_a_zero_retention_period() {
+        const INVALID_DATASET_NAME: &str = "bad-name";
+
+        let parse_error = INVALID_DATASET_NAME
+            .parse::<DatasetName>()
+            .expect_err("the dataset name should be invalid");
+        for (creation, expected_error) in [
+            (
+                DatasetCreation {
+                    name: INVALID_DATASET_NAME.to_owned(),
+                    retention_period_minutes: Some(1),
+                },
+                format!("Invalid input: {parse_error}"),
+            ),
+            (
+                DatasetCreation {
+                    name: "logs".to_owned(),
+                    retention_period_minutes: Some(0),
+                },
+                "Invalid input: retention_period_minutes must be > 0".to_owned(),
+            ),
+        ] {
+            assert_eq!(
+                NewDataset::try_from(&creation)
+                    .expect_err("the creation should be rejected")
+                    .to_string(),
+                expected_error
+            );
+        }
+    }
+
+    #[test]
     fn not_found_ids_exclude_found_ids_and_duplicates_in_request_order() -> anyhow::Result<()> {
         let ids: Vec<ArchiveId> = [
             "018e90e5-8b2a-4a61-a2fc-cac799936ca0",
@@ -558,7 +712,7 @@ mod tests {
             mongodb::Client::with_uri_str("mongodb://127.0.0.1:1/?serverSelectionTimeoutMS=100")
                 .await?;
         let client = Client::new(config, mongodb_client, sql_pool);
-        let dataset_name = "logs".parse()?;
+        let dataset_name: DatasetName = "logs".parse()?;
 
         assert_eq!(
             client
@@ -567,6 +721,17 @@ mod tests {
                 .expect_err("the listing should be rejected")
                 .to_string(),
             "Invalid input: dataset listing requires the clp-s storage engine"
+        );
+        assert_eq!(
+            client
+                .create_dataset(&DatasetCreation {
+                    name: dataset_name.to_string(),
+                    retention_period_minutes: None,
+                })
+                .await
+                .expect_err("the creation should be rejected")
+                .to_string(),
+            "Invalid input: dataset creation requires the clp-s storage engine"
         );
         assert_eq!(
             client

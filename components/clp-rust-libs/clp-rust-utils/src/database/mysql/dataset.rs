@@ -1,9 +1,38 @@
 //! Operations on the CLP DB's datasets table and on the dataset-keyed rows of the clp-s metadata
 //! tables.
 
+use std::num::NonZeroU32;
+
 use crate::clp_config::package::config::Database as DatabaseConfig;
 use crate::dataset::DatasetId;
 use crate::dataset::DatasetName;
+
+/// Creates a dataset whose archives are stored at `archive_storage_path`.
+///
+/// # Errors
+///
+/// Returns an error if:
+///
+/// * Forwards [`sqlx::query::Query::execute`]'s return values on failure.
+pub async fn create(
+    db_pool: &sqlx::MySqlPool,
+    database_config: &DatabaseConfig,
+    name: &DatasetName,
+    archive_storage_path: &str,
+    retention_period_minutes: Option<NonZeroU32>,
+) -> Result<(), crate::Error> {
+    let datasets_table = database_config.datasets_table_name();
+    sqlx::query(&format!(
+        "INSERT INTO `{datasets_table}` (`name`, `archive_storage_path`, \
+         `retention_period_minutes`) VALUES (?, ?, ?)"
+    ))
+    .bind(name)
+    .bind(archive_storage_path)
+    .bind(retention_period_minutes.map(NonZeroU32::get))
+    .execute(db_pool)
+    .await?;
+    Ok(())
+}
 
 /// # Returns
 ///
