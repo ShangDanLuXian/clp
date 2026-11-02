@@ -6,6 +6,7 @@ use aws_sdk_s3::primitives::ByteStreamError;
 use clp_rust_utils::dataset::DatasetName;
 use clp_rust_utils::job_config::QueryJobStatus;
 use clp_rust_utils::logs_input::LogsInputError;
+use clp_rust_utils::s3::DeleteError;
 use clp_rust_utils::types::ArchiveId;
 use num_enum::TryFromPrimitive;
 use thiserror::Error;
@@ -100,6 +101,14 @@ impl<AwsSdkErrorType: std::error::Error + 'static> From<SdkError<AwsSdkErrorType
 
 impl From<ByteStreamError> for ClientError {
     fn from(value: ByteStreamError) -> Self {
+        Self::Aws {
+            description: value.to_string(),
+        }
+    }
+}
+
+impl From<DeleteError> for ClientError {
+    fn from(value: DeleteError) -> Self {
         Self::Aws {
             description: value.to_string(),
         }
