@@ -28,6 +28,7 @@ pub fn set_up_logging(log_filename: &str) -> LoggerGuards {
                 .with_line_number(true)
                 .json(),
         )
+        .fmt_fields(tracing_subscriber::fmt::format::JsonFields::new())
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .with_ansi(false);
 

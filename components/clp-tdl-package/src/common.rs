@@ -83,6 +83,7 @@ pub fn init_stderr_tracing_subscriber() -> Result<(), Box<dyn std::error::Error 
                 .with_line_number(true)
                 .json(),
         )
+        .fmt_fields(tracing_subscriber::fmt::format::JsonFields::new())
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .with_ansi(false)
         .with_writer(std::io::stderr)
