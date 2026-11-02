@@ -23,6 +23,7 @@ use clp_rust_utils::job_config::ResultsCacheOutput;
 use clp_rust_utils::job_config::SearchQuery;
 use clp_rust_utils::job_config::TimeRange;
 use clp_rust_utils::types::PositiveI64;
+pub use datasets::*;
 use futures::Stream;
 use futures::StreamExt;
 use non_empty_string::NonEmptyString;
