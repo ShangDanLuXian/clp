@@ -26,9 +26,7 @@ pub enum DeleteError {
 ///   * [`aws_sdk_s3::operation::list_objects_v2::paginator::ListObjectsV2Paginator::send`]'s stream
 ///     yields an error.
 ///   * [`aws_sdk_s3::types::builders::ObjectIdentifierBuilder::build`] fails.
-///   * [`aws_sdk_s3::types::builders::DeleteBuilder::build`] fails.
-///   * [`aws_sdk_s3::operation::delete_objects::builders::DeleteObjectsFluentBuilder::send`] fails.
-/// * [`DeleteError::ObjectNotDeleted`] if S3 fails to delete an object.
+/// * Forwards [`delete_objects`]'s return values on failure.
 pub async fn delete_by_key_prefix(
     client: &Client,
     bucket: &str,
@@ -56,21 +54,68 @@ pub async fn delete_by_key_prefix(
             continue;
         }
 
-        let delete = Delete::builder()
-            .set_objects(Some(objects))
-            .quiet(true)
-            .build()
+        delete_objects(client, bucket, objects).await?;
+    }
+
+    Ok(())
+}
+
+/// Deletes every object in `bucket` whose key is in `keys`.
+///
+/// # Errors
+///
+/// Returns an error if:
+///
+/// * [`DeleteError::Sdk`] if [`aws_sdk_s3::types::builders::ObjectIdentifierBuilder::build`] fails.
+/// * Forwards [`delete_objects`]'s return values on failure.
+pub async fn delete_by_keys(
+    client: &Client,
+    bucket: &str,
+    keys: &[String],
+) -> Result<(), DeleteError> {
+    const MAX_NUM_KEYS_PER_REQUEST: usize = 1000;
+
+    for keys in keys.chunks(MAX_NUM_KEYS_PER_REQUEST) {
+        let objects = keys
+            .iter()
+            .map(|key| ObjectIdentifier::builder().key(key).build())
+            .collect::<Result<Vec<_>, _>>()
             .map_err(|e| DeleteError::Sdk(Box::new(e.into())))?;
-        let output = client
-            .delete_objects()
-            .bucket(bucket)
-            .delete(delete)
-            .send()
-            .await
-            .map_err(|e| DeleteError::Sdk(Box::new(e.into())))?;
-        if let Some(error) = output.errors().first() {
-            return Err(DeleteError::ObjectNotDeleted(Box::new(error.clone())));
-        }
+        delete_objects(client, bucket, objects).await?;
+    }
+
+    Ok(())
+}
+
+/// Deletes `objects` from `bucket` in one request.
+///
+/// # Errors
+///
+/// Returns an error if:
+///
+/// * [`DeleteError::Sdk`] if:
+///   * [`aws_sdk_s3::types::builders::DeleteBuilder::build`] fails.
+///   * [`aws_sdk_s3::operation::delete_objects::builders::DeleteObjectsFluentBuilder::send`] fails.
+/// * [`DeleteError::ObjectNotDeleted`] if S3 fails to delete an object.
+async fn delete_objects(
+    client: &Client,
+    bucket: &str,
+    objects: Vec<ObjectIdentifier>,
+) -> Result<(), DeleteError> {
+    let delete = Delete::builder()
+        .set_objects(Some(objects))
+        .quiet(true)
+        .build()
+        .map_err(|e| DeleteError::Sdk(Box::new(e.into())))?;
+    let output = client
+        .delete_objects()
+        .bucket(bucket)
+        .delete(delete)
+        .send()
+        .await
+        .map_err(|e| DeleteError::Sdk(Box::new(e.into())))?;
+    if let Some(error) = output.errors().first() {
+        return Err(DeleteError::ObjectNotDeleted(Box::new(error.clone())));
     }
 
     Ok(())
