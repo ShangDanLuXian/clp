@@ -14,6 +14,7 @@ CLP is currently split across a few different components in the [components] dir
 * [core] contains code to compress uncompressed logs, decompress compressed logs, and search
   compressed logs.
 * [db-table-creator] contains code to create the CLP DB's tables.
+* [garbage-collector] contains the garbage collectors of the CLP package.
 * [job-orchestration] contains code to schedule compression and search jobs on the cluster.
 * [log-ingestor] contains code to serve requests for CLP ingestion job orchestration.
 * [package-template] contains the base directory structure and files of the CLP package.
@@ -30,6 +31,7 @@ CLP is currently split across a few different components in the [components] dir
 [compression-coordinator]: https://github.com/y-scope/clp/tree/DOCS_VAR_CLP_GIT_REF/components/compression-coordinator
 [core]: https://github.com/y-scope/clp/tree/DOCS_VAR_CLP_GIT_REF/components/core
 [db-table-creator]: https://github.com/y-scope/clp/tree/DOCS_VAR_CLP_GIT_REF/components/db-table-creator
+[garbage-collector]: https://github.com/y-scope/clp/tree/DOCS_VAR_CLP_GIT_REF/components/garbage-collector
 [job-orchestration]: https://github.com/y-scope/clp/tree/DOCS_VAR_CLP_GIT_REF/components/job-orchestration
 [log-ingestor]: https://github.com/y-scope/clp/tree/DOCS_VAR_CLP_GIT_REF/components/log-ingestor
 [package-template]: https://github.com/y-scope/clp/tree/DOCS_VAR_CLP_GIT_REF/components/package-template

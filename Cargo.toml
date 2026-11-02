@@ -5,6 +5,7 @@ members = [
     "components/clp-tdl-package",
     "components/compression-coordinator",
     "components/db-table-creator",
+    "components/garbage-collector",
     "components/log-ingestor",
     "components/query-coordinator",
 ]

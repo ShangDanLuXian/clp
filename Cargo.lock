@@ -1741,6 +1741,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "garbage-collector"
+version = "0.13.1-dev"
+dependencies = [
+ "anyhow",
+ "clap",
+ "clp-rust-utils",
+ "non-empty-string",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
