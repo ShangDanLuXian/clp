@@ -100,7 +100,8 @@ This is our working map from the prototype to the PRs of the
   `connect_to_server`; the prototype's `try`/`catch` around `Output::filter` is left out, since
   the handler no longer throws. To build locally: symlink the worktree's `build/deps` to the
   shared deps, set `PKG_CONFIG_PATH` to the static LibLZMA's `pkgconfig` directory, and configure
-  with `CLP_USE_STATIC_LIBS=OFF` (the system's static `libarchive` doesn't link here).
+  with `CLP_USE_STATIC_LIBS=OFF` (the system's static `libarchive` doesn't link here). Merged into
+  `main` as `5fdbb671` (y-scope/clp#2632).
 
 ### PR 2. Network output types
 
@@ -162,7 +163,7 @@ This is our working map from the prototype to the PRs of the
   again (`1bfb16b`). On the reference branch `streaming-search/shared-query-job-operations-review`
   and not yet on the PR: `6929c1d` restores the test imports the second merge broke. `e43ecde`
   after it moves the API server to `QueryJobId` and isn't to be applied, since the API server keeps
-  `main`'s `u64`.
+  `main`'s `u64`. Merged into `main` as `3999ba1c`.
 
 ### PR 4. Streaming job config validation
 
@@ -202,13 +203,31 @@ This is our working map from the prototype to the PRs of the
 * **Adjust:** rename the crate; version 1; only the error variants this PR needs; encode the
   acknowledgement with `rmp` instead of the hand-written 10 bytes of `protocol.rs:142-172`, in
   `Ack` and in the `test-utils` `ack` encoder.
-* **Status:** branch `streaming-search/query-result-listener-protocol` (`dd9ecd1`) was written
-  fresh, not moved. Redo it by the method above.
+* **Status:** y-scope/clp#2649, branch `streaming-search/query-result-listener-protocol-v2`, review
+  fixes on `streaming-search/query-result-listener-protocol-v2-review`. Lin had the `test-utils`
+  feature removed, since nothing used it yet: the encoders are a `#[cfg(test)] mod test_utils`, and
+  the first PR whose `tests/` need them brings the feature back. Strings, including the
+  handshake's, decode lossily. Merged into `main` as `97c6ad9d`.
 
-### PR 6. Cursor and encodings
+### PR 6. Cursor
 
-* **Take** `src/cursor.rs` and `src/encoding.rs`, the whole files, with their 5 unit tests.
-* **Adjust:** `SearchResult*` → `QueryResult*`.
+* **Take** `src/cursor.rs`, the whole file, with its unit tests.
+* **Adjust:** drop the getter test `archive_id_is_the_one_the_cursor_was_created_with` and
+  `claims_indices_in_order`, which the duplicate test covers; add a test of the panic on an index
+  ahead of the cursor.
+* **Status:** y-scope/clp#2662, branch `streaming-search/query-result-listener-cursor-and-encodings`
+  (named before the split), one commit `b6e3816`. Beyond the adjustments, it rewords the
+  prototype's docstrings, adds one to `new` and `#[must_use]` to `claim`, and leaves out the second
+  `# Panics` sentence and the `wrapping_add` comment.
+
+### PR 6a. Encodings
+
+* **Take** `src/encoding.rs`, the whole file, with its unit test.
+* **Adjust:** `SearchResult*` → `QueryResult*`; `timestamp` → `timestamp_millisecs`, as in PR 5;
+  `encode` takes the message as a `String`.
+* **Status:** branch `streaming-search/query-result-listener-encodings`, one commit `8d0f5d4`, from
+  `main` at `97c6ad9d`. Its `encoding.rs` is y-scope/clp#2662's before the split, byte for byte,
+  including that PR's rewording of the prototype's docstrings. No PR yet.
 
 ### PR 7. Connection handler
 

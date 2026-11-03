@@ -2,7 +2,7 @@
 
 ## Work breakdown
 
-The work lands as seventeen pull requests against `main`. Each one:
+The work lands as eighteen pull requests against `main`. Each one:
 
 * has a single purpose and makes sense on its own;
 * builds, passes the repository's checks, and leaves `main` working, apart from the breaking
@@ -154,9 +154,9 @@ Depends on: nothing. Size: about 800 lines, about 350 of them tests.
 * Unit tests: every message and every error, messages cut at every byte, every msgpack integer
   width, and out-of-range values.
 
-#### PR 6. `feat(query-result-listener): Add the per-task result cursor and the result encodings.`
+#### PR 6. ``feat(query-result-listener): Add `TaskCursor` to deduplicate results across query task attempts.``
 
-Depends on: PR 5. Size: about 300 lines.
+Depends on: PR 5. Size: about 150 lines.
 
 * `TaskCursor`, one per task index: the archive ID from the task's first handshake, and the index
   of the next result not yet delivered. A connection delivers result `r` only by moving the cursor
@@ -164,20 +164,33 @@ Depends on: PR 5. Size: about 300 lines.
   attempt of the task has delivered that result, and this copy is dropped as a duplicate. Every
   connection sends its indices in order from 0, so a result is never ahead of the cursor. This
   relies on `clp-s` producing a task's results in the same order on every attempt.
+* A result ahead of the cursor panics: PR 7 rejects a connection whose indices aren't consecutive
+  from 0 before it claims them, so only a bug in the listener can get there.
+* Unit tests: dropping duplicates without moving the cursor, concurrent claimers claiming each
+  index once, and the panic.
+
+#### PR 6a. ``feat(query-result-listener): Add `ResultEncoding` to batch results in the caller's transport format.``
+
+Depends on: PR 5. Size: about 140 lines.
+
 * `ResultEncoding` and `ResultEncoder`, the pluggable output format: each connection encodes the
   results it delivers into the client's final format, and hands them on in batches.
-  `QueryResultEncoding` yields plain results.
-* Unit tests: claiming and dropping duplicates from concurrent claimers; encoding batches.
+  `QueryResultEncoding` yields plain results. The traits are public, since the API server
+  implements the second encoding (PR 13).
+* Unit tests: encoding batches.
+* Split out of PR 6: neither uses the other, and the two raise different review questions, so they
+  are reviewed in parallel. PR 7 needs both.
 
 #### PR 7. `feat(query-result-listener): Add the connection handler.`
 
-Depends on: PR 6. Size: about 750 lines, about 400 of them tests.
+Depends on: PR 6 and PR 6a. Size: about 750 lines, about 400 of them tests.
 
 * The per-connection logic: read the handshake, check the archive ID against the task's cursor,
-  claim and encode the results of each socket read (up to 64 KiB), and send them as one batch into
-  the session's queue, a bounded `tokio::sync::mpsc` channel. Then check the trailer, and
-  acknowledge only after the last batch is in the queue. A full queue blocks the handler, which
-  stops reading, so TCP slows `clp-s` down.
+  check that each result's index is the next one in the connection's order from 0 (PR 6's cursor
+  relies on it), claim and encode the results of each socket read (up to 64 KiB), and send them as
+  one batch into the session's queue, a bounded `tokio::sync::mpsc` channel. Then check the
+  trailer, and acknowledge only after the last batch is in the queue. A full queue blocks the
+  handler, which stops reading, so TCP slows `clp-s` down.
 * A claimed result is always sent on: every exit from the handler first hands on the batch it
   has claimed.
 * If the queue's receiver is gone because the client left, keep reading, claim and drop the
@@ -286,7 +299,7 @@ Depends on: PR 3, PR 4, PR 9, PR 10 and PR 11. Size: about 500 lines, about 150 
 
 #### PR 13. `feat(api-server): Add a Server-Sent Events encoding for streamed results.`
 
-Depends on: PR 6. Size: about 450 lines, about 250 of them tests.
+Depends on: PR 6a. Size: about 450 lines, about 250 of them tests.
 
 * `SseEncoding`, which turns each result into a ready-to-send `data:` event carrying
   `{archive_id, timestamp, message}`, with the message's trailing newline removed. Also a response
