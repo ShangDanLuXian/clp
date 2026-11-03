@@ -134,3 +134,33 @@ impl From<clp_rust_utils::Error> for ClientError {
         }
     }
 }
+
+impl From<clp_metadata_db::Error> for ClientError {
+    fn from(value: clp_metadata_db::Error) -> Self {
+        match value {
+            clp_metadata_db::Error::DatasetAlreadyExists(name) => Self::DatasetAlreadyExists(name),
+            clp_metadata_db::Error::Sqlx(error) => Self::Sql(error),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clp_rust_utils::dataset::DatasetName;
+
+    use super::ClientError;
+
+    #[test]
+    fn metadata_db_errors_convert_to_the_matching_client_errors() -> anyhow::Result<()> {
+        let name: DatasetName = "logs".parse()?;
+        assert!(matches!(
+            ClientError::from(clp_metadata_db::Error::DatasetAlreadyExists(name.clone())),
+            ClientError::DatasetAlreadyExists(converted_name) if converted_name == name
+        ));
+        assert!(matches!(
+            ClientError::from(clp_metadata_db::Error::Sqlx(sqlx::Error::RowNotFound)),
+            ClientError::Sql(sqlx::Error::RowNotFound)
+        ));
+        Ok(())
+    }
+}

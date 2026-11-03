@@ -12,15 +12,13 @@ use std::str::FromStr;
 use std::time::Duration;
 use std::time::SystemTime;
 
+use clp_metadata_db::ExpiredArchive;
+use clp_metadata_db::MetadataTables;
 use clp_rust_utils::aws::AWS_DEFAULT_REGION;
 use clp_rust_utils::clp_config::S3Config;
 use clp_rust_utils::clp_config::package::config::ArchiveOutput;
 use clp_rust_utils::clp_config::package::config::ArchiveOutputStorage;
 use clp_rust_utils::clp_config::package::config::Config;
-use clp_rust_utils::clp_config::package::config::Database as DatabaseConfig;
-use clp_rust_utils::database::mysql::archive;
-use clp_rust_utils::database::mysql::archive::Archive;
-use clp_rust_utils::database::mysql::dataset;
 use clp_rust_utils::database::mysql::query_job;
 use clp_rust_utils::dataset::DatasetId;
 use clp_rust_utils::dataset::DatasetName;
@@ -34,7 +32,7 @@ use crate::deletion_candidates::DeletionCandidatesBuffer;
 /// The archive garbage collector.
 pub struct ArchiveGarbageCollector {
     db_pool: sqlx::MySqlPool,
-    database_config: DatabaseConfig,
+    metadata_tables: MetadataTables,
     archive_output: ArchiveOutput,
     recovery_file_path: PathBuf,
     sweep_interval: Duration,
@@ -56,7 +54,7 @@ impl ArchiveGarbageCollector {
 
         Self {
             db_pool,
-            database_config: config.database,
+            metadata_tables: MetadataTables::new(&config.database),
             archive_output: config.archive_output,
             recovery_file_path: Path::new(&config.tmp_directory).join(RECOVERY_FILE_NAME),
             sweep_interval: Duration::from_secs(
@@ -263,26 +261,15 @@ impl ArchiveGarbageCollector {
     ///
     /// Returns an error if:
     ///
-    /// * Forwards [`sqlx::query::QueryAs::fetch_all`]'s return values on failure.
+    /// * Forwards [`sqlx::Pool::acquire`]'s return values on failure.
+    /// * Forwards [`MetadataTables::find_expired_archives`]'s return values on failure.
     async fn fetch_expired_archives(
         &self,
         expiry_base_millis: i64,
-    ) -> Result<Vec<ExpiredArchive>, sqlx::Error> {
-        const MILLISECS_PER_MINUTE: i64 = 60 * 1000;
-
-        let archives_table = self.database_config.unscoped_archives_table_name();
-        let datasets_table = self.database_config.datasets_table_name();
-        sqlx::query_as(&format!(
-            "SELECT `archives`.`id`, `archives`.`uuid`, `archives`.`dataset_id`, \
-             `datasets`.`name` AS `dataset_name` FROM `{archives_table}` AS `archives` JOIN \
-             `{datasets_table}` AS `datasets` ON `archives`.`dataset_id` = `datasets`.`id` WHERE \
-             `datasets`.`deleted_at_millis` = 0 AND `datasets`.`retention_period_minutes` IS NOT \
-             NULL AND `archives`.`creation_time_millis` < ? - \
-             CAST(`datasets`.`retention_period_minutes` AS SIGNED) * {MILLISECS_PER_MINUTE}"
-        ))
-        .bind(expiry_base_millis)
-        .fetch_all(&self.db_pool)
-        .await
+    ) -> Result<Vec<ExpiredArchive>, clp_metadata_db::Error> {
+        self.metadata_tables
+            .find_expired_archives(&mut *self.db_pool.acquire().await?, expiry_base_millis)
+            .await
     }
 
     /// Deletes the metadata of archives, grouped by the IDs of their datasets, in one transaction.
@@ -292,15 +279,17 @@ impl ArchiveGarbageCollector {
     /// Returns an error if:
     ///
     /// * Forwards [`sqlx::Pool::begin`]'s return values on failure.
-    /// * Forwards [`archive::delete`]'s return values on failure.
+    /// * Forwards [`MetadataTables::delete_archives`]'s return values on failure.
     /// * Forwards [`sqlx::Transaction::commit`]'s return values on failure.
     async fn delete_archive_metadata(
         &self,
         archive_ids_by_dataset_id: &BTreeMap<DatasetId, Vec<u64>>,
-    ) -> Result<(), clp_rust_utils::Error> {
+    ) -> Result<(), clp_metadata_db::Error> {
         let mut tx = self.db_pool.begin().await?;
         for (dataset_id, archive_ids) in archive_ids_by_dataset_id {
-            archive::delete(&mut tx, &self.database_config, *dataset_id, archive_ids).await?;
+            self.metadata_tables
+                .delete_archives(&mut tx, *dataset_id, archive_ids)
+                .await?;
         }
         tx.commit().await?;
         Ok(())
@@ -351,17 +340,15 @@ impl ArchiveGarbageCollector {
     ///
     /// Returns an error if:
     ///
-    /// * Forwards [`dataset::get_deleted_ids`]'s return values on failure.
+    /// * Forwards [`Self::fetch_deleted_dataset_ids`]'s return values on failure.
     /// * Forwards [`Self::delete_dataset_metadata`]'s return values on failure.
     async fn reclaim_deleted_datasets(&self) -> anyhow::Result<()> {
-        let dataset_ids = dataset::get_deleted_ids(&self.db_pool, &self.database_config)
-            .await
-            .inspect_err(|e| {
-                tracing::error!(
-                    error = % e,
-                    "Failed to fetch the deleted datasets from the database."
-                );
-            })?;
+        let dataset_ids = self.fetch_deleted_dataset_ids().await.inspect_err(|e| {
+            tracing::error!(
+                error = % e,
+                "Failed to fetch the deleted datasets from the database."
+            );
+        })?;
         for dataset_id in dataset_ids {
             let num_deleted_rows =
                 self.delete_dataset_metadata(dataset_id)
@@ -381,6 +368,22 @@ impl ArchiveGarbageCollector {
         Ok(())
     }
 
+    /// # Returns
+    ///
+    /// The IDs of the deleted datasets on success.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    ///
+    /// * Forwards [`sqlx::Pool::acquire`]'s return values on failure.
+    /// * Forwards [`MetadataTables::get_deleted_dataset_ids`]'s return values on failure.
+    async fn fetch_deleted_dataset_ids(&self) -> Result<Vec<DatasetId>, clp_metadata_db::Error> {
+        self.metadata_tables
+            .get_deleted_dataset_ids(&mut *self.db_pool.acquire().await?)
+            .await
+    }
+
     /// Deletes a dataset's rows from the archives, long-span archives and column-metadata tables in
     /// one transaction.
     ///
@@ -393,27 +396,20 @@ impl ArchiveGarbageCollector {
     /// Returns an error if:
     ///
     /// * Forwards [`sqlx::Pool::begin`]'s return values on failure.
-    /// * Forwards [`dataset::delete_metadata`]'s return values on failure.
+    /// * Forwards [`MetadataTables::delete_dataset_metadata`]'s return values on failure.
     /// * Forwards [`sqlx::Transaction::commit`]'s return values on failure.
     async fn delete_dataset_metadata(
         &self,
         dataset_id: DatasetId,
-    ) -> Result<u64, clp_rust_utils::Error> {
+    ) -> Result<u64, clp_metadata_db::Error> {
         let mut tx = self.db_pool.begin().await?;
-        let num_deleted_rows =
-            dataset::delete_metadata(&mut tx, &self.database_config, dataset_id).await?;
+        let num_deleted_rows = self
+            .metadata_tables
+            .delete_dataset_metadata(&mut tx, dataset_id)
+            .await?;
         tx.commit().await?;
         Ok(num_deleted_rows)
     }
-}
-
-/// An archive that has outlived its dataset's retention period.
-#[derive(sqlx::FromRow)]
-struct ExpiredArchive {
-    #[sqlx(flatten)]
-    archive: Archive,
-    dataset_id: DatasetId,
-    dataset_name: DatasetName,
 }
 
 /// An archive to delete from the archive storage.

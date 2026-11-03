@@ -22,6 +22,7 @@ aws-sdk-s3 = { workspace = true }
 axum = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
+clp-metadata-db = { workspace = true }
 clp-rust-utils = { workspace = true }
 futures = { workspace = true }
 mongodb = { workspace = true }

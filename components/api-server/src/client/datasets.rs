@@ -5,13 +5,12 @@ use std::io::ErrorKind;
 use std::num::NonZeroU32;
 use std::path::Path;
 
+use clp_metadata_db::Archive;
+use clp_metadata_db::NewDataset;
 use clp_rust_utils::aws::AWS_DEFAULT_REGION;
 use clp_rust_utils::clp_config::S3Config;
 use clp_rust_utils::clp_config::package::config::ArchiveOutputStorage;
 use clp_rust_utils::clp_config::package::config::StorageEngine;
-use clp_rust_utils::database::mysql::archive;
-use clp_rust_utils::database::mysql::archive::Archive;
-use clp_rust_utils::database::mysql::dataset;
 use clp_rust_utils::dataset::DatasetId;
 use clp_rust_utils::dataset::DatasetName;
 use clp_rust_utils::s3::DeleteError;
@@ -76,10 +75,15 @@ impl Client {
     /// Returns an error if:
     ///
     /// * Forwards [`Self::check_clp_s_storage_engine`]'s return values on failure.
-    /// * Forwards [`dataset::get_names`]'s return values on failure.
+    /// * Forwards [`sqlx::Pool::acquire`]'s return values on failure.
+    /// * Forwards [`clp_metadata_db::MetadataTables::get_dataset_names`]'s return values on
+    ///   failure.
     pub async fn get_dataset_names(&self) -> Result<Vec<DatasetName>, ClientError> {
         self.check_clp_s_storage_engine("dataset listing")?;
-        Ok(dataset::get_names(&self.sql_pool, &self.config.database).await?)
+        Ok(self
+            .metadata_tables
+            .get_dataset_names(&mut *self.sql_pool.acquire().await?)
+            .await?)
     }
 
     /// Creates a dataset, whose archives will be stored in its directory in the archive storage.
@@ -91,38 +95,40 @@ impl Client {
     /// * [`ClientError::DatasetAlreadyExists`] if a dataset with the same name exists and isn't
     ///   deleted.
     /// * Forwards [`Self::check_clp_s_storage_engine`]'s return values on failure.
-    /// * Forwards [`NewDataset::try_from`]'s return values on failure.
-    /// * Forwards [`dataset::get_id_by_name`]'s return values on failure.
-    /// * Forwards [`dataset::create`]'s return values on failure.
+    /// * Forwards [`ValidatedDatasetCreation::try_from`]'s return values on failure.
+    /// * Forwards [`sqlx::Pool::acquire`]'s return values on failure.
+    /// * Forwards [`clp_metadata_db::MetadataTables::get_dataset_id_by_name`]'s return values on
+    ///   failure.
+    /// * Forwards [`clp_metadata_db::MetadataTables::create_dataset`]'s return values on failure.
     pub async fn create_dataset(&self, creation: &DatasetCreation) -> Result<(), ClientError> {
         self.check_clp_s_storage_engine("dataset creation")?;
-        let NewDataset {
+        let ValidatedDatasetCreation {
             name,
             retention_period_minutes,
-        } = NewDataset::try_from(creation)?;
-        if dataset::get_id_by_name(&self.sql_pool, &self.config.database, &name)
+        } = ValidatedDatasetCreation::try_from(creation)?;
+        let mut connection = self.sql_pool.acquire().await?;
+        if self
+            .metadata_tables
+            .get_dataset_id_by_name(&mut connection, &name)
             .await?
             .is_some()
         {
             return Err(ClientError::DatasetAlreadyExists(name));
         }
-        dataset::create(
-            &self.sql_pool,
-            &self.config.database,
-            &name,
-            &self
-                .config
-                .archive_output
-                .dataset_archive_storage_directory(&name),
-            retention_period_minutes,
-        )
-        .await
-        .map_err(|e| match e {
-            clp_rust_utils::Error::Sqlx(sqlx::Error::Database(e)) if e.is_unique_violation() => {
-                ClientError::DatasetAlreadyExists(name)
-            }
-            e => e.into(),
-        })
+        self.metadata_tables
+            .create_dataset(
+                &mut connection,
+                &NewDataset {
+                    archive_storage_path: self
+                        .config
+                        .archive_output
+                        .dataset_archive_storage_directory(&name),
+                    name,
+                    retention_period_minutes,
+                },
+            )
+            .await?;
+        Ok(())
     }
 
     /// Deletes a dataset's archives from the archive storage, and then marks the dataset as
@@ -136,7 +142,9 @@ impl Client {
     /// * Forwards [`Self::get_dataset_id`]'s return values on failure.
     /// * Forwards [`delete_directory`]'s return values on failure.
     /// * Forwards [`delete_archives_from_s3`]'s return values on failure.
-    /// * Forwards [`dataset::mark_deleted`]'s return values on failure.
+    /// * Forwards [`sqlx::Pool::acquire`]'s return values on failure.
+    /// * Forwards [`clp_metadata_db::MetadataTables::mark_dataset_deleted`]'s return values on
+    ///   failure.
     pub async fn delete_dataset(&self, name: &DatasetName) -> Result<(), ClientError> {
         self.check_clp_s_storage_engine("dataset deletion")?;
         let dataset_id = self.get_dataset_id(name).await?;
@@ -152,7 +160,9 @@ impl Client {
                 delete_archives_from_s3(s3_config, &archive_storage_directory).await?;
             }
         }
-        dataset::mark_deleted(&self.sql_pool, &self.config.database, dataset_id).await?;
+        self.metadata_tables
+            .mark_dataset_deleted(&mut *self.sql_pool.acquire().await?, dataset_id)
+            .await?;
         Ok(())
     }
 
@@ -169,7 +179,8 @@ impl Client {
     /// * Forwards [`check_time_range`]'s return values on failure.
     /// * Forwards [`Self::get_dataset_id`]'s return values on failure.
     /// * Forwards [`sqlx::Pool::acquire`]'s return values on failure.
-    /// * Forwards [`archive::find_by_time_range`]'s return values on failure.
+    /// * Forwards [`clp_metadata_db::MetadataTables::find_archives_by_time_range`]'s return values
+    ///   on failure.
     pub async fn get_archive_ids(
         &self,
         dataset_name: &DatasetName,
@@ -179,14 +190,15 @@ impl Client {
         self.check_clp_s_storage_engine("archive listing")?;
         check_time_range(begin_ts, end_ts)?;
         let dataset_id = self.get_dataset_id(dataset_name).await?;
-        let archives = archive::find_by_time_range(
-            &mut *self.sql_pool.acquire().await?,
-            &self.config.database,
-            dataset_id,
-            begin_ts,
-            end_ts,
-        )
-        .await?;
+        let archives = self
+            .metadata_tables
+            .find_archives_by_time_range(
+                &mut *self.sql_pool.acquire().await?,
+                dataset_id,
+                begin_ts,
+                end_ts,
+            )
+            .await?;
         Ok(archives.into_iter().map(|archive| archive.uuid).collect())
     }
 
@@ -206,9 +218,11 @@ impl Client {
     /// * Forwards [`ArchiveSelection::try_from`]'s return values on failure.
     /// * Forwards [`Self::get_dataset_id`]'s return values on failure.
     /// * Forwards [`sqlx::Pool::begin`]'s return values on failure.
-    /// * Forwards [`archive::find_by_uuids`]'s return values on failure.
-    /// * Forwards [`archive::find_by_time_range`]'s return values on failure.
-    /// * Forwards [`archive::delete`]'s return values on failure.
+    /// * Forwards [`clp_metadata_db::MetadataTables::find_archives_by_uuids`]'s return values on
+    ///   failure.
+    /// * Forwards [`clp_metadata_db::MetadataTables::find_archives_by_time_range`]'s return values
+    ///   on failure.
+    /// * Forwards [`clp_metadata_db::MetadataTables::delete_archives`]'s return values on failure.
     /// * Forwards [`sqlx::Transaction::commit`]'s return values on failure.
     /// * Forwards [`delete_directory`]'s return values on failure.
     /// * Forwards [`delete_archive_objects_from_s3`]'s return values on failure.
@@ -224,26 +238,25 @@ impl Client {
         let mut tx = self.sql_pool.begin().await?;
         let (archives, not_found_ids) = match selection {
             ArchiveSelection::Ids(ids) => {
-                let archives =
-                    archive::find_by_uuids(&mut tx, &self.config.database, dataset_id, &ids)
-                        .await?;
+                let archives = self
+                    .metadata_tables
+                    .find_archives_by_uuids(&mut tx, dataset_id, &ids)
+                    .await?;
                 let not_found_ids = find_not_found_ids(ids, &archives);
                 (archives, not_found_ids)
             }
             ArchiveSelection::TimeRange { begin_ts, end_ts } => {
-                let archives = archive::find_by_time_range(
-                    &mut tx,
-                    &self.config.database,
-                    dataset_id,
-                    begin_ts,
-                    Some(end_ts),
-                )
-                .await?;
+                let archives = self
+                    .metadata_tables
+                    .find_archives_by_time_range(&mut tx, dataset_id, begin_ts, Some(end_ts))
+                    .await?;
                 (archives, Vec::new())
             }
         };
         let ids: Vec<u64> = archives.iter().map(|archive| archive.id).collect();
-        archive::delete(&mut tx, &self.config.database, dataset_id, &ids).await?;
+        self.metadata_tables
+            .delete_archives(&mut tx, dataset_id, &ids)
+            .await?;
         tx.commit().await?;
 
         let deleted_ids: Vec<ArchiveId> =
@@ -304,9 +317,12 @@ impl Client {
     /// Returns an error if:
     ///
     /// * [`ClientError::DatasetNotFound`] if the dataset doesn't exist or is deleted.
-    /// * Forwards [`dataset::get_id_by_name`]'s return values on failure.
+    /// * Forwards [`sqlx::Pool::acquire`]'s return values on failure.
+    /// * Forwards [`clp_metadata_db::MetadataTables::get_dataset_id_by_name`]'s return values on
+    ///   failure.
     async fn get_dataset_id(&self, name: &DatasetName) -> Result<DatasetId, ClientError> {
-        dataset::get_id_by_name(&self.sql_pool, &self.config.database, name)
+        self.metadata_tables
+            .get_dataset_id_by_name(&mut *self.sql_pool.acquire().await?, name)
             .await?
             .ok_or_else(|| ClientError::DatasetNotFound(name.clone()))
     }
@@ -314,12 +330,12 @@ impl Client {
 
 /// The dataset that a [`DatasetCreation`] describes, validated.
 #[derive(Debug, Eq, PartialEq)]
-struct NewDataset {
+struct ValidatedDatasetCreation {
     name: DatasetName,
     retention_period_minutes: Option<NonZeroU32>,
 }
 
-impl TryFrom<&DatasetCreation> for NewDataset {
+impl TryFrom<&DatasetCreation> for ValidatedDatasetCreation {
     type Error = ClientError;
 
     /// Validates `value` and parses its name.
@@ -505,17 +521,17 @@ async fn delete_archive_objects_from_s3(
 mod tests {
     use std::num::NonZeroU32;
 
+    use clp_metadata_db::Archive;
     use clp_rust_utils::clp_config::package::config::Config;
     use clp_rust_utils::clp_config::package::config::Package;
     use clp_rust_utils::clp_config::package::config::StorageEngine;
-    use clp_rust_utils::database::mysql::archive::Archive;
     use clp_rust_utils::dataset::DatasetName;
     use clp_rust_utils::types::ArchiveId;
 
     use super::ArchiveDeletion;
     use super::ArchiveSelection;
     use super::DatasetCreation;
-    use super::NewDataset;
+    use super::ValidatedDatasetCreation;
     use super::check_time_range;
     use super::delete_directory;
     use super::find_not_found_ids;
@@ -621,14 +637,15 @@ mod tests {
     }
 
     #[test]
-    fn new_dataset_parses_the_name_and_keeps_the_retention_period() -> anyhow::Result<()> {
+    fn validated_dataset_creation_parses_the_name_and_keeps_the_retention_period()
+    -> anyhow::Result<()> {
         for retention_period_minutes in [None, Some(NonZeroU32::MIN)] {
             assert_eq!(
-                NewDataset::try_from(&DatasetCreation {
+                ValidatedDatasetCreation::try_from(&DatasetCreation {
                     name: "logs".to_owned(),
                     retention_period_minutes: retention_period_minutes.map(NonZeroU32::get),
                 })?,
-                NewDataset {
+                ValidatedDatasetCreation {
                     name: "logs".parse()?,
                     retention_period_minutes,
                 }
@@ -638,7 +655,7 @@ mod tests {
     }
 
     #[test]
-    fn new_dataset_rejects_an_invalid_name_and_a_zero_retention_period() {
+    fn validated_dataset_creation_rejects_an_invalid_name_and_a_zero_retention_period() {
         const INVALID_DATASET_NAME: &str = "bad-name";
 
         let parse_error = INVALID_DATASET_NAME
@@ -661,7 +678,7 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                NewDataset::try_from(&creation)
+                ValidatedDatasetCreation::try_from(&creation)
                     .expect_err("the creation should be rejected")
                     .to_string(),
                 expected_error

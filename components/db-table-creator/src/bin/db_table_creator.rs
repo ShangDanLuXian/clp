@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 
 use clap::Parser;
+use clp_metadata_db::MetadataTables;
 use clp_rust_utils::clp_config::package::{self};
 use clp_rust_utils::database::mysql::create_clp_db_mysql_pool;
 use clp_rust_utils::serde::yaml;
@@ -37,7 +38,12 @@ async fn main() -> anyhow::Result<()> {
         .await
         .inspect_err(|e| tracing::error!(error = % e, "Failed to create the database pool."))?;
 
-    db_table_creator::metadata::create_tables(&db_pool, &config.database)
+    let mut db_connection = db_pool.acquire().await.inspect_err(|e| {
+        tracing::error!(error = % e, "Failed to acquire a database connection.");
+    })?;
+
+    MetadataTables::new(&config.database)
+        .create_tables(&mut db_connection)
         .await
         .inspect_err(|e| {
             tracing::error!(error = % e, "Failed to create the metadata tables.");

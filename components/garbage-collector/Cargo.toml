@@ -14,6 +14,7 @@ path = "src/bin/archive_garbage_collector.rs"
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true }
+clp-metadata-db = { workspace = true }
 clp-rust-utils = { workspace = true }
 non-empty-string = { workspace = true }
 sqlx = { workspace = true }

@@ -8,6 +8,8 @@ CLP is currently split across a few different components in the [components] dir
 * [clp-py-utils] contains Python utilities common to several of the other Python components.
 * [clp-rust-libs] contains Rust library crates that other crates depend on and that have no
   deployable artifact of their own.
+  * [clp-metadata-db] contains Rust code to create the clp-s metadata tables that every dataset
+    shares in the CLP DB, and to read and write their rows.
   * [clp-rust-utils] contains Rust utilities common to several of the other Rust components.
 * [clp-tdl-package] contains implementations of CLP tasks running on Spider.
 * [compression-coordinator] contains code to coordinate CLP compression jobs running on Spider.
@@ -23,6 +25,7 @@ CLP is currently split across a few different components in the [components] dir
 [api-server]: https://github.com/y-scope/clp/tree/DOCS_VAR_CLP_GIT_REF/components/api-server
 [components]: https://github.com/y-scope/clp/tree/DOCS_VAR_CLP_GIT_REF/components
 [clp-mcp-server]: https://github.com/y-scope/clp/tree/DOCS_VAR_CLP_GIT_REF/components/clp-mcp-server
+[clp-metadata-db]: https://github.com/y-scope/clp/tree/DOCS_VAR_CLP_GIT_REF/components/clp-rust-libs/clp-metadata-db
 [clp-package-utils]: https://github.com/y-scope/clp/tree/DOCS_VAR_CLP_GIT_REF/components/clp-package-utils
 [clp-py-utils]: https://github.com/y-scope/clp/tree/DOCS_VAR_CLP_GIT_REF/components/clp-py-utils
 [clp-rust-libs]: https://github.com/y-scope/clp/tree/DOCS_VAR_CLP_GIT_REF/components/clp-rust-libs

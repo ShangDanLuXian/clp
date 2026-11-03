@@ -10,6 +10,9 @@ the root `Cargo.toml`.
 
 ## Crates
 
+* [clp-metadata-db]: Operations on the clp-s metadata tables that every dataset shares in the CLP
+  DB.
 * [clp-rust-utils]: Common utilities used by other Rust components in the CLP package.
 
+[clp-metadata-db]: clp-metadata-db/README.md
 [clp-rust-utils]: clp-rust-utils/README.md

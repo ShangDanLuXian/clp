@@ -7,6 +7,7 @@ use async_stream::stream;
 use chrono::DateTime;
 use chrono::TimeZone;
 use chrono::Utc;
+use clp_metadata_db::MetadataTables;
 use clp_rust_utils::aws::AWS_DEFAULT_REGION;
 use clp_rust_utils::clp_config::package::config::Config;
 use clp_rust_utils::clp_config::package::config::StreamOutputStorage;
@@ -280,6 +281,7 @@ pub struct Client {
     #[allow(clippy::struct_field_names)]
     mongodb_client: mongodb::Client,
     sql_pool: sqlx::Pool<sqlx::MySql>,
+    metadata_tables: MetadataTables,
     config: Config,
 }
 
@@ -292,7 +294,7 @@ impl Client {
     ///
     /// A newly created [`Client`].
     #[must_use]
-    pub const fn new(
+    pub fn new(
         config: Config,
         mongodb_client: mongodb::Client,
         sql_pool: sqlx::Pool<sqlx::MySql>,
@@ -300,6 +302,7 @@ impl Client {
         Self {
             mongodb_client,
             sql_pool,
+            metadata_tables: MetadataTables::new(&config.database),
             config,
         }
     }
