@@ -34,6 +34,7 @@ fn log_unexpected_error(operation: &str, error: &ClientError) {
         | ClientError::DatasetNotFound(_)
         | ClientError::QueryJobAlreadyTerminated(_)
         | ClientError::QueryResultsNotStored(_)
+        | ClientError::DatasetAlreadyExists(_)
         | ClientError::InvalidInput(_)
         | ClientError::LogEventNotFound { .. }
         | ClientError::LogsInput(

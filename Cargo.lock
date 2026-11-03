@@ -105,6 +105,7 @@ dependencies = [
  "axum",
  "chrono",
  "clap",
+ "clp-metadata-db",
  "clp-rust-utils",
  "futures",
  "http-body-util",
@@ -119,6 +120,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlx",
+ "tempfile",
  "thiserror",
  "tokio",
  "tower",
@@ -954,6 +956,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
+name = "clp-metadata-db"
+version = "0.13.1-dev"
+dependencies = [
+ "clp-rust-utils",
+ "sqlx",
+ "thiserror",
+]
+
+[[package]]
 name = "clp-rust-utils"
 version = "0.13.1-dev"
 dependencies = [
@@ -1347,6 +1358,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a4ae5f15dda3c708c0ade84bfee31ccab44a3da4f88015ed22f63732abe300c8"
 
 [[package]]
+name = "db-table-creator"
+version = "0.13.1-dev"
+dependencies = [
+ "anyhow",
+ "clap",
+ "clp-metadata-db",
+ "clp-rust-utils",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "delegate"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1725,6 +1748,21 @@ dependencies = [
  "memchr",
  "pin-project-lite",
  "slab",
+]
+
+[[package]]
+name = "garbage-collector"
+version = "0.13.1-dev"
+dependencies = [
+ "anyhow",
+ "clap",
+ "clp-metadata-db",
+ "clp-rust-utils",
+ "non-empty-string",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

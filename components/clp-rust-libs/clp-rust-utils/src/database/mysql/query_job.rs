@@ -103,3 +103,38 @@ pub async fn get_status(
         .fetch_optional(db_pool)
         .await?)
 }
+
+/// Looks up the creation time of the earliest created query job whose status is in `statuses`.
+///
+/// # Returns
+///
+/// The creation time in milliseconds since the UNIX epoch on success, or `None` if no query job's
+/// status is in `statuses`.
+///
+/// # Errors
+///
+/// Returns an error if:
+///
+/// * Forwards [`sqlx::query::QueryScalar::fetch_one`]'s return values on failure.
+pub async fn get_earliest_creation_time_millis(
+    db_pool: &sqlx::MySqlPool,
+    statuses: &[QueryJobStatus],
+) -> Result<Option<i64>, crate::Error> {
+    if statuses.is_empty() {
+        return Ok(None);
+    }
+
+    let mut query_builder = sqlx::QueryBuilder::<sqlx::MySql>::new(formatcp!(
+        "SELECT CAST(UNIX_TIMESTAMP(MIN(`creation_time`)) * 1000 AS SIGNED) FROM \
+         `{QUERY_JOBS_TABLE_NAME}` WHERE `status` IN ("
+    ));
+    let mut separated = query_builder.separated(", ");
+    for status in statuses {
+        separated.push_bind(*status);
+    }
+    separated.push_unseparated(")");
+    Ok(query_builder
+        .build_query_scalar()
+        .fetch_one(db_pool)
+        .await?)
+}

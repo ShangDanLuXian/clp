@@ -8,6 +8,8 @@ CLP is currently split across a few different components in the [components] dir
 * [clp-py-utils] contains Python utilities common to several of the other Python components.
 * [clp-rust-libs] contains Rust library crates that other crates depend on and that have no
   deployable artifact of their own.
+  * [clp-metadata-db] contains Rust code to create the clp-s metadata tables that every dataset
+    shares in the CLP DB, and to read and write their rows.
   * [clp-rust-utils] contains Rust utilities common to several of the other Rust components.
   * [query-result-listener] contains the listener that receives the results `clp-s` query tasks
     stream over TCP.
@@ -15,6 +17,8 @@ CLP is currently split across a few different components in the [components] dir
 * [compression-coordinator] contains code to coordinate CLP compression jobs running on Spider.
 * [core] contains code to compress uncompressed logs, decompress compressed logs, and search
   compressed logs.
+* [db-table-creator] contains code to create the CLP DB's tables.
+* [garbage-collector] contains the garbage collectors of the CLP package.
 * [job-orchestration] contains code to schedule compression and search jobs on the cluster.
 * [log-ingestor] contains code to serve requests for CLP ingestion job orchestration.
 * [package-template] contains the base directory structure and files of the CLP package.
@@ -23,6 +27,7 @@ CLP is currently split across a few different components in the [components] dir
 [api-server]: https://github.com/y-scope/clp/tree/DOCS_VAR_CLP_GIT_REF/components/api-server
 [components]: https://github.com/y-scope/clp/tree/DOCS_VAR_CLP_GIT_REF/components
 [clp-mcp-server]: https://github.com/y-scope/clp/tree/DOCS_VAR_CLP_GIT_REF/components/clp-mcp-server
+[clp-metadata-db]: https://github.com/y-scope/clp/tree/DOCS_VAR_CLP_GIT_REF/components/clp-rust-libs/clp-metadata-db
 [clp-package-utils]: https://github.com/y-scope/clp/tree/DOCS_VAR_CLP_GIT_REF/components/clp-package-utils
 [clp-py-utils]: https://github.com/y-scope/clp/tree/DOCS_VAR_CLP_GIT_REF/components/clp-py-utils
 [clp-rust-libs]: https://github.com/y-scope/clp/tree/DOCS_VAR_CLP_GIT_REF/components/clp-rust-libs
@@ -31,6 +36,8 @@ CLP is currently split across a few different components in the [components] dir
 [clp-tdl-package]: https://github.com/y-scope/clp/tree/DOCS_VAR_CLP_GIT_REF/components/clp-tdl-package
 [compression-coordinator]: https://github.com/y-scope/clp/tree/DOCS_VAR_CLP_GIT_REF/components/compression-coordinator
 [core]: https://github.com/y-scope/clp/tree/DOCS_VAR_CLP_GIT_REF/components/core
+[db-table-creator]: https://github.com/y-scope/clp/tree/DOCS_VAR_CLP_GIT_REF/components/db-table-creator
+[garbage-collector]: https://github.com/y-scope/clp/tree/DOCS_VAR_CLP_GIT_REF/components/garbage-collector
 [job-orchestration]: https://github.com/y-scope/clp/tree/DOCS_VAR_CLP_GIT_REF/components/job-orchestration
 [log-ingestor]: https://github.com/y-scope/clp/tree/DOCS_VAR_CLP_GIT_REF/components/log-ingestor
 [package-template]: https://github.com/y-scope/clp/tree/DOCS_VAR_CLP_GIT_REF/components/package-template

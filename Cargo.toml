@@ -1,10 +1,13 @@
 [workspace]
 members = [
     "components/api-server",
+    "components/clp-rust-libs/clp-metadata-db",
     "components/clp-rust-libs/clp-rust-utils",
     "components/clp-rust-libs/query-result-listener",
     "components/clp-tdl-package",
     "components/compression-coordinator",
+    "components/db-table-creator",
+    "components/garbage-collector",
     "components/log-ingestor",
     "components/query-coordinator",
 ]
@@ -25,6 +28,7 @@ axum = { version = "0.8.9", features = ["json"] }
 bytes = "1.11.1"
 chrono = { version = "0.4.45", features = ["serde"] }
 clap = { version = "4.6.6", features = ["derive"] }
+clp-metadata-db = { path = "components/clp-rust-libs/clp-metadata-db" }
 clp-rust-utils = { path = "components/clp-rust-libs/clp-rust-utils" }
 const_format = "0.2.36"
 futures = "0.3.33"

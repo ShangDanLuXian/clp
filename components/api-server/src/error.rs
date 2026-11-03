@@ -6,6 +6,7 @@ use aws_sdk_s3::primitives::ByteStreamError;
 use clp_rust_utils::dataset::DatasetName;
 use clp_rust_utils::job_config::QueryJobStatus;
 use clp_rust_utils::logs_input::LogsInputError;
+use clp_rust_utils::s3::DeleteError;
 use clp_rust_utils::types::ArchiveId;
 use num_enum::TryFromPrimitive;
 use thiserror::Error;
@@ -63,6 +64,9 @@ pub enum ClientError {
     #[error("Dataset not found: {0}")]
     DatasetNotFound(DatasetName),
 
+    #[error("dataset already exists: {0}")]
+    DatasetAlreadyExists(DatasetName),
+
     #[error(transparent)]
     LogsInput(#[from] LogsInputError),
 
@@ -106,6 +110,14 @@ impl From<ByteStreamError> for ClientError {
     }
 }
 
+impl From<DeleteError> for ClientError {
+    fn from(value: DeleteError) -> Self {
+        Self::Aws {
+            description: value.to_string(),
+        }
+    }
+}
+
 impl From<clp_rust_utils::Error> for ClientError {
     fn from(value: clp_rust_utils::Error) -> Self {
         match value {
@@ -120,5 +132,35 @@ impl From<clp_rust_utils::Error> for ClientError {
             clp_rust_utils::Error::Sqlx(error) => error.into(),
             clp_rust_utils::Error::TelemetryExporterBuildError(error) => Self::Telemetry(error),
         }
+    }
+}
+
+impl From<clp_metadata_db::Error> for ClientError {
+    fn from(value: clp_metadata_db::Error) -> Self {
+        match value {
+            clp_metadata_db::Error::DatasetAlreadyExists(name) => Self::DatasetAlreadyExists(name),
+            clp_metadata_db::Error::Sqlx(error) => Self::Sql(error),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clp_rust_utils::dataset::DatasetName;
+
+    use super::ClientError;
+
+    #[test]
+    fn metadata_db_errors_convert_to_the_matching_client_errors() -> anyhow::Result<()> {
+        let name: DatasetName = "logs".parse()?;
+        assert!(matches!(
+            ClientError::from(clp_metadata_db::Error::DatasetAlreadyExists(name.clone())),
+            ClientError::DatasetAlreadyExists(converted_name) if converted_name == name
+        ));
+        assert!(matches!(
+            ClientError::from(clp_metadata_db::Error::Sqlx(sqlx::Error::RowNotFound)),
+            ClientError::Sql(sqlx::Error::RowNotFound)
+        ));
+        Ok(())
     }
 }

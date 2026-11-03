@@ -1,7 +1,11 @@
 mod client;
+mod delete;
 mod url;
 
 pub use client::create_new_client;
+pub use delete::DeleteError;
+pub use delete::delete_by_key_prefix;
+pub use delete::delete_by_keys;
 use non_empty_string::NonEmptyString;
 pub use url::generate_s3_url;
 
