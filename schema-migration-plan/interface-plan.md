@@ -33,6 +33,10 @@ files table, which clp-s doesn't populate).
 
 ## DB table changes
 
+The Before/After tables compare the current per-dataset schema with this plan. The "Diff from
+previous doc" notes compare this plan with
+[Metadata database design and schema](https://app.notion.com/p/yscope/Metadata-database-design-and-schema-3c804e4d9e6b809ebe63cb3926c0e0ff).
+
 ### `clp_datasets` (changed)
 
 | Before | After | Notes |
@@ -46,6 +50,17 @@ files table, which clp-s doesn't populate).
 
 Datasets are no longer registered implicitly by compression; they must be created through the API
 first.
+
+**Diff from previous doc**
+
+* Replace `is_deleted BOOLEAN` with `deletion_timestamp_millisecs BIGINT NOT NULL DEFAULT 0`;
+  record deletion time using the DB clock.
+* Replace the unique key on `name` with `(name, deletion_timestamp_millisecs)`, allowing a deleted
+  dataset's name to be reused while keeping its row.
+* Specify `utf8mb4_bin` collation for string columns; the previous doc specifies only `utf8mb4`.
+* Keep `id`, `archive_storage_path`, and `retention_period_minutes`, which already exist in the
+  previous doc. This plan derives archive locations from package config and leaves the stored
+  path's role as open question 2 below.
 
 ### `clp_<dataset>_archives` → `clp_archives` (one table for every dataset)
 
@@ -68,6 +83,20 @@ Keys: primary key `(dataset_id, begin_timestamp_millisecs, id)`; indexes on `id`
 `ROW_FORMAT=COMPRESSED KEY_BLOCK_SIZE=8`. Range-partitioned by `begin_timestamp_millisecs`, with a
 single `p_future` partition until partition maintenance exists.
 
+**Diff from previous doc**
+
+* Remove `is_deleted`. Archive deletion removes metadata rows, commits, then deletes storage.
+* Add `compression_job_id INT` to identify the job that produced each archive.
+* Rename `timestamp_range_begin_millis`, `timestamp_range_end_millis`, and `creation_time_millis`
+  to `begin_timestamp_millisecs`, `end_timestamp_millisecs`, and `creation_timestamp_millisecs`.
+  The primary key and indexes use the renamed columns with the same structure.
+* Set creation time from the DB clock at commit. The previous doc describes archive seal time from
+  "our own clock" without requiring the DB clock.
+* Create only `p_future` initially. The previous doc describes `p_floor`, time-window partitions,
+  and their maintenance; those steps and the associated query pruning are deferred here.
+* Keep `uuid BINARY(16)` and nullable `pack_id`. The previous doc requires UUIDv7; this plan uses
+  the existing `ArchiveId` without specifying its UUID version.
+
 ### `clp_<dataset>_column_metadata` → `clp_column_metadata`
 
 | Before | After | Notes |
@@ -77,9 +106,24 @@ single `p_future` partition until partition maintenance exists.
 | `type TINYINT` | `type TINYINT` | `clp_s::NodeType` |
 | Primary key `(name, type)` | Primary key `(dataset_id, name, type)` | |
 
+**Diff from previous doc**
+
+* Specify `utf8mb4_bin` collation for `name`; the previous doc specifies only `utf8mb4`.
+* Keep the previous doc's columns, types, 512-character name limit, and primary key
+  `(dataset_id, name, type)`. Replacing the union-of-columns model is outside this step.
+* Define a Rust read interface while retaining the C++ indexer as the writer until the Rust clp-s
+  rewrite; the previous doc does not specify this implementation split.
+
 ### `clp_<dataset>_files` (no longer created for clp-s)
 
 clp-s never wrote rows to it. A shared files table is future work.
+
+**Diff from previous doc**
+
+* Defer both shared files/file-splits alternatives described in the previous doc. This migration
+  creates neither and stops creating the unused per-dataset files table for clp-s.
+* File-to-archive mappings, the WebUI ingestion-details file/message counts, and stream extraction
+  are outside this plan's scope.
 
 ### New: `clp_long_span_archives`
 
@@ -96,6 +140,18 @@ maintenance exists.
 
 Keys: primary key `(dataset_id, end_timestamp_millisecs, archive_id)`; index on
 `(dataset_id, begin_timestamp_millisecs)`.
+
+**Diff from previous doc**
+
+* This table already exists in the previous doc; "New" refers to its addition to the current
+  per-dataset schema.
+* Rename `timestamp_range_begin_millis` and `timestamp_range_end_millis` to
+  `begin_timestamp_millisecs` and `end_timestamp_millisecs`. Keep the columns, primary-key/index
+  structure, and unpartitioned layout otherwise unchanged.
+* Fix the long-span threshold at 24 hours; the previous doc leaves it as `MAX_SPAN`.
+* Write the additional references now, but defer reading them until partition maintenance exists.
+  The previous doc describes scanning this table on every time-ranged query. Until then, queries
+  read overlapping archives from `clp_archives` without the `MAX_SPAN` lower-bound prune.
 
 ## The library
 
