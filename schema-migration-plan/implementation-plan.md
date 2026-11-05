@@ -10,6 +10,8 @@ Companion to `interface-plan.md`, which defines the `clp-metadata-db` interface.
 * Interface first: the whole `clp-metadata-db` surface is defined (with `todo!()` bodies) and
   reviewed before any SQL is written, so later steps fill in bodies without reshaping callers.
 * clp-text (`clp` storage engine) stays untouched throughout.
+* Generate UUIDv7 IDs for new clp-s archives independently of the shared-table rollout. Existing
+  UUIDv4 IDs remain supported; changing UUID generation does not change database storage encoding.
 
 ## Phase 1: Define the interface
 

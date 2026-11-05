@@ -83,6 +83,14 @@ Keys: primary key `(dataset_id, begin_timestamp_millisecs, id)`; indexes on `id`
 `ROW_FORMAT=COMPRESSED KEY_BLOCK_SIZE=8`. Range-partitioned by `begin_timestamp_millisecs`, with a
 single `p_future` partition until partition maintenance exists.
 
+New archive UUIDs are generated as UUIDv7 during clp-s ingestion, including after archive splits.
+Existing UUIDv4 archives retain their IDs; `ArchiveId` continues accepting both versions. UUID
+generation changes independently of this schema migration. Both versions occupy 16 bytes in
+`uuid BINARY(16)`.
+
+The UUIDv7 timestamp comes from the ingestion host's clock and does not define archive retention.
+`creation_timestamp_millisecs` still comes from the DB clock at commit and drives retention.
+
 **Diff from previous doc**
 
 * Remove `is_deleted`. Archive deletion removes metadata rows, commits, then deletes storage.
@@ -94,8 +102,8 @@ single `p_future` partition until partition maintenance exists.
   "our own clock" without requiring the DB clock.
 * Create only `p_future` initially. The previous doc describes `p_floor`, time-window partitions,
   and their maintenance; those steps and the associated query pruning are deferred here.
-* Keep `uuid BINARY(16)` and nullable `pack_id`. The previous doc requires UUIDv7; this plan uses
-  the existing `ArchiveId` without specifying its UUID version.
+* Keep `uuid BINARY(16)`, UUIDv7 for new archives, and nullable `pack_id`, matching the previous
+  doc. `ArchiveId` continues accepting existing UUIDv4 IDs.
 
 ### `clp_<dataset>_column_metadata` → `clp_column_metadata`
 
