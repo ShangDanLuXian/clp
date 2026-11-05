@@ -2,7 +2,7 @@
 
 ## Work breakdown
 
-The work lands as eighteen pull requests against `main`. Each one:
+The work lands as seventeen pull requests against `main`. Each one:
 
 * has a single purpose and makes sense on its own;
 * builds, passes the repository's checks, and leaves `main` working, apart from the breaking
@@ -11,7 +11,9 @@ The work lands as eighteen pull requests against `main`. Each one:
 * updates the docs for anything user-facing it adds.
 
 PRs are numbered in the order they merge, and each depends only on lower-numbered PRs. Sizes are
-rough estimates including tests, and exclude generated files.
+rough estimates including tests, and exclude generated files. PRs 11 and 12, a CLI that hosted its
+own listener, were dropped when the CLI became a client of the API server (PR 16); the other
+numbers are kept.
 
 ### `clp-s`
 
@@ -131,8 +133,8 @@ Depends on: nothing. Size: about 150 lines.
 
 Depends on: PR 2. Size: about 150 lines.
 
-* One check, used by both the CLI and the API server, that a query job config with a network
-  output can be submitted: the query isn't empty, the time range isn't reversed,
+* One check, used by the API server, that a query job config with a network output can be
+  submitted: the query isn't empty, the time range isn't reversed,
   `max_num_results` isn't set, and the job has no aggregation.
 * Unit tests for each rule.
 
@@ -166,31 +168,38 @@ Depends on: PR 5. Size: about 150 lines.
   relies on `clp-s` producing a task's results in the same order on every attempt.
 * A result ahead of the cursor panics: PR 7 rejects a connection whose indices aren't consecutive
   from 0 before it claims them, so only a bug in the listener can get there.
+* The archive ID is a cheap check of the task-index mapping that deduplication relies on: PR 7
+  rejects a later attempt whose handshake names a different archive from the task's first one.
 * Unit tests: dropping duplicates without moving the cursor, concurrent claimers claiming each
   index once, and the panic.
 
 #### PR 6a. ``feat(query-result-listener): Add `ResultEncoding` to batch results in the caller's transport format.``
 
-Depends on: PR 5. Size: about 140 lines.
+Depends on: PR 5. Size: about 150 lines.
 
 * `ResultEncoding` and `ResultEncoder`, the pluggable output format: each connection encodes the
-  results it delivers into the client's final format, and hands them on in batches.
-  `QueryResultEncoding` yields plain results. The traits are public, since the API server
-  implements the second encoding (PR 13).
-* Unit tests: encoding batches.
+  results it delivers into the client's final format, and hands them on in batches, so the
+  encoding work is spread across connections. `encode` takes each message as `&str`. The traits
+  are public, since the API server implements the only production encoding (PR 13).
+* `QueryResultEncoding`, which yields plain results, is test-only and lives in the crate's
+  `#[cfg(test)]` test utilities: the API server is the only production consumer, so the listener's
+  tests are its only users.
+* Unit test of the test-only encoding: the archive ID, the order, and the reset after
+  `take_batch`.
 * Split out of PR 6: neither uses the other, and the two raise different review questions, so they
   are reviewed in parallel. PR 7 needs both.
 
 #### PR 7. `feat(query-result-listener): Add the connection handler.`
 
-Depends on: PR 6 and PR 6a. Size: about 750 lines, about 400 of them tests.
+Depends on: PR 6 and PR 6a. Size: about 1,300 lines, about 870 of them tests.
 
-* The per-connection logic: read the handshake, check the archive ID against the task's cursor,
-  check that each result's index is the next one in the connection's order from 0 (PR 6's cursor
-  relies on it), claim and encode the results of each socket read (up to 64 KiB), and send them as
-  one batch into the session's queue, a bounded `tokio::sync::mpsc` channel. Then check the
-  trailer, and acknowledge only after the last batch is in the queue. A full queue blocks the
-  handler, which stops reading, so TCP slows `clp-s` down.
+* The per-connection logic, starting from a handshake that PR 8 reads and routes: get or create the
+  task's cursor, check the handshake's archive ID against it, check that each result's index is the
+  next one in the connection's order from 0 (PR 6's cursor relies on it), claim and encode the
+  results of each socket read (up to 64 KiB), and send them as one batch into the session's queue, a
+  bounded `tokio::sync::mpsc` channel. Then check the trailer, and acknowledge only after the last
+  batch is in the queue. A full queue blocks the handler, which stops reading, so TCP slows `clp-s`
+  down.
 * A claimed result is always sent on: every exit from the handler first hands on the batch it
   has claimed.
 * If the queue's receiver is gone because the client left, keep reading, claim and drop the
@@ -252,49 +261,6 @@ Depends on: PR 1 and PR 2. Size: about 350 lines, about 200 of them tests.
 * Unit tests: the output selection, the failure, and the command line for archives on the
   filesystem and on S3.
 
-### CLI
-
-#### PR 11. `feat(clp-package-cli): Add the crate with loading the package config and credentials.`
-
-Depends on: nothing. Size: about 350 lines, about 150 of them tests.
-
-* A new crate, `components/clp-package-cli`, for the Rust command-line tools shipped in the
-  package. It is separate from the listener crate so the API server doesn't depend on a
-  command-line crate. Workspace member, CI path filter.
-* Loading the user's package config (`etc/clp-config.yaml` by default): only the fields the tools
-  need (the database, and whether the config has a `query_coordinator` section), with the same
-  defaults as the rest of the package, so a config that leaves most settings commented out loads
-  correctly.
-* Loading the database credentials file (`etc/credentials.yaml` by default): its
-  `database.username` and `database.password`.
-* Resolving a path the user gives on the command line (`~`, or relative to the directory the
-  command was run from) to where it is inside the package's runtime container.
-* Unit tests: a sparse config and the defaults, the credentials file, and path resolution.
-
-#### PR 12. `feat(clp-package): Add sbin/streaming-search.sh, backed by the clp-streaming-search tool.`
-
-Depends on: PR 3, PR 4, PR 9, PR 10 and PR 11. Size: about 500 lines, about 150 of them tests.
-
-* `clp-streaming-search` takes the arguments of `sbin/search.sh` except `--count`,
-  `--count-by-time` and `--file-path`: the query, `--config`, `--dataset`, `--begin-time`,
-  `--end-time`, `--ignore-case`, `--raw` and `--verbose`. It also takes `--advertised-host`, to
-  override the address the query tasks connect to.
-* It loads the config and credentials (PR 11), refuses to run unless the config has a
-  `query_coordinator` section, builds the job config and checks it (PR 4), binds its own listener
-  on a port the OS picks, opens a session, submits the job with the session's network output, and
-  runs the session.
-* It prints each result as it arrives: `--raw` prints only the message; otherwise the archive ID
-  and timestamp come first. Output is written asynchronously, so a slow reader never delays
-  handling a signal. It exits with 0 only if the job succeeded, and logs the final status
-  otherwise.
-* Ctrl-C, `SIGTERM` or a closed output (for example `| head`) requests the job's cancellation and
-  ends the command.
-* `sbin/streaming-search.sh` runs `clp-streaming-search` in the package's runtime container,
-  which uses the host's network. So the database address in the config works as written, and the
-  query tasks connect back to the machine running the command.
-* Ship the binary in the package image; document the command.
-* Unit tests: argument parsing, output formatting, and the exit code for each final status.
-
 ### API server
 
 #### PR 13. `feat(api-server): Add a Server-Sent Events encoding for streamed results.`
@@ -343,6 +309,27 @@ Depends on: PR 10 and PR 14. Size: about 700 lines, about 350 of them tests.
   events in the API server guide.
 * Unit tests through the router: 501 without the listener, rejected requests, the order of the
   events, the response body byte for byte, and cancellation when the client closes the connection.
+
+### CLI
+
+The CLI doesn't host a listener (see [issues](issues.md), issue 7): workers must reach the
+listener, which a command run on a laptop, behind NAT or on Kubernetes can't guarantee. The API
+server is the listener's only host, and the CLI is a client of its `POST /query/stream`.
+
+#### PR 16. `feat(clp-package): Add sbin/streaming-search.sh, a client of the API server's streaming search.`
+
+Depends on: PR 15.
+
+* `sbin/streaming-search.sh` takes the arguments of `sbin/search.sh` except `--count`,
+  `--count-by-time` and `--file-path`, sends the query to the API server's `POST /query/stream`,
+  and prints each result event as it arrives: `--raw` prints only the message; otherwise the
+  archive ID and timestamp come first.
+* It exits with 0 only if the `end` event reports that the job succeeded, and with an error after
+  an `error` event or a dropped connection.
+* Ctrl-C or a closed output (for example `| head`) closes the stream, so the API server cancels
+  the job (PR 14).
+* It needs no database credentials, no listener and no advertised host.
+* Document the command.
 
 ## Future work
 
