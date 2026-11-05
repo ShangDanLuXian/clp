@@ -10,30 +10,17 @@ Companion to `interface-plan.md`, which defines the `clp-metadata-db` interface.
 * Interface first: the whole `clp-metadata-db` surface is defined (with `todo!()` bodies) and
   reviewed before any SQL is written, so later steps fill in bodies without reshaping callers.
 * clp-text (`clp` storage engine) stays untouched throughout.
-* PR 13 (`schema-migration-db-table-creator`, `9cec99c3`) and the prototype
-  (`schema-migration-prototype`, `181913bc`) are references only; nothing is cherry-picked.
 
-## Current state
+## Phase 1: Define the interface
 
-| Item | State |
-|---|---|
-| `main` | `d502ec3c` |
-| Interface branch `codex/schema-migration-sqlx-interfaces` | `1f6cb1df`, based on `97c6ad9d` (behind `main`). Defines the pre-switch subset of the interface; every body is `todo!()` |
-| PR 13 | Reference implementation of the pre-switch pieces (library, table creator, API routes, GC) |
-| Switch | Not started |
-
-## Phase 1: Finish the interface
-
-1. Merge `main` into the interface branch (no force push).
-2. Settle the open questions in the interface plan with Lin.
-3. Extend the interface to the full surface in the interface plan:
+1. Settle the open questions in the interface plan with Lin.
+2. Define the full surface in the interface plan, with `todo!()` bodies:
    * Types: `DatasetId` / `ArchiveRowId` newtypes, `TimestampRange`, `QueryArchiveFilter`,
      `ColumnType`, `NewArchive`, `QueryArchive`, `TimestampBounds`, `SpaceSavings`.
-   * New operations: `get_dataset_ids_by_names`, `insert_archives`, `find_archives_for_query`,
-     `get_column_names_by_types`, and the `statistics` module.
-   * `get_earliest_creation_time_millis` takes a connection instead of a pool.
-   * `MetadataTables` gets its four table-name fields.
-4. Interface review with Lin. Bodies stay `todo!()`; nothing calls the crate yet.
+   * Operations: every operation listed in the interface plan.
+   * `get_earliest_creation_time_millis` takes a connection.
+   * `MetadataTables` holds its four table names.
+3. Interface review with Lin. Nothing calls the crate yet.
 
 Exit: the crate compiles, the workspace's checks pass, and Lin has approved the signatures.
 
@@ -87,8 +74,8 @@ Package config additions needed by 3.7/3.8 (`garbage_collector.sweep_interval.ar
    `insert_archives` with the job's `compression_job_id`, in the same transaction as the job's status
    update.
 4. C++ indexer (kept until the Rust clp-s rewrite): port the column-metadata write to the shared
-   table, resolving the dataset ID with `deleted_at_millis = 0` (from `49c3f827`, as reviewed in
-   `44642981`); drop `--create-table`. Reviewed against the C++ `pr-review.md`.
+   table, resolving the dataset ID with `deleted_at_millis = 0`; drop `--create-table`. Reviewed
+   against the C++ `pr-review.md`.
 5. Query coordinator: `get_dataset_ids_by_names` + `find_archives_for_query`; drop the global
    `archive_retention_period_millisecs`.
 6. api-server WebUI metadata routes: the clp-s branches call `get_dataset_names`, `statistics::*`
@@ -136,11 +123,8 @@ Package config additions needed by 3.7/3.8 (`garbage_collector.sweep_interval.ar
 
 1. Database tests: CI has no MySQL service today, so SQL is validated manually against MariaDB.
    Add a MySQL/MariaDB service to the Rust CI and `sqlx`-backed tests, or keep manual validation?
-2. Commit author: `1f6cb1df` uses `xuhui.chen@yscope.com`, while the schema-migration rule says
-   `90581933+ShangDanLuXian@users.noreply.github.com`. Which one applies from here on?
-3. Branch/PR shape: keep stacking on one branch without PRs, or open one PR per phase (or per step)
-   now that the interface is reviewed with Lin?
-4. ~~Stream-file extraction~~ Decided: out of scope; accepted as broken. The WebUI log viewer's
+2. Delivery: one PR per phase, or one PR per step?
+3. ~~Stream-file extraction~~ Decided: out of scope; accepted as broken. The WebUI log viewer's
    `POST /stream_files/extract` submits an `ExtractJson` query job that only the Python query
    scheduler handles, and the Spider deployment (`tools/deployment/package/docker-compose-spider.yaml`)
    doesn't run that scheduler, so extraction is already broken independently of this migration. It

@@ -11,8 +11,7 @@ transactions.
 
 This plan covers the full interface needed by the end state, i.e., both the operations the pre-switch
 components use (API management routes, archive GC) and the operations the switch moves onto the
-shared tables (compression, commit, query planning, WebUI metadata). The current interface branch
-(`codex/schema-migration-sqlx-interfaces`, `1f6cb1df`) covers only the first group.
+shared tables (compression, commit, query planning, WebUI metadata).
 
 One exception: the C++ indexer keeps writing column metadata itself until clp-s is rewritten in
 Rust (see "The indexer").
@@ -216,7 +215,7 @@ archive. It's the only C++ code that writes to the database: it opens the archiv
 tree, and `INSERT IGNORE`s `(path, NodeType)` into the dataset's column-metadata table.
 
 Decision (Devin): keep the C++ indexer until clp-s is rewritten in Rust. At the switch, its SQL is
-ported to the shared table (as in `49c3f827`, reviewed in the prototype as `44642981`):
+ported to the shared table:
 
 ```sql
 INSERT IGNORE INTO clp_column_metadata (name, type, dataset_id)
