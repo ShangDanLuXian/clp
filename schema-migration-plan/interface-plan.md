@@ -45,22 +45,24 @@ previous doc" notes compare this plan with
 | `name VARCHAR(255)` (primary key) | `name VARCHAR(255)` | No longer the key; case-sensitive |
 | `archive_storage_directory VARCHAR(4096)` | `archive_storage_path VARCHAR(4096)` | Written at creation; never read (open question 2) |
 | — | `retention_period_minutes INT UNSIGNED NULL` | Per-dataset retention; `NULL` keeps archives forever. Replaces the package-wide `archive_output.retention_period` |
-| — | `deletion_timestamp_millisecs BIGINT NOT NULL DEFAULT 0` | `0` = live; otherwise the soft-deletion time |
-| Unique: `name` | Unique: `(name, deletion_timestamp_millisecs)` | A deleted dataset's name can be reused |
+| — | Proposed: `deletion_timestamp_millisecs BIGINT NOT NULL DEFAULT 0` | `0` = live; otherwise the soft-deletion time |
+| Unique: `name` | Proposed: `(name, deletion_timestamp_millisecs)` | Name reuse requires safe storage isolation and retry handling; the key alone is insufficient |
 
 Datasets are no longer registered implicitly by compression; they must be created through the API
-first.
+first. The deletion timestamp, unique key, and deleted-row retention policy are proposals pending
+the deletion lifecycle review below.
 
 **Diff from previous doc**
 
-* Replace `is_deleted BOOLEAN` with `deletion_timestamp_millisecs BIGINT NOT NULL DEFAULT 0`;
-  record deletion time using the DB clock.
-* Replace the unique key on `name` with `(name, deletion_timestamp_millisecs)`, allowing a deleted
-  dataset's name to be reused while keeping its row.
+* Propose replacing `is_deleted BOOLEAN` with `deletion_timestamp_millisecs BIGINT NOT NULL DEFAULT 0`,
+  recording deletion time using the DB clock. The deletion representation remains under review.
+* Propose replacing the unique key on `name` with `(name, deletion_timestamp_millisecs)`. This permits
+  name reuse in the DB, but does not make storage reuse safe. The key and deleted-row retention
+  policy remain under review.
 * Specify `utf8mb4_bin` collation for string columns; the previous doc specifies only `utf8mb4`.
 * Keep `id`, `archive_storage_path`, and `retention_period_minutes`, which already exist in the
-  previous doc. This plan derives archive locations from package config and leaves the stored
-  path's role as open question 2 below.
+  previous doc. The current proposal derives archive locations from package config; the location
+  source and safe deletion targets must be settled in open question 2 below.
 
 ### `clp_<dataset>_archives` → `clp_archives` (one table for every dataset)
 
@@ -77,6 +79,7 @@ first.
 | — | `creation_timestamp_millisecs BIGINT` | DB clock at commit; drives per-dataset retention |
 | — | `compression_job_id INT` | The job that produced the archive |
 | — | `pack_id BIGINT UNSIGNED NULL` | Reserved for archive packing |
+| — | `is_deleted BOOLEAN NOT NULL DEFAULT FALSE` (review baseline) | Preserve the previous doc's logical-deletion state until a durable alternative is approved |
 
 Keys: primary key `(dataset_id, begin_timestamp_millisecs, id)`; indexes on `id`,
 `(dataset_id, uuid)` and `(dataset_id, creation_timestamp_millisecs)` (for the GC).
@@ -93,7 +96,9 @@ The UUIDv7 timestamp comes from the ingestion host's clock and does not define a
 
 **Diff from previous doc**
 
-* Remove `is_deleted`. Archive deletion removes metadata rows, commits, then deletes storage.
+* Keep the previous doc's `is_deleted` as the review baseline. Its proposed removal is withdrawn
+  pending approval of an equivalent durable deletion mechanism. A flag alone does not define
+  cleanup ownership, concurrent-job protection, or recovery.
 * Add `compression_job_id INT` to identify the job that produced each archive.
 * Rename `timestamp_range_begin_millis`, `timestamp_range_end_millis`, and `creation_time_millis`
   to `begin_timestamp_millisecs`, `end_timestamp_millisecs`, and `creation_timestamp_millisecs`.
@@ -161,9 +166,52 @@ Keys: primary key `(dataset_id, end_timestamp_millisecs, archive_id)`; index on
   The previous doc describes scanning this table on every time-ranged query. Until then, queries
   read overlapping archives from `clp_archives` without the `MAX_SPAN` lower-bound prune.
 
+## Deletion lifecycle (review required)
+
+The previous doc provides logical-deletion flags, but does not specify a complete concurrency or
+recovery protocol. The earlier storage-first dataset deletion and metadata-first archive deletion
+sequences were inherited from existing implementations; neither is an approved protocol for this
+migration. Extracting SQLx interfaces does not require preserving those sequences.
+
+Deletion-related DDL and interfaces below are provisional. Review must settle the following
+requirements before those interfaces are frozen or their SQL is implemented:
+
+1. **Durable intent.** Commit logical deletion and durable cleanup targets atomically in the DB,
+   using tombstones or deletion-job records whose representation is still to be decided. Retain
+   enough state to discover and retry unfinished storage cleanup after a process restart.
+2. **Concurrent work.** Prevent new queries and ingestion from selecting logically deleted data.
+   Define whether existing queries finish or are cancelled, and how compression, indexing, storage
+   publication, and metadata commits are drained or fenced. A live-dataset check at job submission
+   alone cannot prevent a later write after deletion begins. Jobs must remain bound to the original
+   dataset ID or generation rather than resolve a reused name at commit time. Storage cleanup must
+   wait for the chosen coordination condition, including queries that already hold archive IDs.
+3. **Stable cleanup targets.** Persist the immutable dataset/archive identity and exact original
+   storage location needed by each retry. Do not derive retry targets from a reused dataset name
+   or the current package config. Dataset-prefix deletion must not overlap a new dataset's files.
+4. **Safe retries.** Cleanup must be idempotent and recover from partial storage failures, repeated
+   requests, and crashes. A recovery-file entry or candidate persisted before a DB transaction
+   commits must not authorize physical deletion if that transaction rolls back. Define recovery
+   ownership and replay semantics for both manual API deletion and retention GC; the GC's local
+   recovery file alone does not establish those guarantees.
+5. **Name reuse.** Permit recreation only after cleanup is durably complete and stale cleanup or
+   writer tasks cannot affect the reused location, or after storage and in-flight work are safely
+   isolated by immutable identity. The proposed timestamp-based unique key is not a concurrency
+   fence, and must also handle deletion-timestamp collisions.
+6. **Final reclamation.** Hard-delete archive and dependent metadata only after physical cleanup
+   and the concurrency requirements are satisfied. Decide when dataset rows and deletion records
+   can be reclaimed without losing retry ownership or allowing stale work to affect new data.
+
+The review must choose the deletion state and transaction boundaries, the storage-location source,
+the handling of in-flight jobs, and the dataset-row retention/ID-lifetime policy. This plan does not
+choose between a timestamp, a boolean tombstone, and a separate deletion-job record. Crash-safe
+deletion recovery is required before the runtime switch, rather than deferred follow-up work.
+
 ## The library
 
 ### Layout
+
+The layout and `MetadataTables` below show the four shared metadata tables. Any additional cleanup
+record types, table names, or modules depend on deletion review.
 
 ```text
 clp-metadata-db/src/
@@ -220,14 +268,19 @@ pub enum Error {
 
 * Every archive and column-metadata statement is scoped by `dataset_id`, unless it's explicitly
   cross-dataset.
-* Reads of live datasets require `deletion_timestamp_millisecs = 0`.
+* Normal dataset reads exclude logically deleted datasets; the proposed timestamp representation
+  uses `deletion_timestamp_millisecs = 0`. Archive selection and archive aggregates also exclude
+  logically deleted archives. Cleanup queries explicitly opt into pending-deletion state.
 * `IN` lists and multi-row inserts are batched at 1000.
-* Archive deletion removes `clp_long_span_archives` rows before `clp_archives` rows.
+* During final metadata reclamation, remove `clp_long_span_archives` rows before `clp_archives` rows.
+  This ordering does not replace the deletion lifecycle requirements above.
 
 ## New interfaces, by the Python code they replace
 
 "Tx: yes" marks operations the caller is expected to wrap in a transaction with other operations.
-Each operation's signature is given where it first appears.
+Each operation's signature is given where it first appears. Deletion signatures and their mappings
+are provisional: they show candidate DB primitives, not a complete deletion-request API. The review
+must define how callers persist intent, claim cleanup work, retry it, and record completion.
 
 ### `clp_py_utils/clp_metadata_db_utils.py`, `clp_py_utils/initialize-clp-metadata-db.py`
 
@@ -236,13 +289,13 @@ Each operation's signature is given where it first appears.
 | `create_datasets_table`, `create_metadata_db_tables` | Created the datasets table and each dataset's archives/files/column-metadata tables | `create_tables` | `db-table-creator` |
 | `add_dataset` | Inserted a dataset and created its tables, implicitly on first compression | `create_dataset` | API `POST /datasets` |
 | `fetch_existing_datasets` | Listed dataset names | `get_dataset_names` | API, WebUI routes |
-| `delete_archives_from_metadata_db` | Deleted archives (and their files rows) by ID | `delete_archives` | API, archive GC |
-| `delete_dataset_from_metadata_db` | Dropped the dataset's tables and its datasets row | `mark_dataset_deleted`, then `delete_dataset_metadata` in the archive GC | API, archive GC |
+| `delete_archives_from_metadata_db` | Deleted archives (and their files rows) by ID | Deletion-request interface pending review; `delete_archives` is final reclamation only | API, archive GC |
+| `delete_dataset_from_metadata_db` | Dropped the dataset's tables and its datasets row | Deletion-request interface pending review; `mark_dataset_deleted` and `delete_dataset_metadata` are candidate primitives | API, archive GC |
 | `get_*_table_name` | Built per-dataset table names | `MetadataTables::new` | All |
 
 ```rust
 impl MetadataTables {
-    /// Creates the four tables if they don't exist. Not a migration: an existing table with another
+    /// Creates the shared tables if they don't exist. Not a migration: an existing table with another
     /// shape is left as is.
     pub async fn create_tables(&self, conn: &mut MySqlConnection) -> Result<(), Error>;
 
@@ -257,7 +310,8 @@ impl MetadataTables {
     pub async fn get_dataset_names(&self, conn: &mut MySqlConnection)
         -> Result<Vec<DatasetName>, Error>;
 
-    /// Returns whether a live dataset was marked (with the DB clock's current time).
+    /// Provisional logical-deletion primitive; returns whether a live dataset was marked using DB
+    /// time. Must participate in the reviewed intent transaction; not a complete deletion request.
     pub async fn mark_dataset_deleted(&self, conn: &mut MySqlConnection, id: DatasetId)
         -> Result<bool, Error>;
 }
@@ -274,14 +328,16 @@ pub struct NewDataset {
 
 ### `clp_package_utils/scripts/native/dataset_manager.py`
 
-Replaced by the API's `GET /datasets` and `DELETE /datasets/{name}`. Deletion removes the dataset's
-storage first (location from the package config), then soft-deletes it; the archive GC reclaims its
-rows later.
+Replaced by the API's `GET /datasets` and `DELETE /datasets/{name}`. The deletion request must follow
+the reviewed lifecycle: commit logical deletion with durable cleanup intent, coordinate in-flight
+work, clean the original storage location with retries, then reclaim eligible metadata. Deleting
+storage while the dataset is still live is not the proposed workflow. Response/completion semantics
+and the required DB interfaces remain to be reviewed.
 
 | Python | What it did | New interface |
 |---|---|---|
 | `_get_dataset_info` | Listed names and storage directories | `get_dataset_names` |
-| `_delete_dataset`, `_delete_dataset_from_database` | Deleted storage (location from the datasets table), then dropped the tables | `get_dataset_id_by_name`, then `mark_dataset_deleted` |
+| `_delete_dataset`, `_delete_dataset_from_database` | Deleted storage (location from the datasets table), then dropped the tables | Resolve the original dataset identity; deletion-request interface pending review |
 
 ```rust
 impl MetadataTables {
@@ -297,14 +353,16 @@ impl MetadataTables {
 ### `clp_package_utils/scripts/native/archive_manager.py`
 
 Replaced by the API's `GET /datasets/{name}/archives` and `POST /datasets/{name}/archives/delete`.
-Deletion runs the lookup and the metadata deletion in one transaction, commits, then deletes storage.
+Deletion must preserve logical-deletion state and durable cleanup targets through storage retries.
+The lookup, concurrency protection, intent transaction, and eventual reclamation follow the
+reviewed lifecycle; deleting metadata and then attempting storage cleanup is not a complete protocol.
 No dry-run.
 
 | Python | What it did | New interface |
 |---|---|---|
 | `_find_archives` | Archive IDs with `begin_timestamp >= begin` and `end_timestamp <= end` | `find_archives_by_time_range` |
-| `_delete_archives` (by IDs) | Looked up then deleted archives by ID | `find_archives_by_uuids`, then `delete_archives` |
-| `_delete_archives` (by filter) | Looked up then deleted archives in a time range | `find_archives_by_time_range`, then `delete_archives` |
+| `_delete_archives` (by IDs) | Looked up then deleted archives by ID | `find_archives_by_uuids`; deletion-request interface pending review |
+| `_delete_archives` (by filter) | Looked up then deleted archives in a time range | `find_archives_by_time_range`; deletion-request interface pending review |
 
 ```rust
 impl MetadataTables {
@@ -323,7 +381,8 @@ impl MetadataTables {
         uuids: &[ArchiveId],
     ) -> Result<Vec<Archive>, Error>;
 
-    /// Tx: yes.
+    /// Provisional final metadata reclamation after storage cleanup and concurrency protection.
+    /// Removes long-span rows before archive rows. Tx: yes; not a deletion-request interface.
     pub async fn delete_archives(
         &self,
         conn: &mut MySqlConnection,
@@ -404,7 +463,7 @@ impl MetadataTables {
         names: &[DatasetName],
     ) -> Result<HashMap<DatasetName, DatasetId>, Error>;
 
-    /// Archives overlapping the query's time range whose creation is within the dataset's retention
+    /// Live archives in a live dataset, overlapping the query's time range, within its retention
     /// relative to the job's creation
     /// (`creation_timestamp_millisecs >= job_creation_timestamp_millisecs - retention`).
     pub async fn find_archives_for_query(
@@ -436,12 +495,12 @@ Replaced by the standalone Rust `archive-garbage-collector`. Search-result GC st
 | Python | What it did | New interface |
 |---|---|---|
 | `_get_archive_safe_expiry_epoch` | Earliest creation time of `RUNNING` query jobs | `query_job::get_earliest_creation_timestamp_millisecs` over every non-terminal status (`PENDING`, `RUNNING`, `CANCEL_REQUESTED`, `CANCELLING`) |
-| `_delete_expired_archives` | Per dataset, archives with `end_timestamp` before the package-wide retention, then `delete_archives_from_metadata_db` | `find_expired_archives` (per-dataset retention by creation time), then `delete_archives` |
-| — | — | `get_deleted_dataset_ids`, then `delete_dataset_metadata`, to reclaim soft-deleted datasets |
+| `_delete_expired_archives` | Per dataset, archives with `end_timestamp` before the package-wide retention, then `delete_archives_from_metadata_db` | `find_expired_archives` (per-dataset retention by creation time), then the reviewed deletion lifecycle |
+| — | — | `get_deleted_dataset_ids` discovers candidates; `delete_dataset_metadata` only after cleanup and concurrency prerequisites |
 
 ```rust
 impl MetadataTables {
-    /// Archives of live datasets with a retention period, created before
+    /// Live archives of live datasets with a retention period, created before
     /// `expiry_base_timestamp_millisecs - retention`. Cross-dataset.
     pub async fn find_expired_archives(
         &self,
@@ -449,12 +508,13 @@ impl MetadataTables {
         expiry_base_timestamp_millisecs: i64,
     ) -> Result<Vec<ExpiredArchive>, Error>;
 
+    /// Candidate discovery only; does not establish that reclamation is safe.
     pub async fn get_deleted_dataset_ids(&self, conn: &mut MySqlConnection)
         -> Result<Vec<DatasetId>, Error>;
 
-    /// Deletes the dataset's rows from `clp_long_span_archives`, `clp_archives` and
-    /// `clp_column_metadata`, keeping its `clp_datasets` row. Returns the number of deleted rows.
-    /// Tx: yes.
+    /// Provisional final reclamation of `clp_long_span_archives`, `clp_archives` and
+    /// `clp_column_metadata` after storage cleanup and concurrency protection.
+    /// Dataset-row retention is pending review. Returns the number of deleted rows. Tx: yes.
     pub async fn delete_dataset_metadata(&self, conn: &mut MySqlConnection, id: DatasetId)
         -> Result<u64, Error>;
 }
@@ -496,7 +556,7 @@ impl MetadataTables {
     pub async fn get_timestamp_bounds(&self, conn: &mut MySqlConnection, ids: &[DatasetId])
         -> Result<Option<TimestampBounds>, Error>;
 
-    /// Over live datasets.
+    /// Over live archives in live datasets.
     pub async fn get_space_savings(&self, conn: &mut MySqlConnection)
         -> Result<SpaceSavings, Error>;
 
@@ -538,12 +598,10 @@ archive. It's the only C++ code that writes to the database: it opens the archiv
 tree, and `INSERT IGNORE`s `(path, NodeType)` into the dataset's column-metadata table.
 
 Decision (Devin): keep the C++ indexer until clp-s is rewritten in Rust. At the switch, its SQL is
-ported to the shared table:
-
-```sql
-INSERT IGNORE INTO clp_column_metadata (name, type, dataset_id)
-SELECT ?, ?, id FROM clp_datasets WHERE name = ? AND deletion_timestamp_millisecs = 0
-```
+ported to the shared `clp_column_metadata` table. The write must remain bound to the ingestion job's
+original dataset ID or generation and follow the reviewed deletion fencing protocol. Resolving a
+dataset name afresh at indexing time could write into a replacement dataset; a live-state predicate
+alone does not coordinate an already-running indexer with deletion.
 
 `--create-table` and the per-dataset table name go away. When the Rust rewrite replaces the indexer,
 it must reproduce the key escaping (`escape_key_name`) and the skipped node types
@@ -551,10 +609,13 @@ it must reproduce the key escaping (`escape_key_name`) and the skipped node type
 
 ## Open questions
 
-1. `DatasetId` is `SMALLINT UNSIGNED` and deleted rows keep their IDs, so at most 65 535 datasets can
-   ever be created. Enough?
-2. `archive_storage_path` is written at dataset creation but never read: every component (compression,
-   search, the API's deletions, the archive GC) derives archive locations from the current package
-   config. If the config's storage location changes, existing archives stay at the old location,
-   which only this column records. Options: keep it write-only, drop it, or make it the source of
-   archive locations.
+1. `DatasetId` is `SMALLINT UNSIGNED`; the proposed indefinite retention of deleted rows limits the
+   lifetime to 65 535 datasets. Reclaiming rows alone does not reset an exhausted auto-increment
+   counter. Review the ID width and retention/reuse policy, including stale-job safety.
+2. The current proposal writes `archive_storage_path` at creation but derives archive locations
+   from the current package config. Config changes leave existing archives at their old location.
+   Decide the authoritative location source and immutable namespace before deletion is implemented;
+   retries must retain exact original targets regardless of later config changes or name reuse.
+3. Complete the deletion lifecycle review above before freezing deletion DDL and signatures. The
+   timestamp/composite unique key, archive tombstone representation, request/completion semantics,
+   in-flight work protection, and cleanup recovery ownership are not settled by these snippets.
