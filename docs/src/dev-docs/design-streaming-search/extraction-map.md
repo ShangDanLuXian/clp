@@ -64,8 +64,12 @@ This is our working map from the prototype to the PRs of the
 * **Unrelated edits to leave out:** the lowercased `HandlerError` messages, the `cancel_search_job`
   rewrite, and the `.expect` added to `Client::submit_query`.
 * **Tests.** `search-result-listener/tests/listener.rs` is split across PRs 7 to 9, as listed
-  below. Shared fakes go into the listener's `test-utils` feature instead of being copied into the
-  API server.
+  below. Shared fakes go into the listener's test utilities instead of being copied into the API
+  server: the `#[cfg(test)] mod test_utils` while only the crate's own unit tests use them, and a
+  `test-utils` feature once tests outside the crate need them.
+* **No CLI listener.** The CLI is a client of the API server's `POST /query/stream` (plan PR 16),
+  so `clp-package-cli` and `src/bin/clp_streaming_search.rs` aren't moved; plan PRs 11 and 12 are
+  dropped.
 
 ## Per PR
 
@@ -173,8 +177,6 @@ This is our working map from the prototype to the PRs of the
   * begin after end;
   * `max_num_results`;
   * aggregation.
-  
-  The CLI's own check of begin after end (`clp_streaming_search.rs:169-178`) is replaced by this.
 * **Leave for PR 14:** the API-only rules, MongoDB buffering and count-by-time. Dataset names
   are already checked by `DatasetName`.
 * **Adjust:** the rules move from the API server's `QueryConfig` into `clp-rust-utils`:
@@ -216,18 +218,28 @@ This is our working map from the prototype to the PRs of the
   `claims_indices_in_order`, which the duplicate test covers; add a test of the panic on an index
   ahead of the cursor.
 * **Status:** y-scope/clp#2662, branch `streaming-search/query-result-listener-cursor-and-encodings`
-  (named before the split), one commit `b6e3816`. Beyond the adjustments, it rewords the
-  prototype's docstrings, adds one to `new` and `#[must_use]` to `claim`, and leaves out the second
-  `# Panics` sentence and the `wrapping_add` comment.
+  (named before the split): `b6e3816` (the cursor), `e5a4311` (the concurrent test's threads start
+  together behind a `Barrier`, so it catches a non-atomic claim every time), `3891f25` and
+  `b5bc9d7` (review nits), and `main` merged in (`0b2a21f`, `9841de9`). Beyond the adjustments, it
+  rewords the prototype's docstrings, adds one to `new` and `#[must_use]` to `claim`, and leaves
+  out the second `# Panics` sentence and the `wrapping_add` comment. Lin asked whether the cursor
+  needs the archive ID; it stays, as the design's "cheap check of the task-index mapping" that
+  PR 7 makes.
 
 ### PR 6a. Encodings
 
 * **Take** `src/encoding.rs`, the whole file, with its unit test.
-* **Adjust:** `SearchResult*` → `QueryResult*`; `timestamp` → `timestamp_millisecs`, as in PR 5;
-  `encode` takes the message as a `String`.
-* **Status:** branch `streaming-search/query-result-listener-encodings`, one commit `8d0f5d4`, from
-  `main` at `97c6ad9d`. Its `encoding.rs` is y-scope/clp#2662's before the split, byte for byte,
-  including that PR's rewording of the prototype's docstrings. No PR yet.
+* **Adjust:**
+  * `SearchResult*` → `QueryResult*`; `timestamp` → `timestamp_millisecs`, as in PR 5;
+  * `encoding` is a `pub mod`, as feature modules are in the other crates, instead of root
+    re-exports;
+  * `QueryResult`, `QueryResultEncoding` and `QueryResultEncoder` move into the
+    `#[cfg(test)] mod test_utils`, since the API server is the only production consumer (Lin's
+    review); the encoder test stays in `encoding.rs` as the test of the traits.
+* **Status:** y-scope/clp#2664, branch `streaming-search/query-result-listener-encodings`, at
+  `2e053dd`. `encode` briefly took a `String`; Lin's suggestion restored the prototype's `&str`.
+  Review branches: `streaming-search/query-result-listener-encodings-lin-review` (stale) and
+  `-lin-review2`. It rewords the prototype's docstrings, like y-scope/clp#2662.
 
 ### PR 7. Connection handler
 
@@ -250,6 +262,20 @@ This is our working map from the prototype to the PRs of the
   * protocol errors: `:603`, `:641`, `:672`, `:702`, `:742`, `:766`, `:885`, `:917`, `:946`;
   * batching and slow consumers: `:972`, `:1004`;
   * discard mode: `:1426`, `:1471`.
+* **Status:** draft branch `streaming-search/query-result-listener-connection-handler`, cut from a
+  merge of y-scope/clp#2662 (`9841de9`) and y-scope/clp#2664 (`3903534`, later `2e053dd`):
+  `e3d82e6` (the handler), `d5c50f5` (its 18 tests), and `dff30bd` (the message encoded by
+  reference, and the test-only encoding taken from `test_utils`). Choices beyond the map:
+  * the cursor's get-or-create (`:171-177`) is in PR 7, in `Connection::new`, so the rerun, overlap
+    and mismatch tests run through it;
+  * the session slice is `session::State` in a new `src/session.rs`, with `cursors`, `encoding`,
+    `batches_sender` and three counters (emitted, duplicates, discarded);
+  * `dashmap` is a new workspace dependency, as in the prototype;
+  * `connection`, `cursor` and `session` carry `#[cfg_attr(not(test), expect(dead_code, …))]`,
+    since the tests use them but nothing else does until PR 8.
+
+  Open: `#[expect(clippy::struct_field_names)]` on `SessionStats` (Lin's guide asks before
+  suppressing clippy). No PR yet.
 
 ### PR 8. TCP listener and session registry
 
@@ -301,35 +327,6 @@ This is our working map from the prototype to the PRs of the
     `:207`;
   * `ArchiveToSearch` and the new task parameter in the TDL's `mod.rs`.
 
-### PR 11. CLI crate and config loading
-
-* **New code.** The prototype reads the config that Python generates.
-* **Reference:**
-  * Python's `load_config_file`;
-  * `resolve_host_path_in_container`, in `clp_py_utils/core.py:79-143`;
-  * the credentials file format.
-* **Note:** the Rust `Config` can't read a user's file directly. `Package.storage_engine` defaults
-  to `clp` (Python defaults to `clp-s`), and `Spider` requires `host` and `port`. So use a small
-  struct of the fields the CLI needs.
-
-### PR 12. `clp-streaming-search` and `sbin/streaming-search.sh`
-
-* **Take:**
-  * `clp-package-cli/Cargo.toml`;
-  * from `src/bin/clp_streaming_search.rs`: the arguments, `:41-73`; the output encoding,
-    `:85-111`; the exit codes, `:133-145`; the search, `:169-230`; the output loop, `:282-289`; and
-    the tests, `:306-434`;
-  * `package-template/src/sbin/streaming-search.sh`;
-  * `tools/docker-images/clp-package/Dockerfile:44`.
-* **Adjust:**
-  * load the config with PR 11 instead of a generated config;
-  * check the job config with PR 4;
-  * `DatasetName`, and `max_num_results: None`;
-  * cancel the job on `SIGINT`, `SIGTERM` and a closed output (the prototype only exits, at
-    `:138-145`);
-  * write stdout asynchronously;
-  * the `sbin` script runs the binary directly in `clp-runtime`.
-
 ### PR 13. SSE encoding
 
 * **Take:**
@@ -374,3 +371,12 @@ This is our working map from the prototype to the PRs of the
   * the response body byte for byte, `routes.rs:1659`;
   * 501, `:1768`, through `from_client`;
   * the closed client connection, `:2036`.
+
+### PR 16. `sbin/streaming-search.sh` as a client of the API server
+
+* **New code.** The prototype's CLI hosts its own listener; this one is a client of
+  `POST /query/stream` (PR 15) instead.
+* **Reference:** `src/bin/clp_streaming_search.rs` for the arguments (`:41-73`), the output format
+  (`:85-111`, without its `ResultEncoding`) and the exit codes (`:133-145`).
+* **Leave out:** the listener, the job submission and status polling, the database credentials,
+  the config loading, `--advertised-host`, and the Python wrapper.
