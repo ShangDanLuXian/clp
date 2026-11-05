@@ -18,7 +18,7 @@ Companion to `interface-plan.md`, which defines the `clp-metadata-db` interface.
    * Types: `DatasetId` / `ArchiveRowId` newtypes, `TimestampRange`, `QueryArchiveFilter`,
      `ColumnType`, `NewArchive`, `QueryArchive`, `TimestampBounds`, `SpaceSavings`.
    * Operations: every operation listed in the interface plan.
-   * `get_earliest_creation_time_millis` takes a connection.
+   * `get_earliest_creation_timestamp_millisecs` takes a connection.
    * `MetadataTables` holds its four table names.
 3. Interface review with Lin. Nothing calls the crate yet.
 
@@ -31,21 +31,22 @@ don't change.
 
 | Step | Content | Supporting changes |
 |---|---|---|
-| 2.1 | `MetadataTables::new`, `schema::create_tables` (final DDL: `utf8mb4` with `utf8mb4_bin`, `compression_job_id`, `deleted_at_millis`, no `archives.is_deleted`, partition `p_future`) | `long_span_archives_table_name`, `unscoped_column_metadata_table_name` in `clp-rust-utils` |
+| 2.1 | `MetadataTables::new`, `schema::create_tables` (final DDL: `utf8mb4` with `utf8mb4_bin`, `compression_job_id`, `deletion_timestamp_millisecs`, no `archives.is_deleted`, partition `p_future`) | `long_span_archives_table_name`, `unscoped_column_metadata_table_name` in `clp-rust-utils` |
 | 2.2 | `dataset.rs` | — |
 | 2.3 | `archive.rs` | `ArchiveId::from_bytes` / `as_bytes` in `clp-rust-utils` |
 | 2.4 | `column_metadata.rs` | `ColumnType` ↔ `NodeType` mapping, kept in sync with `SchemaTree.hpp` |
 | 2.5 | `statistics.rs` | — |
-| 2.6 | `query_job::get_earliest_creation_time_millis` | — |
+| 2.6 | `query_job::get_earliest_creation_timestamp_millisecs` | — |
 
 Implementation rules that every step checks:
 
 * Every archive/column query and deletion includes `dataset_id`.
 * `IN` lists and multi-row inserts are batched at 1000.
 * Long-span rows are deleted before archive rows.
-* Live-dataset reads include `deleted_at_millis = 0`.
-* Times that must agree across components (`creation_time_millis`, `deleted_at_millis`) come from
-  the DB clock.
+* Live-dataset reads include `deletion_timestamp_millisecs = 0`.
+* Times that must agree across components (`creation_timestamp_millisecs`,
+  `deletion_timestamp_millisecs`) come from the DB clock.
+* Timestamps use the `_timestamp_millisecs` suffix in columns and Rust fields.
 
 ## Phase 3: Pre-switch consumers (dormant)
 
@@ -74,8 +75,8 @@ Package config additions needed by 3.7/3.8 (`garbage_collector.sweep_interval.ar
    `insert_archives` with the job's `compression_job_id`, in the same transaction as the job's status
    update.
 4. C++ indexer (kept until the Rust clp-s rewrite): port the column-metadata write to the shared
-   table, resolving the dataset ID with `deleted_at_millis = 0`; drop `--create-table`. Reviewed
-   against the C++ `pr-review.md`.
+   table, resolving the dataset ID with `deletion_timestamp_millisecs = 0`; drop `--create-table`.
+   Reviewed against the C++ `pr-review.md`.
 5. Query coordinator: `get_dataset_ids_by_names` + `find_archives_for_query`; drop the global
    `archive_retention_period_millisecs`.
 6. api-server WebUI metadata routes: the clp-s branches call `get_dataset_names`, `statistics::*`
