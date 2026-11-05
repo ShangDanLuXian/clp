@@ -17,7 +17,8 @@ One exception: the C++ indexer keeps writing column metadata itself until clp-s 
 Rust (see "The indexer").
 
 Out of scope: clp-text (`clp` storage engine) tables, the query/compression job tables, files tables,
-top-level-filtering tables.
+top-level-filtering tables, and the WebUI ingestion-details route (its file and message counts need a
+files table, which clp-s doesn't populate).
 
 ## Tables
 
@@ -28,7 +29,10 @@ top-level-filtering tables.
 | `clp_long_span_archives` | `(dataset_id, timestamp_range_end_millis, archive_id)` | Second reference to archives spanning more than 24 hours; unpartitioned |
 | `clp_column_metadata` | `(dataset_id, name, type)` | Union of the columns of a dataset's archives |
 
-All string columns are `CHARACTER SET utf8mb4`.
+All string columns are `CHARACTER SET utf8mb4 COLLATE utf8mb4_bin`, so dataset and column names are
+case-sensitive (`Logs` and `logs` are different datasets). Known limitation: `utf8mb4_bin` pads with
+spaces when comparing, so column names that differ only in trailing spaces (`"a"` vs `"a "`) still
+collide. Dataset names can't contain spaces.
 
 ## Crate layout
 
@@ -69,7 +73,7 @@ Table names come from the package config's `Database` (`datasets_table_name`,
 
 | Type | Definition | Why |
 |---|---|---|
-| `DatasetId` | newtype over `u16` (proposal; currently a `u16` alias in `clp-rust-utils`) | Keeps dataset IDs from mixing with other integers |
+| `DatasetId` | newtype over `u16` (`#[sqlx(transparent)]`), replacing the current `u16` alias in `clp-rust-utils` | Keeps dataset IDs from mixing with other integers |
 | `ArchiveRowId` | newtype over `u64` | The archives table's surrogate key; distinct from the archive's UUID (`ArchiveId`) |
 | `ArchiveId` | existing UUID type in `clp-rust-utils`, plus `from_bytes` / `as_bytes` | Stored as `BINARY(16)` in the shared table; the legacy text SQL encoding stays for other tables |
 | `TimestampRange` | `{ begin_millis: i64, end_millis: Option<i64> }` | Replaces the bare `begin_ts` / `end_ts` pairs |
@@ -228,15 +232,10 @@ it must reproduce the key escaping (`escape_key_name`) and the skipped node type
 
 ## Open questions
 
-1. Does "all DB operations" include the switch-time operations above (insert/query/column
-   metadata/statistics)? This plan assumes yes.
-2. `DatasetId` and `ArchiveRowId` as newtypes, and `TimestampRange` / `QueryArchiveFilter` as
-   structs: OK, or keep primitives?
-3. Collation for `clp_datasets.name` and `clp_column_metadata.name`: the default is case-insensitive,
-   so `Logs` and `logs` collide. Use `utf8mb4_bin`?
-4. `DatasetId` is `SMALLINT UNSIGNED` and deleted rows keep their IDs, so at most 65 535 datasets can
+1. `DatasetId` is `SMALLINT UNSIGNED` and deleted rows keep their IDs, so at most 65 535 datasets can
    ever be created. Enough?
-5. `archive_storage_path` is written but never read (locations come from the package config). Keep
-   it?
-6. The `clp-s` ingestion-details route reports file counts from the per-dataset files tables, which
-   the shared schema doesn't have yet. Report 0 until a shared files table exists?
+2. `archive_storage_path` is written at dataset creation but never read: every component (compression,
+   search, the API's deletions, the archive GC) derives archive locations from the current package
+   config. If the config's storage location changes, existing archives stay at the old location,
+   which only this column records. Options: keep it write-only, drop it, or make it the source of
+   archive locations.

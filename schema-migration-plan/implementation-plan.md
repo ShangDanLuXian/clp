@@ -31,7 +31,7 @@ don't change.
 
 | Step | Content | Supporting changes |
 |---|---|---|
-| 2.1 | `MetadataTables::new`, `schema::create_tables` (final DDL: utf8mb4, `compression_job_id`, `deleted_at_millis`, no `archives.is_deleted`, partition `p_future`) | `long_span_archives_table_name`, `unscoped_column_metadata_table_name` in `clp-rust-utils` |
+| 2.1 | `MetadataTables::new`, `schema::create_tables` (final DDL: `utf8mb4` with `utf8mb4_bin`, `compression_job_id`, `deleted_at_millis`, no `archives.is_deleted`, partition `p_future`) | `long_span_archives_table_name`, `unscoped_column_metadata_table_name` in `clp-rust-utils` |
 | 2.2 | `dataset.rs` | — |
 | 2.3 | `archive.rs` | `ArchiveId::from_bytes` / `as_bytes` in `clp-rust-utils` |
 | 2.4 | `column_metadata.rs` | `ColumnType` ↔ `NodeType` mapping, kept in sync with `SchemaTree.hpp` |
@@ -79,7 +79,8 @@ Package config additions needed by 3.7/3.8 (`garbage_collector.sweep_interval.ar
 5. Query coordinator: `get_dataset_ids_by_names` + `find_archives_for_query`; drop the global
    `archive_retention_period_millisecs`.
 6. api-server WebUI metadata routes: the clp-s branches call `get_dataset_names`, `statistics::*`
-   and `get_column_names_by_types`; the clp-text branches stay as they are.
+   and `get_column_names_by_types`; the clp-text branches stay as they are. The ingestion-details
+   route is out of scope and isn't migrated.
 7. Register `datasets::router()` and regenerate
    `docs/src/_static/generated/api-server-openapi.json` and
    `components/webui/packages/api-client/openapi.json`.
