@@ -25,7 +25,7 @@ use crate::routes::HandlerError;
 /// # Returns
 ///
 /// A newly created [`OpenApiRouter`] with all dataset routes registered.
-pub fn router() -> OpenApiRouter<AppState> {
+pub(super) fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list_datasets, create_dataset))
         .routes(routes!(delete_dataset))

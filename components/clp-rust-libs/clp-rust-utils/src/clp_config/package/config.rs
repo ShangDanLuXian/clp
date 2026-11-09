@@ -181,34 +181,10 @@ impl Default for Database {
 impl Database {
     /// # Returns
     ///
-    /// The archives table name (`<prefix><dataset>_archives`).
-    #[must_use]
-    pub fn archives_table_name(&self, dataset: &DatasetName) -> String {
-        format!("{}{dataset}_archives", self.table_prefix)
-    }
-
-    /// # Returns
-    ///
-    /// The column-metadata table name (`<prefix><dataset>_column_metadata`).
-    #[must_use]
-    pub fn column_metadata_table_name(&self, dataset: &DatasetName) -> String {
-        format!("{}{dataset}_column_metadata", self.table_prefix)
-    }
-
-    /// # Returns
-    ///
     /// The datasets table name `<prefix>datasets`.
     #[must_use]
     pub fn datasets_table_name(&self) -> String {
         format!("{}datasets", self.table_prefix)
-    }
-
-    /// # Returns
-    ///
-    /// The files table name (`<prefix><dataset>_files`).
-    #[must_use]
-    pub fn files_table_name(&self, dataset: &DatasetName) -> String {
-        format!("{}{dataset}_files", self.table_prefix)
     }
 
     /// # Returns
@@ -222,8 +198,8 @@ impl Database {
 
     /// # Returns
     ///
-    /// The archives table name without a dataset (`<prefix>archives`), used by the CLP storage
-    /// engine and the clp-s shared metadata tables.
+    /// The archives table name (`<prefix>archives`), used by the CLP storage engine and the clp-s
+    /// shared metadata tables.
     #[must_use]
     pub fn unscoped_archives_table_name(&self) -> String {
         format!("{}archives", self.table_prefix)
@@ -231,8 +207,8 @@ impl Database {
 
     /// # Returns
     ///
-    /// The column-metadata table name without a dataset (`<prefix>column_metadata`), used by the
-    /// clp-s shared metadata tables.
+    /// The column-metadata table name (`<prefix>column_metadata`), used by the clp-s shared
+    /// metadata tables.
     #[must_use]
     pub fn unscoped_column_metadata_table_name(&self) -> String {
         format!("{}column_metadata", self.table_prefix)
@@ -240,7 +216,7 @@ impl Database {
 
     /// # Returns
     ///
-    /// The files table name without a dataset (`<prefix>files`), used by the CLP storage engine.
+    /// The files table name (`<prefix>files`), used by the CLP storage engine.
     #[must_use]
     pub fn unscoped_files_table_name(&self) -> String {
         format!("{}files", self.table_prefix)
@@ -437,7 +413,6 @@ pub struct ArchiveOutput {
     pub target_encoded_file_size: u64,
     pub target_segment_size: u64,
     pub compression_level: u8,
-    pub retention_period: Option<NonZeroU64>,
 }
 
 impl ArchiveOutput {
@@ -486,7 +461,6 @@ impl Default for ArchiveOutput {
             target_encoded_file_size: 256 * 1024 * 1024,
             target_segment_size: 256 * 1024 * 1024,
             compression_level: 3,
-            retention_period: None,
         }
     }
 }

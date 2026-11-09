@@ -5,6 +5,7 @@ mod logs_input;
 mod metadata;
 mod stream_files;
 
+use clp_metadata_db::MetadataTables;
 use clp_rust_utils::clp_config::package::config::Config;
 pub use compression::*;
 pub use logs_input::*;
@@ -17,6 +18,7 @@ pub struct WebuiClient {
     sql_pool: sqlx::Pool<sqlx::MySql>,
     mongodb_client: mongodb::Client,
     stream_file_storage: StreamFileStorage,
+    metadata_tables: MetadataTables,
     config: Config,
 }
 
@@ -40,6 +42,7 @@ impl WebuiClient {
             sql_pool,
             mongodb_client,
             stream_file_storage,
+            metadata_tables: MetadataTables::new(&config.database),
             config,
         }
     }

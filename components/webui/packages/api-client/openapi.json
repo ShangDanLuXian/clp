@@ -55,6 +55,227 @@
         }
       }
     },
+    "/datasets": {
+      "get": {
+        "description": "Gets the names of the live datasets. Only the clp-s storage engine is supported.",
+        "operationId": "list_datasets",
+        "responses": {
+          "200": {
+            "description": "The datasets' names, ordered by name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The package's storage engine isn't clp-s"
+          },
+          "500": {
+            "description": ""
+          }
+        }
+      },
+      "post": {
+        "description": "Creates a dataset, whose archives are stored at its location in the package's archive output. Only the clp-s storage engine is supported.",
+        "operationId": "create_dataset",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DatasetCreation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The dataset was created"
+          },
+          "400": {
+            "description": "The request body isn't valid JSON, or the package's storage engine isn't clp-s"
+          },
+          "409": {
+            "description": "A dataset with the same name already exists, possibly pending deletion"
+          },
+          "415": {
+            "description": "The request's `Content-Type` isn't `application/json`"
+          },
+          "422": {
+            "description": "The request body doesn't match the schema, including when `name` is missing or isn't a valid dataset name, `retention_period_minutes` isn't a positive 32-bit integer, or the body has an unknown field"
+          },
+          "500": {
+            "description": ""
+          }
+        }
+      }
+    },
+    "/datasets/{dataset_name}": {
+      "delete": {
+        "description": "Marks a live dataset as deleted. Its archives are deleted from the archive storage afterwards, in the background. Only the clp-s storage engine is supported.",
+        "operationId": "delete_dataset",
+        "parameters": [
+          {
+            "name": "dataset_name",
+            "in": "path",
+            "description": "The dataset's name.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "The dataset was marked as deleted"
+          },
+          "400": {
+            "description": "Invalid dataset name, or the package's storage engine isn't clp-s"
+          },
+          "404": {
+            "description": "There's no live dataset with the name"
+          },
+          "500": {
+            "description": ""
+          }
+        }
+      }
+    },
+    "/datasets/{dataset_name}/archives": {
+      "get": {
+        "description": "Gets a live dataset's live archives whose timestamp ranges lie within the given time range. Only the clp-s storage engine is supported.",
+        "operationId": "list_archives",
+        "parameters": [
+          {
+            "name": "dataset_name",
+            "in": "path",
+            "description": "The dataset's name.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "begin_timestamp_millisecs",
+            "in": "query",
+            "description": "The time range's lower bound (inclusive), in epoch milliseconds. Omit for no lower bound.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "end_timestamp_millisecs",
+            "in": "query",
+            "description": "The time range's upper bound (inclusive), in epoch milliseconds. Omit for no upper bound.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The archives, in no particular order",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ArchiveMetadata"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid dataset name or query parameters (e.g., `begin_timestamp_millisecs` > `end_timestamp_millisecs`), or the package's storage engine isn't clp-s"
+          },
+          "404": {
+            "description": "There's no live dataset with the name"
+          },
+          "500": {
+            "description": ""
+          }
+        }
+      }
+    },
+    "/datasets/{dataset_name}/archives/delete": {
+      "post": {
+        "description": "Marks a live dataset's live archives as deleted, selected either by their IDs or by a time range that their timestamp ranges lie within. When selecting by IDs, no archive is marked unless every ID is the ID of a live archive of the dataset. The archives are deleted from the archive storage afterwards, in the background. Only the clp-s storage engine is supported.",
+        "operationId": "delete_archives",
+        "parameters": [
+          {
+            "name": "dataset_name",
+            "in": "path",
+            "description": "The dataset's name.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ArchiveSelection"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The IDs of the marked archives",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArchiveIds"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid dataset name; the request body isn't valid JSON; `begin_timestamp_millisecs` > `end_timestamp_millisecs`; or the package's storage engine isn't clp-s"
+          },
+          "404": {
+            "description": "There's no live dataset with the name, with no body; or some of the requested IDs aren't the IDs of live archives of the dataset, with those IDs in the body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ArchiveIds"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The request's `Content-Type` isn't `application/json`"
+          },
+          "422": {
+            "description": "The request body doesn't match the schema, including when it has both or neither of `archive_ids` and the time range, only one of the time range's bounds, an invalid archive ID, or an unknown field"
+          },
+          "500": {
+            "description": ""
+          }
+        }
+      }
+    },
     "/health": {
       "get": {
         "tags": [],
@@ -611,6 +832,80 @@
   },
   "components": {
     "schemas": {
+      "ArchiveIds": {
+        "type": "object",
+        "description": "A set of archive IDs.",
+        "required": [
+          "archive_ids"
+        ],
+        "properties": {
+          "archive_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The archives' IDs."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ArchiveMetadata": {
+        "type": "object",
+        "description": "An archive of a dataset.",
+        "required": [
+          "archive_id",
+          "begin_timestamp_millisecs",
+          "end_timestamp_millisecs"
+        ],
+        "properties": {
+          "archive_id": {
+            "type": "string",
+            "description": "The archive's ID."
+          },
+          "begin_timestamp_millisecs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The inclusive lower bound of the archive's timestamps, in epoch milliseconds, or `0` if it\nhas no timestamps."
+          },
+          "end_timestamp_millisecs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The inclusive upper bound of the archive's timestamps, in epoch milliseconds, or `0` if it\nhas no timestamps."
+          }
+        }
+      },
+      "ArchiveSelection": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/ArchiveIds"
+          },
+          {
+            "$ref": "#/components/schemas/ArchiveTimeRangeSelection"
+          }
+        ],
+        "description": "Request body for the archive deletion endpoint, which selects the archives to delete either by\ntheir IDs or by a time range."
+      },
+      "ArchiveTimeRangeSelection": {
+        "type": "object",
+        "description": "A time range that archives' timestamp ranges lie within.",
+        "required": [
+          "begin_timestamp_millisecs",
+          "end_timestamp_millisecs"
+        ],
+        "properties": {
+          "begin_timestamp_millisecs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The time range's lower bound (inclusive), in epoch milliseconds."
+          },
+          "end_timestamp_millisecs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The time range's upper bound (inclusive), in epoch milliseconds."
+          }
+        },
+        "additionalProperties": false
+      },
       "CompressionJob": {
         "type": "object",
         "description": "Response body of the compression-job submission endpoint.",
@@ -932,6 +1227,29 @@
             "description": "Total uncompressed size of input files, in bytes."
           }
         }
+      },
+      "DatasetCreation": {
+        "type": "object",
+        "description": "Request body for the dataset creation endpoint.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The dataset's name."
+          },
+          "retention_period_minutes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How long the dataset's archives are kept after their creation, in minutes. Must be\npositive. Omit or set to `null` to keep them forever.",
+            "minimum": 1
+          }
+        },
+        "additionalProperties": false
       },
       "DirEntry": {
         "type": "object",

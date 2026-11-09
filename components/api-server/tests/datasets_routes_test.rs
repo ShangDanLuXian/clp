@@ -388,7 +388,7 @@ async fn delete_archives_by_time_range_marks_the_archives_within_it() -> Result<
     Ok(())
 }
 
-/// The dataset routes on a uniquely named test database with the shared metadata tables.
+/// The API server's routes on a uniquely named test database with the shared metadata tables.
 struct TestApp {
     router: axum::Router,
     conn: MySqlConnection,
@@ -401,7 +401,7 @@ impl TestApp {
     ///
     /// Creates a uniquely named database on the server at `CLP_METADATA_DB_TEST_URL` (e.g.
     /// `mysql://root:password@127.0.0.1:3306`), creates the shared metadata tables in it, and
-    /// builds the dataset routes on it with [`clp_s_config`].
+    /// builds the API server's routes on it with [`clp_s_config`].
     ///
     /// # Returns
     ///
@@ -450,7 +450,8 @@ impl TestApp {
         }
     }
 
-    /// Builds the dataset routes with a `MySQL` connection pool that only connects on first use.
+    /// Builds the API server's routes with a `MySQL` connection pool that only connects on first
+    /// use.
     ///
     /// # Returns
     ///
@@ -583,7 +584,7 @@ impl TestApp {
             .expect("failed to close the test database connection");
     }
 
-    /// Builds the dataset routes on the given `MySQL` connection pool.
+    /// Builds the API server's routes on the given `MySQL` connection pool.
     ///
     /// # Returns
     ///
@@ -591,17 +592,17 @@ impl TestApp {
     ///
     /// # Panics
     ///
-    /// Panics if the `MongoDB` client can't be created.
+    /// Panics if the `MongoDB` client or the routes can't be created.
     async fn router(config: Config, sql_pool: sqlx::MySqlPool) -> axum::Router {
         let mongodb_client =
             mongodb::Client::with_uri_str("mongodb://127.0.0.1:1/?serverSelectionTimeoutMS=100")
                 .await
                 .expect("the MongoDB URI should be valid");
-        let (router, _) = api_server::routes::datasets::router().split_for_parts();
-        router.with_state(AppState {
+        api_server::routes::from_app_state(AppState {
             client: Client::new(config.clone(), mongodb_client.clone(), sql_pool.clone()),
             webui_client: Box::pin(WebuiClient::new(config, sql_pool, mongodb_client)).await,
         })
+        .expect("failed to build the API server's routes")
     }
 }
 

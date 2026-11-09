@@ -25,6 +25,9 @@ pub enum Error {
     #[error("the query job has already been cancelled")]
     QueryJobCancelled,
 
+    #[error("metadata DB error: {0}")]
+    MetadataDb(#[from] clp_metadata_db::Error),
+
     #[error("metadata corrupted for query job {0}: its row no longer exists")]
     QueryJobMetadataCorrupted(QueryJobId),
 

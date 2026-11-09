@@ -1,4 +1,4 @@
-pub mod datasets;
+mod datasets;
 mod webui;
 
 use axum::Json;
@@ -69,13 +69,14 @@ impl FromRef<AppState> for WebuiClient {
 ///
 /// * Forwards [`utoipa::openapi::OpenApi::to_json`]'s return values on failure.
 pub fn from_app_state(state: AppState) -> Result<axum::Router, serde_json::Error> {
-    let (public_routes, api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
+    let (public_routes, api) = OpenApiRouter::with_openapi(BaseApiDoc::openapi())
         .route("/", get(health))
         .routes(routes!(health))
         .routes(routes!(query))
         .routes(routes!(query_results))
         .routes(routes!(cancel_query))
         .routes(routes!(compression_usage))
+        .merge(datasets::router())
         .split_for_parts();
     let api_json = api.to_json()?;
     let public_routes = public_routes
@@ -101,20 +102,21 @@ mod api_doc {
     use super::CompressionUsage;
     use super::OpenApi;
     use super::OpenApiRouter;
+    use super::datasets;
     use super::webui;
     use crate::client::CompressionJobStatus;
 
-    #[derive(utoipa::OpenApi)]
-    #[openapi(
-        info(
-            title = "API Server",
-            description = "API Server for CLP",
-            contact(name = "YScope")
-        ),
-        paths(health, query, query_results, cancel_query, compression_usage),
-        components(schemas(CompressionUsage, CompressionJobStatus))
-    )]
+    /// The public `OpenAPI` document: [`BaseApiDoc`] extended with the dataset routes.
     pub struct ApiDoc;
+
+    impl OpenApi for ApiDoc {
+        fn openapi() -> utoipa::openapi::OpenApi {
+            let (_, api) = OpenApiRouter::with_openapi(BaseApiDoc::openapi())
+                .merge(datasets::router())
+                .split_for_parts();
+            api
+        }
+    }
 
     /// The `WebUI`'s `OpenAPI` document: [`ApiDoc`] extended with the routes that back the `WebUI`.
     pub struct WebUiApiDoc;
@@ -127,6 +129,19 @@ mod api_doc {
             api
         }
     }
+
+    /// The `OpenAPI` document of the public routes other than the dataset routes.
+    #[derive(utoipa::OpenApi)]
+    #[openapi(
+        info(
+            title = "API Server",
+            description = "API Server for CLP",
+            contact(name = "YScope")
+        ),
+        paths(health, query, query_results, cancel_query, compression_usage),
+        components(schemas(CompressionUsage, CompressionJobStatus))
+    )]
+    pub(super) struct BaseApiDoc;
 }
 pub use api_doc::*;
 

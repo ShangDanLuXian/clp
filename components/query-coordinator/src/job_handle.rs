@@ -2,12 +2,12 @@
 
 use std::cmp::Reverse;
 use std::collections::HashSet;
-use std::num::NonZeroU64;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;
 
-use clp_rust_utils::clp_config::package::config::Database;
+use clp_metadata_db::MetadataTables;
+use clp_metadata_db::QueryArchiveFilter;
 use clp_rust_utils::dataset::DatasetName;
 use clp_rust_utils::job_config::QUERY_JOBS_TABLE_NAME;
 use clp_rust_utils::job_config::QueryJobConfig;
@@ -15,7 +15,6 @@ use clp_rust_utils::job_config::QueryJobId;
 use clp_rust_utils::job_config::QueryJobStatus;
 use clp_rust_utils::job_config::QueryOutput;
 use clp_rust_utils::job_config::ResultsCacheOutput;
-use clp_rust_utils::types::ArchiveId;
 use const_format::formatcp;
 use spider_core::task::ExecutionPolicy;
 use spider_core::task::TimeoutPolicy;
@@ -38,14 +37,13 @@ pub struct SpiderOption {
 
 /// Options for selecting the archives to search.
 pub struct ArchiveSelectionOptions {
-    pub archive_retention_period_millisecs: Option<NonZeroU64>,
     pub max_datasets_per_query: Option<NonZeroUsize>,
 }
 
 /// Resources shared by query job handles created by the coordinator.
 pub struct QueryJobHandleContext {
     pub db_pool: MySqlPool,
-    pub db_config: Database,
+    pub metadata_tables: MetadataTables,
     pub archive_selection_options: ArchiveSelectionOptions,
     pub spider_option: SpiderOption,
 }
@@ -61,7 +59,7 @@ pub struct QueryJobHandle<SubmitterType: QueryJobSubmitter> {
     job_submitter: SubmitterType,
     resource_group_id: ResourceGroupId,
     query_job_config: QueryJobConfig,
-    archive_end_ts_lower_bound_millisecs: Option<i64>,
+    job_creation_timestamp_millisecs: i64,
 }
 
 impl<SubmitterType: QueryJobSubmitter> QueryJobHandle<SubmitterType> {
@@ -106,18 +104,13 @@ impl<SubmitterType: QueryJobSubmitter> QueryJobHandle<SubmitterType> {
             }
         }
 
-        let archive_end_ts_lower_bound_millisecs = context
-            .archive_selection_options
-            .archive_retention_period_millisecs
-            .map(|period| job_creation_timestamp_millisecs.saturating_sub_unsigned(period.get()));
-
         Ok(Self {
             context,
             query_job_id,
             job_submitter,
             resource_group_id,
             query_job_config,
-            archive_end_ts_lower_bound_millisecs,
+            job_creation_timestamp_millisecs,
         })
     }
 
@@ -258,7 +251,7 @@ impl<SubmitterType: QueryJobSubmitter> QueryJobHandle<SubmitterType> {
         ArchiveSelector {
             context: &self.context,
             query_job_config: &self.query_job_config,
-            archive_end_ts_lower_bound_millisecs: self.archive_end_ts_lower_bound_millisecs,
+            job_creation_timestamp_millisecs: self.job_creation_timestamp_millisecs,
         }
         .select()
         .await
@@ -523,7 +516,7 @@ impl From<&QueryJobOutcome> for QueryJobStatus {
 struct ArchiveSelector<'job_handle_lifetime> {
     context: &'job_handle_lifetime QueryJobHandleContext,
     query_job_config: &'job_handle_lifetime QueryJobConfig,
-    archive_end_ts_lower_bound_millisecs: Option<i64>,
+    job_creation_timestamp_millisecs: i64,
 }
 
 impl ArchiveSelector<'_> {
@@ -532,8 +525,8 @@ impl ArchiveSelector<'_> {
     /// This method validates and deduplicates the job's requested datasets, then retrieves from the
     /// CLP database the metadata of the archives matching the query, ordered by descending archive
     /// end timestamp, and attaches an execution policy derived from each archive's uncompressed
-    /// size to its task. Archives that end before the job's archive retention lower bound, if any,
-    /// are excluded.
+    /// size to its task. Archives created before each dataset's retention period, measured back
+    /// from the job's creation, are excluded.
     ///
     /// # Returns
     ///
@@ -546,16 +539,49 @@ impl ArchiveSelector<'_> {
     ///
     /// Returns an error if:
     ///
+    /// * [`Error::InvalidQueryJobConfig`] if any requested dataset doesn't exist or is marked as
+    ///   deleted.
     /// * Forwards [`Self::deduplicate_and_validate_requested_datasets`]'s return values on failure.
-    /// * Forwards [`Self::ensure_all_required_datasets_exist`]'s return values on failure.
-    /// * Forwards [`Self::fetch_archives`]'s return values on failure.
+    /// * Forwards [`sqlx::Pool::acquire`]'s return values on failure.
+    /// * Forwards [`MetadataTables::get_dataset_ids_by_names`]'s return values on failure.
+    /// * Forwards [`MetadataTables::find_archives_for_query`]'s return values on failure.
     async fn select(&self) -> Result<Vec<(ArchiveMetadata, ExecutionPolicy)>, Error> {
-        let datasets = self.deduplicate_and_validate_requested_datasets()?;
-        self.ensure_all_required_datasets_exist(&datasets).await?;
+        let datasets: Vec<DatasetName> = self
+            .deduplicate_and_validate_requested_datasets()?
+            .into_iter()
+            .collect();
 
+        let metadata_tables = &self.context.metadata_tables;
+        let mut conn = self.context.db_pool.acquire().await?;
+        let dataset_ids = metadata_tables
+            .get_dataset_ids_by_names(&mut conn, &datasets)
+            .await?;
+        if dataset_ids.len() != datasets.len() {
+            return Err(Error::InvalidQueryJobConfig(
+                "one or more requested datasets don't exist".to_owned(),
+            ));
+        }
+
+        let time_range = self.query_job_config.query.time_range;
+        let filter = QueryArchiveFilter {
+            begin_timestamp_millisecs: time_range.begin_timestamp_millisecs(),
+            end_timestamp_millisecs: time_range.end_timestamp_millisecs(),
+            job_creation_timestamp_millisecs: self.job_creation_timestamp_millisecs,
+        };
         let mut selected_archives = Vec::new();
-        for dataset in &datasets {
-            selected_archives.extend(self.fetch_archives(dataset).await?);
+        for (dataset, dataset_id) in dataset_ids {
+            selected_archives.extend(
+                metadata_tables
+                    .find_archives_for_query(&mut conn, dataset_id, &filter)
+                    .await?
+                    .into_iter()
+                    .map(|archive| ArchiveMetadata {
+                        id: archive.uuid,
+                        dataset: dataset.clone(),
+                        uncompressed_size: archive.num_uncompressed_bytes,
+                        end_timestamp: archive.end_timestamp_millisecs,
+                    }),
+            );
         }
         selected_archives.sort_by_key(|archive| Reverse(archive.end_timestamp));
 
@@ -609,93 +635,6 @@ impl ArchiveSelector<'_> {
         Ok(datasets)
     }
 
-    /// Checks that every requested dataset exists in the metadata database.
-    ///
-    /// `datasets` is assumed to be non-empty, since an empty set would make the generated `IN`
-    /// clause invalid SQL. [`Self::deduplicate_and_validate_requested_datasets`] guarantees this by
-    /// rejecting an empty request.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    ///
-    /// * [`Error::InvalidQueryJobConfig`] if any requested dataset doesn't exist.
-    /// * Forwards [`sqlx::query::QueryScalar::fetch_one`]'s return values on failure.
-    async fn ensure_all_required_datasets_exist(
-        &self,
-        datasets: &HashSet<DatasetName>,
-    ) -> Result<(), Error> {
-        let datasets_table = self.context.db_config.datasets_table_name();
-        let mut query_builder = sqlx::QueryBuilder::<sqlx::MySql>::new(format!(
-            "SELECT COUNT(*) FROM `{datasets_table}` WHERE CAST(`name` AS BINARY) IN ("
-        ));
-        let mut separated_datasets = query_builder.separated(", ");
-        for dataset in datasets {
-            separated_datasets.push_bind(dataset);
-        }
-        query_builder.push(")");
-
-        let num_existing_datasets: i64 = query_builder
-            .build_query_scalar()
-            .fetch_one(&self.context.db_pool)
-            .await?;
-        if usize::try_from(num_existing_datasets).ok() != Some(datasets.len()) {
-            return Err(Error::InvalidQueryJobConfig(
-                "one or more requested datasets don't exist".to_owned(),
-            ));
-        }
-
-        Ok(())
-    }
-
-    /// Selects archives from one dataset that overlap the query's time range and retention window.
-    ///
-    /// # Returns
-    ///
-    /// The selected archives on success.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    ///
-    /// * Forwards [`sqlx::query::QueryAs::fetch_all`]'s return values on failure.
-    async fn fetch_archives(&self, dataset: &DatasetName) -> Result<Vec<ArchiveMetadata>, Error> {
-        let archives_table = self.context.db_config.archives_table_name(dataset);
-        let mut query_builder = sqlx::QueryBuilder::<sqlx::MySql>::new(format!(
-            "SELECT `id`, `uncompressed_size`, `end_timestamp` FROM `{archives_table}` WHERE TRUE"
-        ));
-        let time_range = self.query_job_config.query.time_range;
-        if let Some(end_timestamp) = time_range.end_timestamp_millisecs() {
-            query_builder
-                .push(" AND `begin_timestamp` <= ")
-                .push_bind(end_timestamp);
-        }
-        if let Some(begin_timestamp) = time_range.begin_timestamp_millisecs() {
-            query_builder
-                .push(" AND `end_timestamp` >= ")
-                .push_bind(begin_timestamp);
-        }
-        if let Some(lower_bound) = self.archive_end_ts_lower_bound_millisecs {
-            query_builder
-                .push(" AND (`end_timestamp` >= ")
-                .push_bind(lower_bound)
-                .push(" OR `end_timestamp` = 0)");
-        }
-
-        Ok(query_builder
-            .build_query_as::<ArchiveRowProjection>()
-            .fetch_all(&self.context.db_pool)
-            .await?
-            .into_iter()
-            .map(|row| ArchiveMetadata {
-                id: row.id,
-                dataset: dataset.clone(),
-                uncompressed_size: row.uncompressed_size,
-                end_timestamp: row.end_timestamp,
-            })
-            .collect())
-    }
-
     /// Derives the execution policy of the query task that searches an archive whose uncompressed
     /// size is `archive_uncompressed_size` bytes.
     ///
@@ -739,18 +678,6 @@ impl ArchiveSelector<'_> {
     }
 }
 
-/// Columns projected from an archives table.
-///
-/// [`ArchiveMetadata`] can't be decoded directly from a row since the dataset is encoded in the
-/// archives table's name rather than stored in a column.
-#[derive(sqlx::FromRow)]
-struct ArchiveRowProjection {
-    id: ArchiveId,
-    #[sqlx(try_from = "i64")]
-    uncompressed_size: u64,
-    end_timestamp: i64,
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
@@ -761,6 +688,10 @@ mod tests {
     use std::time::Duration;
 
     use async_trait::async_trait;
+    use clp_metadata_db::DatasetId;
+    use clp_metadata_db::MetadataTables;
+    use clp_metadata_db::NewArchive;
+    use clp_metadata_db::NewDataset;
     use clp_rust_utils::clp_config::package::config::Database;
     use clp_rust_utils::dataset::DatasetName;
     use clp_rust_utils::job_config::Aggregation;
@@ -771,6 +702,7 @@ mod tests {
     use clp_rust_utils::job_config::ResultsCacheOutput;
     use clp_rust_utils::job_config::SearchQuery;
     use clp_rust_utils::job_config::TimeRange;
+    use clp_rust_utils::types::ArchiveId;
     use clp_rust_utils::types::PositiveI64;
     use clp_rust_utils::types::SessionToken;
     use clp_rust_utils::types::non_empty_string::ExpectedNonEmpty;
@@ -778,6 +710,7 @@ mod tests {
     use spider_core::task::ExecutionPolicy;
     use spider_core::types::id::JobId as SpiderJobId;
     use spider_core::types::id::ResourceGroupId;
+    use sqlx::MySqlPool;
     use sqlx::mysql::MySqlPoolOptions;
 
     use super::ArchiveSelectionOptions;
@@ -817,6 +750,220 @@ mod tests {
 
         async fn cancel_query_job(&self, _spider_job_id: SpiderJobId) -> Result<(), Error> {
             unreachable!("the test doesn't cancel query jobs")
+        }
+    }
+
+    /// A uniquely named database on the test server, used by a single test, with the shared
+    /// metadata tables.
+    struct TestDatabase {
+        pool: MySqlPool,
+        metadata_tables: MetadataTables,
+        name: String,
+    }
+
+    impl TestDatabase {
+        /// Factory function.
+        ///
+        /// Creates a uniquely named database on the server at `CLP_METADATA_DB_TEST_URL` (e.g.
+        /// `mysql://root:password@127.0.0.1:3306`), connects to it, and creates the shared
+        /// metadata tables.
+        ///
+        /// # Returns
+        ///
+        /// The newly created test database.
+        ///
+        /// # Panics
+        ///
+        /// Panics if:
+        ///
+        /// * `CLP_METADATA_DB_TEST_URL` isn't set or isn't a valid MySQL URL.
+        /// * The database or its tables can't be created, or the database can't be connected to.
+        async fn create() -> Self {
+            use std::str::FromStr;
+
+            use sqlx::mysql::MySqlConnectOptions;
+
+            let server_url = std::env::var("CLP_METADATA_DB_TEST_URL").expect(
+                "`CLP_METADATA_DB_TEST_URL` should be set to a MariaDB or MySQL server URL",
+            );
+            let server_options = MySqlConnectOptions::from_str(&server_url)
+                .expect("`CLP_METADATA_DB_TEST_URL` should be a valid MySQL URL");
+            let name = format!("query_coordinator_test_{}", uuid::Uuid::new_v4().simple());
+            let server_pool = MySqlPool::connect_with(server_options.clone())
+                .await
+                .expect("failed to connect to the test server");
+            sqlx::query(&format!("CREATE DATABASE `{name}`"))
+                .execute(&server_pool)
+                .await
+                .expect("failed to create the test database");
+            server_pool.close().await;
+
+            let pool = MySqlPool::connect_with(server_options.database(&name))
+                .await
+                .expect("failed to connect to the test database");
+            let metadata_tables = MetadataTables::new(&Database::default());
+            metadata_tables
+                .create_tables(&mut pool.acquire().await.expect("failed to get a connection"))
+                .await
+                .expect("failed to create the shared metadata tables");
+            Self {
+                pool,
+                metadata_tables,
+                name,
+            }
+        }
+
+        /// Creates a dataset.
+        ///
+        /// # Returns
+        ///
+        /// The created dataset's ID.
+        ///
+        /// # Panics
+        ///
+        /// Panics if the dataset can't be created.
+        async fn create_dataset(
+            &self,
+            name: &str,
+            retention_period_minutes: Option<NonZeroU32>,
+        ) -> DatasetId {
+            self.metadata_tables
+                .create_dataset(
+                    &mut self
+                        .pool
+                        .acquire()
+                        .await
+                        .expect("failed to get a connection"),
+                    &NewDataset {
+                        name: name.parse().expect("test dataset name should be valid"),
+                        archive_storage_path: format!("/var/data/archives/{name}"),
+                        retention_period_minutes,
+                    },
+                )
+                .await
+                .expect("failed to create the dataset")
+        }
+
+        /// Inserts an archive into a dataset for each `(begin timestamp, end timestamp,
+        /// uncompressed size)` in `archives`.
+        ///
+        /// # Returns
+        ///
+        /// The inserted archives' IDs, in the order of `archives`.
+        ///
+        /// # Panics
+        ///
+        /// Panics if the archives can't be inserted.
+        async fn insert_archives<const NUM_ARCHIVES: usize>(
+            &self,
+            dataset_id: DatasetId,
+            archives: [(i64, i64, u64); NUM_ARCHIVES],
+        ) -> [ArchiveId; NUM_ARCHIVES] {
+            let archives = archives.map(
+                |(begin_timestamp_millisecs, end_timestamp_millisecs, num_uncompressed_bytes)| {
+                    NewArchive {
+                        uuid: ArchiveId::from_bytes(*uuid::Uuid::new_v4().as_bytes()),
+                        begin_timestamp_millisecs,
+                        end_timestamp_millisecs,
+                        num_uncompressed_bytes,
+                        num_compressed_bytes: 1,
+                    }
+                },
+            );
+            self.metadata_tables
+                .insert_archives(
+                    &mut self
+                        .pool
+                        .acquire()
+                        .await
+                        .expect("failed to get a connection"),
+                    dataset_id,
+                    1,
+                    &archives,
+                )
+                .await
+                .expect("failed to insert the archives");
+            archives.map(|archive| archive.uuid)
+        }
+
+        /// # Returns
+        ///
+        /// The test database's current time, in milliseconds since the Unix epoch.
+        ///
+        /// # Panics
+        ///
+        /// Panics if the time can't be read.
+        async fn now_millisecs(&self) -> i64 {
+            sqlx::query_scalar("SELECT CAST(UNIX_TIMESTAMP(NOW(3)) * 1000 AS SIGNED)")
+                .fetch_one(&self.pool)
+                .await
+                .expect("failed to read the current time")
+        }
+
+        /// Plans a query job that searches `datasets` over `time_range`, created at
+        /// `job_creation_timestamp_millisecs`.
+        ///
+        /// # Returns
+        ///
+        /// The archives selected for the job's tasks on success.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if:
+        ///
+        /// * Forwards [`QueryJobHandle::plan`]'s return values on failure.
+        ///
+        /// # Panics
+        ///
+        /// Panics if the job handle can't be created.
+        async fn plan(
+            &self,
+            datasets: &[&str],
+            time_range: TimeRange,
+            job_creation_timestamp_millisecs: i64,
+        ) -> Result<Vec<ArchiveMetadata>, Error> {
+            let base_query_job_config = base_query_job_config();
+            let job_handle = QueryJobHandle::new(
+                Arc::new(QueryJobHandleContext {
+                    db_pool: self.pool.clone(),
+                    ..context(None)
+                }),
+                1,
+                UnreachableSubmitter,
+                ResourceGroupId::random(),
+                QueryJobConfig {
+                    datasets: datasets
+                        .iter()
+                        .map(|dataset| dataset.parse().expect("test dataset name should be valid"))
+                        .collect(),
+                    query: SearchQuery {
+                        time_range,
+                        ..base_query_job_config.query
+                    },
+                    ..base_query_job_config
+                },
+                job_creation_timestamp_millisecs,
+            )
+            .expect("the test job's config should be supported");
+            Ok(job_handle
+                .plan()
+                .await?
+                .into_iter()
+                .map(|(archive, _)| archive)
+                .collect())
+        }
+
+        /// Drops the test database and closes the connections to it.
+        ///
+        /// # Panics
+        ///
+        /// Panics if the database can't be dropped.
+        async fn drop_database(self) {
+            sqlx::query(&format!("DROP DATABASE `{}`", self.name))
+                .execute(&self.pool)
+                .await
+                .expect("failed to drop the test database");
+            self.pool.close().await;
         }
     }
 
@@ -890,7 +1037,7 @@ mod tests {
             ArchiveSelector {
                 context: &context,
                 query_job_config: &query_job_config,
-                archive_end_ts_lower_bound_millisecs: None,
+                job_creation_timestamp_millisecs: 0,
             }
             .deduplicate_and_validate_requested_datasets()
         };
@@ -911,6 +1058,75 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    #[ignore = "Requires a MariaDB or MySQL server; set CLP_METADATA_DB_TEST_URL"]
+    async fn plan_rejects_jobs_whose_datasets_do_not_all_exist() -> anyhow::Result<()> {
+        let test_db = TestDatabase::create().await;
+        test_db.create_dataset("logs", None).await;
+
+        let error = test_db
+            .plan(&["logs", "missing"], TimeRange::default(), 0)
+            .await
+            .expect_err("a job with a missing dataset should be rejected");
+        assert!(
+            matches!(
+                &error,
+                Error::InvalidQueryJobConfig(message) if message.contains("don't exist")
+            ),
+            "unexpected error: {error:?}"
+        );
+
+        test_db.drop_database().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires a MariaDB or MySQL server; set CLP_METADATA_DB_TEST_URL"]
+    async fn plan_selects_the_requested_datasets_archives_within_the_time_range_and_retention()
+    -> anyhow::Result<()> {
+        let test_db = TestDatabase::create().await;
+        let logs_id = test_db.create_dataset("logs", None).await;
+        let metrics_id = test_db.create_dataset("metrics", NonZeroU32::new(1)).await;
+        let other_id = test_db.create_dataset("other", None).await;
+        let [_, in_range, late_in_range, _] = test_db
+            .insert_archives(
+                logs_id,
+                [(10, 100, 1), (100, 200, 2), (300, 400, 3), (1000, 2000, 4)],
+            )
+            .await;
+        let [metrics_in_range] = test_db.insert_archives(metrics_id, [(150, 250, 5)]).await;
+        test_db.insert_archives(other_id, [(100, 200, 6)]).await;
+
+        let time_range = TimeRange::new(Some(150), Some(500))?;
+        let now = test_db.now_millisecs().await;
+        let archive = |id, dataset: &str, uncompressed_size, end_timestamp| ArchiveMetadata {
+            id,
+            dataset: dataset.parse().expect("test dataset name should be valid"),
+            uncompressed_size,
+            end_timestamp,
+        };
+        assert_eq!(
+            test_db.plan(&["logs", "metrics"], time_range, now).await?,
+            vec![
+                archive(late_in_range, "logs", 3, 400),
+                archive(metrics_in_range, "metrics", 5, 250),
+                archive(in_range, "logs", 2, 200),
+            ]
+        );
+        assert_eq!(
+            test_db
+                .plan(&["logs", "metrics"], time_range, now + 60 * 60 * 1000)
+                .await?,
+            vec![
+                archive(late_in_range, "logs", 3, 400),
+                archive(in_range, "logs", 2, 200),
+            ]
+        );
+
+        test_db.drop_database().await;
+        Ok(())
+    }
+
     /// # Returns
     ///
     /// A query job handle context whose database pool connects lazily, so tests that don't query
@@ -924,9 +1140,8 @@ mod tests {
             db_pool: MySqlPoolOptions::new()
                 .connect_lazy("mysql://localhost/clp-db")
                 .expect("the database URL should be valid"),
-            db_config: Database::default(),
+            metadata_tables: MetadataTables::new(&Database::default()),
             archive_selection_options: ArchiveSelectionOptions {
-                archive_retention_period_millisecs: None,
                 max_datasets_per_query,
             },
             spider_option: SpiderOption {
