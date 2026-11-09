@@ -1775,6 +1775,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "garbage-collector"
+version = "0.13.1-dev"
+dependencies = [
+ "anyhow",
+ "aws-sdk-s3",
+ "clap",
+ "clp-metadata-db",
+ "clp-rust-utils",
+ "non-empty-string",
+ "sqlx",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"

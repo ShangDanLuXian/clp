@@ -1,0 +1,28 @@
+[package]
+name = "garbage-collector"
+version = { workspace = true }
+edition = { workspace = true }
+
+[lib]
+name = "garbage_collector"
+path = "src/lib.rs"
+
+[[bin]]
+name = "archive-garbage-collector"
+path = "src/bin/archive_garbage_collector.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+aws-sdk-s3 = { workspace = true }
+clap = { workspace = true }
+clp-metadata-db = { workspace = true }
+clp-rust-utils = { workspace = true }
+non-empty-string = { workspace = true }
+sqlx = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["fs", "macros", "signal"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+uuid = { workspace = true }

@@ -42,6 +42,7 @@ pub struct Config {
     pub spider: Option<Spider>,
     pub compression_coordinator: Option<CompressionCoordinator>,
     pub query_coordinator: Option<QueryCoordinator>,
+    pub garbage_collector: GarbageCollector,
 }
 
 impl Default for Config {
@@ -62,6 +63,7 @@ impl Default for Config {
             spider: None,
             compression_coordinator: None,
             query_coordinator: None,
+            garbage_collector: GarbageCollector::default(),
         }
     }
 }
@@ -590,6 +592,42 @@ impl Default for Telemetry {
         Self {
             disable: false,
             endpoint: "https://telemetry.yscope.io".to_owned(),
+        }
+    }
+}
+
+/// Mirror of `clp_py_utils.clp_config.GarbageCollector`.
+///
+/// # NOTE
+///
+/// * This type is partially defined: unused fields are omitted and discarded through
+///   deserialization.
+/// * The default values must be kept in sync with the Python definition.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(default)]
+pub struct GarbageCollector {
+    pub sweep_interval: SweepInterval,
+}
+
+/// Mirror of `clp_py_utils.clp_config.SweepInterval`.
+///
+/// # NOTE
+///
+/// * This type is partially defined: unused fields are omitted and discarded through
+///   deserialization.
+/// * The default values must be kept in sync with the Python definition.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(default)]
+pub struct SweepInterval {
+    #[serde(rename = "archive")]
+    pub archive_minutes: NonZeroU64,
+}
+
+impl Default for SweepInterval {
+    fn default() -> Self {
+        Self {
+            archive_minutes: NonZeroU64::new(60)
+                .expect("default archive sweep interval should not be zero"),
         }
     }
 }
