@@ -115,14 +115,30 @@ pub async fn get_status(
 ///
 /// Returns an error if:
 ///
-/// * [`crate::Error::Sqlx`] if a database operation fails.
-///
-/// # Panics
-///
-/// Always panics, since this function isn't implemented yet.
+/// * Forwards [`sqlx::query::QueryScalar::fetch_one`]'s return values on failure.
 pub async fn get_earliest_creation_timestamp_millisecs(
-    _conn: &mut sqlx::MySqlConnection,
-    _statuses: &[QueryJobStatus],
+    conn: &mut sqlx::MySqlConnection,
+    statuses: &[QueryJobStatus],
 ) -> Result<Option<i64>, crate::Error> {
-    todo!("not implemented")
+    // The same conversion as the query coordinator's `job_creation_timestamp_millisecs`, so the two
+    // agree.
+    const QUERY_PREFIX: &str = formatcp!(
+        "SELECT MIN(CAST(UNIX_TIMESTAMP(`creation_time`) * 1000 AS SIGNED)) FROM \
+         `{QUERY_JOBS_TABLE_NAME}` WHERE `status` IN ("
+    );
+
+    if statuses.is_empty() {
+        return Ok(None);
+    }
+
+    let mut query_builder = sqlx::QueryBuilder::<sqlx::MySql>::new(QUERY_PREFIX);
+    let mut separated_statuses = query_builder.separated(", ");
+    for status in statuses {
+        separated_statuses.push_bind(*status);
+    }
+    query_builder.push(")");
+    Ok(query_builder
+        .build_query_scalar::<Option<i64>>()
+        .fetch_one(&mut *conn)
+        .await?)
 }
