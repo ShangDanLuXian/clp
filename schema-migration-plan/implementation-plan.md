@@ -10,11 +10,10 @@ Companion to `interface-plan.md`, which defines the tables, the deletion lifecyc
   features build on it afterward.
 * The current per-dataset path keeps working until the switch. Before it, new code merges without
   being wired in: new routes stay unregistered, new binaries stay undeployed, and no existing
-  runtime path changes. There is no feature flag; clp-s and clp-text are told apart by the
-  configured storage engine, as today.
-* Interface first: define `clp-metadata-db` with `todo!()` bodies and have Lin review the surface
-  before any SQL is written.
-* clp-text (`clp` storage engine) stays untouched throughout.
+  runtime path changes. There is no feature flag.
+* Interface first: define `clp-metadata-db` with `todo!()` bodies and settle the surface before any
+  SQL is written.
+* The C++ indexer's move to `clp_column_metadata` is a separate change outside this plan.
 
 ## Phase 1: Define the interface
 
@@ -22,14 +21,12 @@ Companion to `interface-plan.md`, which defines the tables, the deletion lifecyc
    operation in the interface plan, each body `todo!()`.
 2. Move `get_earliest_creation_timestamp_millisecs` in `clp_rust_utils::database::mysql::query_job`
    onto `&mut MySqlConnection`.
-3. Interface review with Lin. Nothing calls the crate yet.
 
-Exit: the crate compiles, the workspace checks pass, and Lin has approved the signatures and the
-deletion lifecycle.
+Nothing calls the crate yet. Exit: the crate compiles and the workspace checks pass.
 
 ## Phase 2: Implement `clp-metadata-db`
 
-One commit per module, in dependency order, each replacing reviewed `todo!()` bodies with SQL.
+One commit per module, in dependency order, each replacing `todo!()` bodies with SQL.
 
 | Step | Content | Supporting changes |
 |---|---|---|
@@ -50,7 +47,7 @@ Each step is self-contained and leaves runtime behavior unchanged.
 | Step | Content | Kept dormant by |
 |---|---|---|
 | 3.1 | `credentials::Database::from_env` | — (helper only) |
-| 3.2 | `db-table-creator` binary: parse the config, reject non-clp-s, create the tables, fail on an old-shaped `clp_datasets` | Not invoked by the package |
+| 3.2 | `db-table-creator` binary: parse the config, reject non-clp-s, create the tables, fail on an old-shaped `clp_datasets` | Not in Docker/compose/Helm |
 | 3.3 | `clp_rust_utils::s3::{delete_by_key_prefix, delete_by_keys}` (paginated, batched at 1000, per-object errors surfaced) | — (helper only) |
 | 3.4 | api-server dataset routes: `GET`/`POST /datasets`, `DELETE /datasets/{name}` (marks only) | `datasets::router()` not merged into `routes::from_app_state`; OpenAPI unchanged |
 | 3.5 | api-server archive routes: `GET /datasets/{name}/archives`, `POST /datasets/{name}/archives/delete` (by UUIDs or time range; marks only) | Same as 3.4 |
@@ -64,51 +61,32 @@ with the Python default (60 minutes).
 
 One change that wires everything at once.
 
-1. Merge `main`.
-2. Compression coordinator: replace `upsert_metadata_tables` with `get_dataset_id_by_name`; fail the
+1. Compression coordinator: replace `upsert_metadata_tables` with `get_dataset_id_by_name`; fail the
    job if the dataset is missing or marked. Pass the `DatasetId` to the compression and commit tasks
-   through the task inputs.
-3. Commit task: replace `register_dataset` and the per-dataset insert with `lock_live_dataset` and
+   through the task inputs, and from the compression task to the indexer.
+2. Commit task: replace `register_dataset` and the per-dataset insert with `lock_live_dataset` and
    `insert_archives` (with the job's `compression_job_id`), in the same transaction as the job's
    status update. Fail the job if the dataset is gone or marked.
-4. C++ indexer: take `--dataset-id`, write `clp_column_metadata`, drop `--create-table`. The
-   compression task passes the ID. Reviewed against the C++ guides.
-5. Query coordinator: `get_dataset_ids_by_names` + `find_archives_for_query`; drop the global
+3. Query coordinator: `get_dataset_ids_by_names` + `find_archives_for_query`; drop the global
    `archive_retention_period_millisecs`.
-6. api-server WebUI metadata routes: switch the clp-s branches to the library (interface plan
-   table); the clp-text branches stay.
-7. Register `datasets::router()`; regenerate `docs/src/_static/generated/api-server-openapi.json`
+4. api-server WebUI metadata routes: switch to the library (interface plan table).
+5. Register `datasets::router()`; regenerate `docs/src/_static/generated/api-server-openapi.json`
    and `components/webui/packages/api-client/openapi.json`.
-8. Remove the per-dataset table-name helpers and Rust's `archive_output.retention_period`.
-9. Deployment:
-   * `create-db-tables.py` runs `db-table-creator` for clp-s; clp-text keeps the Python
-     initializer.
+6. Remove the per-dataset table-name helpers and Rust's `archive_output.retention_period`.
+7. Deployment:
+   * Run the Rust `db-table-creator` directly, like the other Rust services, as a one-shot compose
+     service and Helm job that services using the metadata tables wait on. `create-db-tables.py`
+     stops creating metadata tables and keeps creating the orchestration tables.
    * Add the `archive-garbage-collector` compose service and Helm deployment, with the archive
      storage mount and AWS config it needs, and its environment in `controller.py`.
-   * The Python garbage collector skips archive GC for clp-s; search-result GC stays.
+   * The Python garbage collector stops running archive GC; search-result GC stays.
    * The Dockerfile copies the new binaries.
    * Remove `sbin/admin-tools/*.sh` (dataset/archive management moves to the API).
-10. Python: remove the clp-s branches of `initialize-clp-metadata-db.py` and the archive GC, the
-    native dataset and archive managers, and the clp-s `validate_datasets_exist` call in the
-    Python search script if the Rust search CLI (submitting through the api-server) hasn't
-    replaced it yet.
-11. Docs and scripts: datasets must be created with `POST /datasets` before compression, including
-    `default`; update the user docs, `compress.sh`, and the GC/retention docs (per-dataset
-    retention by creation time).
-
-Before the switch merges, validate end to end on FS and S3:
-
-* Create a dataset, compress, search (with and without a time range), check every WebUI metadata
-  route, and see the column metadata the indexer wrote.
-* Compressing to a missing dataset fails; compressing to a dataset marked mid-job fails at commit
-  and inserts nothing.
-* Deleting archives (by UUID and time range) and a dataset hides them immediately; the next GC sweep
-  removes the storage and the rows; the dataset name can then be recreated.
-* Kill the GC between storage cleanup and reclamation, and between marking and cleanup; the next
-  sweep finishes the job and deletes nothing unmarked.
-* Retention marks only archives older than the protected expiry base; a non-terminal query job holds
-  it back.
-* clp-text behaves as before.
+8. Python: remove `initialize-clp-metadata-db.py`'s clp-s table creation, the Python archive GC,
+   and the native dataset and archive managers.
+9. Docs and scripts: datasets must be created with `POST /datasets` before compression, including
+   `default`; update the user docs, `compress.sh`, and the GC/retention docs (per-dataset
+   retention by creation time).
 
 ## Phase 5: After the switch
 
@@ -119,26 +97,3 @@ Before the switch merges, validate end to end on FS and S3:
 * Authentication for the destructive routes.
 * Relaxing the dataset-name length limit derived from per-dataset table names (WebUI
   `SqlTableSuffix`, `DatasetName` validation).
-
-## Workflow for every step
-
-1. A subagent implements the step after reading Lin's Rust `coding-style.md` (C++ steps follow the
-   C++ guide).
-2. The diff is reviewed line by line against `coding-style.md` and `pr-review.md`.
-3. Every added test is mutation-checked: break the behavior, confirm the test fails, restore it.
-   Tests cover hand-written logic once, add no test-only seams, return `anyhow::Result`, and use
-   `expect` rather than `unwrap`.
-4. Run the checks with CI's pinned toolchain from the repo root: `cargo fmt --all -- --check`,
-   `cargo clippy --all-targets --all-features -- -D warnings`,
-   `cargo nextest run --workspace --all-features`, and `cargo fetch --locked` when Cargo files
-   change.
-5. SQL steps are validated against a local MariaDB; S3 steps against a local moto server.
-6. Pre-switch checkpoints: `datasets::router()` isn't registered, the generated OpenAPI documents
-   are unchanged, neither new binary is referenced by Docker/compose/Helm/Python, and no Python,
-   C++, compression-coordinator, query-coordinator or WebUI files changed.
-
-## Open process questions
-
-1. Database tests: CI has no MySQL service, so SQL is validated manually against MariaDB. Add a
-   MySQL/MariaDB service to the Rust CI and `sqlx`-backed tests, or keep manual validation?
-2. Delivery: one PR per phase, or one PR per step?

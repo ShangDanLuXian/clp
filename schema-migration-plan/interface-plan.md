@@ -15,22 +15,20 @@ Every operation on the shared tables goes through one Rust library, `clp-metadat
 (`components/clp-rust-libs/clp-metadata-db`): typed Rust functions with SQL underneath, written with
 `sqlx`. Each function takes an arbitrary `&mut sqlx::MySqlConnection`, so a caller can combine
 operations inside its own transaction (`&mut *tx`) or run them on a pooled connection. The library
-never creates pools or transactions. The one exception is the C++ indexer, which keeps writing
-column metadata itself until clp-s is rewritten in Rust (see "The indexer").
+never creates pools or transactions.
 
 ## Scope
 
-In scope, for the clp-s storage engine only:
+In scope:
 
 * The four shared tables: `clp_datasets`, `clp_archives`, `clp_long_span_archives`,
   `clp_column_metadata`.
 * Every current non-Celery reader and writer of the per-dataset tables: the compression coordinator,
-  the Spider compression and commit tasks, the C++ indexer, the query coordinator, the api-server
-  WebUI metadata routes, table creation, archive GC, and the dataset/archive management scripts.
+  the Spider compression and commit tasks, the query coordinator, the api-server WebUI metadata
+  routes, table creation, archive GC, and the dataset/archive management scripts.
 
 Out of scope:
 
-* clp-text (`clp` storage engine). Its tables and code paths stay as they are.
 * The Celery compression scheduler and workers, which the compression coordinator replaces.
 * The query/compression job tables.
 * Files tables and top-level-filtering tables.
@@ -216,8 +214,6 @@ Known limitations, unchanged from `main` and left for later:
   fail to read them.
 * Archives that an in-flight compression writes to a dataset after it's marked are never committed,
   so nothing references them. Like other ingestion-failure leftovers, they aren't reclaimed.
-* An indexer that finishes after its dataset is reclaimed can leave `clp_column_metadata` rows for
-  a dataset ID that no longer exists. IDs aren't reused, so nothing reads them.
 * Compression writes to the location derived from the current package config, while deletion uses
   `archive_storage_path` recorded at creation. They differ only if the config changes.
 * A recreated dataset name maps to the same storage location, which may still hold the unreferenced
@@ -512,9 +508,7 @@ pub async fn get_earliest_creation_timestamp_millisecs(
 ) -> Result<Option<i64>, crate::Error>;
 ```
 
-### api-server WebUI metadata routes (`webui_client/metadata.rs`, clp-s branches)
-
-The clp-text branches stay as they are.
+### api-server WebUI metadata routes (`webui_client/metadata.rs`)
 
 | Route | New interface |
 |---|---|
@@ -565,47 +559,17 @@ The query-speed route currently joins `query_jobs` / `query_tasks` with the arch
 statement. `query_tasks.archive_id` (text UUID) doesn't match `clp_archives.uuid` (bytes), so the
 route reads the job's archive IDs from the job tables, then calls `get_uncompressed_bytes_by_uuids`.
 
-### Python CLI dataset checks
-
-`validate_datasets_exist` reads the datasets table directly. For clp-s, no Python caller needs a
-replacement:
-
-| Script | Replacement |
-|---|---|
-| `search.sh` | The Rust search CLI, which submits through the api-server. The query coordinator already fails jobs whose datasets don't exist (`ensure_all_required_datasets_exist`), so the CLI doesn't check the DB itself |
-| `decompress.sh extract-json` | — (stream extraction is out of scope; only the Python query scheduler handles `EXTRACT_JSON` jobs, and the Spider deployment doesn't run it) |
-| `admin-tools/archive-manager.sh` | Removed at the switch; replaced by the archive API |
-
-## The indexer
-
-`components/core/src/clp_s/indexer` is a separate C++ executable that the compression task runs on
-each archive. It opens the archive, walks the schema tree, and `INSERT IGNORE`s `(name, type)` into
-the dataset's column-metadata table.
-
-Decision (Devin): keep the C++ indexer until clp-s is rewritten in Rust. At the switch:
-
-* It takes the dataset ID from the compression task instead of a dataset name, and writes
-  `(dataset_id, name, type)` into `clp_column_metadata`.
-* `--create-table` and the per-dataset table name go away.
-
-When the Rust rewrite replaces the indexer, it must reproduce the key escaping (`escape_key_name`)
-and the skipped node types (`StructuredArray`, `Object`, `Unknown`) exactly, and write through a new
-`insert_column_metadata`.
-
 ## Open questions
 
 1. **Existing deployments.** No data moves from the per-dataset tables. The new `clp_datasets` has
    the same name as the current one but a different shape, and `create_tables` leaves an existing
    table alone. Proposal: clp-s requires a fresh metadata database after the switch, and
    `db-table-creator` fails with a clear error if it finds the old `clp_datasets` shape.
-2. **Search CLI ordering.** If the Rust search CLI lands before the switch, the switch doesn't touch
-   the Python search script. Otherwise, the switch removes its clp-s `validate_datasets_exist` call
-   and relies on the query coordinator's check, so no Python reads the shared tables either way.
-3. **Manual deletion latency.** The API only marks, so storage is reclaimed on the next GC sweep
+2. **Manual deletion latency.** The API only marks, so storage is reclaimed on the next GC sweep
    (60 minutes by default). Is that acceptable, or should the API wake the GC?
-4. **Dataset ID width.** `SMALLINT UNSIGNED` allows 65,535 datasets over the lifetime of a database:
+3. **Dataset ID width.** `SMALLINT UNSIGNED` allows 65,535 datasets over the lifetime of a database:
    the auto-increment counter persists, and reclaiming rows doesn't reset it.
-5. **Default dataset.** The CLI scripts, WebUI compression page, and MCP server default to the
+4. **Default dataset.** The CLI scripts, WebUI compression page, and MCP server default to the
    `default` dataset, which must now be created first. Proposal: their errors say so, and creation
    stays an API call.
 
