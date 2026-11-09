@@ -1,3 +1,4 @@
+pub mod datasets;
 mod webui;
 
 use axum::Json;
@@ -12,6 +13,7 @@ use axum::response::sse::Event;
 use axum::response::sse::KeepAlive;
 use axum::routing::get;
 use clp_rust_utils::logs_input::LogsInputError;
+use clp_rust_utils::types::ArchiveId;
 use futures::Stream;
 use futures::StreamExt;
 use serde::Deserialize;
@@ -25,6 +27,7 @@ use utoipa::ToSchema;
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
+use crate::client::ArchiveIds;
 use crate::client::Client;
 use crate::client::ClientError;
 use crate::client::CompressionUsage;
@@ -357,6 +360,8 @@ enum HandlerError {
     InternalServer,
     #[error("Not found")]
     NotFound,
+    #[error("Archives not found")]
+    ArchivesNotFound(Vec<ArchiveId>),
     #[error("Conflict")]
     Conflict,
     #[error("Bad request: {0}")]
@@ -378,7 +383,10 @@ impl From<ClientError> for HandlerError {
             | ClientError::DatasetNotFound(_)
             | ClientError::LogEventNotFound { .. }
             | ClientError::LogsInput(LogsInputError::NotFound(_)) => Self::NotFound,
-            ClientError::QueryJobAlreadyTerminated(_) | ClientError::QueryResultsNotStored(_) => {
+            ClientError::ArchivesNotFound(archive_ids) => Self::ArchivesNotFound(archive_ids),
+            ClientError::QueryJobAlreadyTerminated(_)
+            | ClientError::QueryResultsNotStored(_)
+            | ClientError::MetadataDb(clp_metadata_db::Error::DatasetAlreadyExists(_)) => {
                 Self::Conflict
             }
             ClientError::InvalidInput(_)
@@ -402,6 +410,9 @@ impl From<ClientError> for HandlerError {
                 | LogsInputError::Unresolvable { .. },
             )
             | ClientError::CompressionJobIdOutOfRange(_)
+            | ClientError::MetadataDb(
+                clp_metadata_db::Error::IncompatibleTable { .. } | clp_metadata_db::Error::Sqlx(_),
+            )
             | ClientError::Telemetry(_) => Self::InternalServer,
         }
     }
@@ -412,6 +423,9 @@ impl IntoResponse for HandlerError {
     fn into_response(self) -> axum::response::Response {
         match self {
             Self::NotFound => StatusCode::NOT_FOUND.into_response(),
+            Self::ArchivesNotFound(archive_ids) => {
+                (StatusCode::NOT_FOUND, Json(ArchiveIds { archive_ids })).into_response()
+            }
             Self::Conflict => StatusCode::CONFLICT.into_response(),
             Self::InternalServer => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
             Self::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg).into_response(),

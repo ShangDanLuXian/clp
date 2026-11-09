@@ -63,6 +63,12 @@ pub enum ClientError {
     #[error("Dataset not found: {0}")]
     DatasetNotFound(DatasetName),
 
+    #[error("{} of the requested archives aren't live archives of the dataset", .0.len())]
+    ArchivesNotFound(Vec<ArchiveId>),
+
+    #[error(transparent)]
+    MetadataDb(#[from] clp_metadata_db::Error),
+
     #[error(transparent)]
     LogsInput(#[from] LogsInputError),
 

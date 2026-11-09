@@ -36,6 +36,8 @@ fn log_unexpected_error(operation: &str, error: &ClientError) {
         | ClientError::QueryResultsNotStored(_)
         | ClientError::InvalidInput(_)
         | ClientError::LogEventNotFound { .. }
+        | ClientError::ArchivesNotFound(_)
+        | ClientError::MetadataDb(clp_metadata_db::Error::DatasetAlreadyExists(_))
         | ClientError::LogsInput(
             LogsInputError::NotFound(_) | LogsInputError::OutsideMountPoint(_),
         ) => {}
@@ -56,6 +58,9 @@ fn log_unexpected_error(operation: &str, error: &ClientError) {
             | LogsInputError::Unresolvable { .. },
         )
         | ClientError::CompressionJobIdOutOfRange(_)
+        | ClientError::MetadataDb(
+            clp_metadata_db::Error::IncompatibleTable { .. } | clp_metadata_db::Error::Sqlx(_),
+        )
         | ClientError::Telemetry(_) => {
             tracing::error!(operation, error = ? error, "WebUI API request failed.");
         }

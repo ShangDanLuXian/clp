@@ -105,6 +105,7 @@ dependencies = [
  "axum",
  "chrono",
  "clap",
+ "clp-metadata-db",
  "clp-rust-utils",
  "futures",
  "http-body-util",
@@ -126,6 +127,7 @@ dependencies = [
  "tracing",
  "utoipa",
  "utoipa-axum",
+ "uuid",
 ]
 
 [[package]]
