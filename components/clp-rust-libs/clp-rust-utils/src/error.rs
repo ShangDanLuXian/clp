@@ -13,6 +13,12 @@ pub enum Error {
     #[error("`std::io::Error`: {0}")]
     Io(#[from] std::io::Error),
 
+    #[error("failed to read the `{name}` environment variable: {source}")]
+    EnvVar {
+        name: &'static str,
+        source: std::env::VarError,
+    },
+
     #[error("`zstd`: {0}")]
     Zstd(#[source] std::io::Error),
 
@@ -24,6 +30,12 @@ pub enum Error {
 
     #[error("unsupported S3 endpoint: {0}")]
     UnsupportedS3Endpoint(String),
+
+    #[error("`aws_sdk_s3::Error`: {}", aws_sdk_s3::error::DisplayErrorContext(.0))]
+    S3(Box<aws_sdk_s3::Error>),
+
+    #[error("failed to delete S3 objects: {0:?}")]
+    S3ObjectsNotDeleted(Vec<aws_sdk_s3::types::Error>),
 
     #[error(transparent)]
     TelemetryExporterBuildError(#[from] opentelemetry_otlp::ExporterBuildError),

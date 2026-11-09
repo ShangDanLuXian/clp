@@ -113,8 +113,14 @@ impl From<clp_rust_utils::Error> for ClientError {
             | clp_rust_utils::Error::MsgpackDecode(_)
             | clp_rust_utils::Error::SerdeYaml(_)
             | clp_rust_utils::Error::Zstd(_) => Self::MalformedData,
-            clp_rust_utils::Error::UnsupportedS3Endpoint(_) => {
+            clp_rust_utils::Error::EnvVar { .. }
+            | clp_rust_utils::Error::UnsupportedS3Endpoint(_) => {
                 Self::InvalidInput(value.to_string())
+            }
+            clp_rust_utils::Error::S3(_) | clp_rust_utils::Error::S3ObjectsNotDeleted(_) => {
+                Self::Aws {
+                    description: value.to_string(),
+                }
             }
             clp_rust_utils::Error::Io(error) => error.into(),
             clp_rust_utils::Error::Sqlx(error) => error.into(),
