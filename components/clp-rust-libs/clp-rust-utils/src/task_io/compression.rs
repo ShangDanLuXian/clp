@@ -5,6 +5,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::clp_config::AwsAuthentication;
+use crate::dataset::DatasetId;
 use crate::dataset::DatasetName;
 use crate::logs_input::LogsInputPath;
 use crate::types::ArchiveId;
@@ -16,6 +17,13 @@ pub struct ClpSCompressionOption {
     pub compression_level: u8,
     pub timestamp_key: Option<String>,
     pub unstructured: bool,
+}
+
+/// The dataset that a compression job compresses into.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Dataset {
+    pub id: DatasetId,
+    pub name: DatasetName,
 }
 
 /// A task manifest containing S3 connection settings and object keys.
@@ -37,7 +45,7 @@ pub struct FsInputSource {
 /// Output of a compression task.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompressionTaskOutput {
-    pub dataset: DatasetName,
+    pub dataset_id: DatasetId,
     pub archives: Vec<ArchiveMetadata>,
 }
 
@@ -47,6 +55,6 @@ pub struct ArchiveMetadata {
     pub id: ArchiveId,
     pub begin_timestamp: i64,
     pub end_timestamp: i64,
-    pub size: i64,
-    pub uncompressed_size: i64,
+    pub size: u64,
+    pub uncompressed_size: u64,
 }

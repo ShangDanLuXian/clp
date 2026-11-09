@@ -2,6 +2,7 @@
 
 use std::num::NonZeroU32;
 
+use clp_rust_utils::dataset::DatasetId;
 use clp_rust_utils::dataset::DatasetName;
 use clp_rust_utils::types::ArchiveId;
 use clp_rust_utils::types::UuidBytes;
@@ -10,11 +11,6 @@ use sqlx::encode::IsNull;
 use sqlx::error::BoxDynError;
 use sqlx::mysql::MySqlTypeInfo;
 use sqlx::mysql::MySqlValueRef;
-
-/// A dataset's ID in the datasets table.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, sqlx::Type)]
-#[sqlx(transparent)]
-pub struct DatasetId(pub(crate) u16);
 
 /// An archive's row ID in the archives table, distinct from its UUID ([`ArchiveId`]).
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, sqlx::Type)]

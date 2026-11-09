@@ -19,6 +19,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use clp_metadata_db::MetadataTables;
 use clp_rust_utils::clp_config::package::config::CompressionCoordinator as CoordinatorConfig;
 use clp_rust_utils::clp_config::package::config::Database as DatabaseConfig;
 use clp_rust_utils::clp_config::package::config::Spider as SpiderConfig;
@@ -84,7 +85,7 @@ impl Coordinator {
         coordinator_config: &CoordinatorConfig,
         spider_config: &SpiderConfig,
         db_pool: sqlx::MySqlPool,
-        db_config: DatabaseConfig,
+        db_config: &DatabaseConfig,
     ) -> Result<(Self, CancellationToken), Error> {
         let max_concurrent_jobs = coordinator_config.max_concurrent_jobs.get();
         if max_concurrent_jobs > Semaphore::MAX_PERMITS {
@@ -146,7 +147,7 @@ impl Coordinator {
             spider_client,
             context: Arc::new(CompressionJobHandleContext {
                 db_pool,
-                db_config,
+                metadata_tables: MetadataTables::new(db_config),
                 spider_option,
             }),
             is_first_fetch: true,

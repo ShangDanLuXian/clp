@@ -78,7 +78,7 @@ async fn main() -> anyhow::Result<()> {
             &coordinator_config,
             &spider_config,
             db_pool,
-            config.database,
+            &config.database,
         )
         .await?;
 

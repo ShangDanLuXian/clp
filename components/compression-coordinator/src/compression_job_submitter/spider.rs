@@ -3,9 +3,9 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
-use clp_rust_utils::dataset::DatasetName;
 use clp_rust_utils::job_config::CompressionJobId;
 use clp_rust_utils::task_io::compression::ClpSCompressionOption;
+use clp_rust_utils::task_io::compression::Dataset;
 use spider_client::SpiderClient;
 use spider_client::error::ClientError;
 use spider_core::job::JobState;
@@ -39,7 +39,7 @@ impl CompressionJobSubmitter for SpiderClient {
         compression_job_id: CompressionJobId,
         resource_group_id: ResourceGroupId,
         clp_s_option: ClpSCompressionOption,
-        dataset: DatasetName,
+        dataset: Dataset,
         input_sources: Vec<(ManifestType, ExecutionPolicy)>,
         commit_task_execution_policy: ExecutionPolicy,
     ) -> Result<JobId, Error> {
@@ -131,7 +131,7 @@ impl CompressionJobSubmitter for SpiderClient {
 /// * Forwards [`TaskGraphInputBuilder::append_task_input`]'s return values on failure.
 fn build_compression_task_graph<ManifestType: CompressionManifest>(
     clp_s_option: &ClpSCompressionOption,
-    dataset: &DatasetName,
+    dataset: &Dataset,
     input_sources: Vec<(ManifestType, ExecutionPolicy)>,
     commit_task_execution_policy: ExecutionPolicy,
 ) -> Result<(TaskGraph, TaskGraphInput), Error> {
@@ -161,7 +161,7 @@ fn build_compression_task_graph<ManifestType: CompressionManifest>(
                 DataTypeDescriptor::Value(ValueTypeDescriptor::struct_from_name(
                     "ClpSCompressionOption",
                 )?),
-                DataTypeDescriptor::Value(ValueTypeDescriptor::struct_from_name("DatasetName")?),
+                DataTypeDescriptor::Value(ValueTypeDescriptor::struct_from_name("Dataset")?),
                 DataTypeDescriptor::Value(ValueTypeDescriptor::struct_from_name(
                     ManifestType::TYPE_NAME,
                 )?),
@@ -184,6 +184,8 @@ mod tests {
     use std::fmt::Debug;
 
     use clp_rust_utils::clp_config::AwsAuthentication;
+    use clp_rust_utils::dataset::DatasetId;
+    use clp_rust_utils::dataset::DatasetName;
     use clp_rust_utils::task_io::compression::FsInputSource;
     use clp_rust_utils::task_io::compression::S3InputSource;
     use clp_rust_utils::types::non_empty_string::ExpectedNonEmpty;
@@ -226,7 +228,10 @@ mod tests {
             unstructured: false,
         };
 
-        let dataset = DatasetName::default();
+        let dataset = Dataset {
+            id: DatasetId::new(7),
+            name: DatasetName::default(),
+        };
         let policy = ExecutionPolicy {
             max_num_retry: 2,
             ..ExecutionPolicy::default()
@@ -252,7 +257,7 @@ mod tests {
             }
         );
         assert_eq!(task.get_execution_policy(), &policy);
-        for (index, expected_type) in ["ClpSCompressionOption", "DatasetName", type_name]
+        for (index, expected_type) in ["ClpSCompressionOption", "Dataset", type_name]
             .into_iter()
             .enumerate()
         {
@@ -299,7 +304,7 @@ mod tests {
             rmp_serde::from_slice::<ClpSCompressionOption>(payloads[0])?,
             OPTIONS
         );
-        assert_eq!(rmp_serde::from_slice::<DatasetName>(payloads[1])?, dataset);
+        assert_eq!(rmp_serde::from_slice::<Dataset>(payloads[1])?, dataset);
         assert_eq!(
             &rmp_serde::from_slice::<ManifestType>(payloads[2])?,
             manifest

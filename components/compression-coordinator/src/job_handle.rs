@@ -4,7 +4,8 @@ use std::num::NonZeroU64;
 use std::sync::Arc;
 use std::time::Duration;
 
-use clp_rust_utils::clp_config::package::config::Database;
+use clp_metadata_db::MetadataTables;
+use clp_rust_utils::dataset::DatasetId;
 use clp_rust_utils::dataset::DatasetName;
 use clp_rust_utils::job_config::COMPRESSION_JOBS_TABLE_NAME;
 use clp_rust_utils::job_config::ClpIoConfig;
@@ -17,6 +18,7 @@ use clp_rust_utils::logs_input::default_mount_point;
 use clp_rust_utils::s3::ObjectMetadata;
 use clp_rust_utils::s3::S3ObjectMetadataId;
 use clp_rust_utils::task_io::compression::ClpSCompressionOption;
+use clp_rust_utils::task_io::compression::Dataset;
 use clp_rust_utils::task_io::compression::FsInputSource;
 use clp_rust_utils::task_io::compression::S3InputSource;
 use const_format::formatcp;
@@ -46,7 +48,7 @@ pub struct SpiderOption {
 /// Resources and execution options shared by compression job handles.
 pub struct CompressionJobHandleContext {
     pub db_pool: MySqlPool,
-    pub db_config: Database,
+    pub metadata_tables: MetadataTables,
     pub spider_option: SpiderOption,
 }
 
@@ -125,9 +127,9 @@ impl<SubmitterType: CompressionJobSubmitter> CompressionJobHandle<SubmitterType>
 
     /// Submits the compression job to Spider and drives it to completion.
     ///
-    /// This method prepares the compression tasks' inputs, ensures the dataset's metadata tables
-    /// exist, submits the job, persists the Spider job ID it was assigned, and then waits for the
-    /// job to reach a terminal state. On any failure, the compression job is marked as
+    /// This method prepares the compression tasks' inputs, looks up the ID of the job's dataset,
+    /// submits the job, persists the Spider job ID it was assigned, and then waits for the job to
+    /// reach a terminal state. On any failure, the compression job is marked as
     /// [`CompressionJobStatus::Failed`] before the error is returned.
     ///
     /// # Errors
@@ -216,7 +218,7 @@ impl<SubmitterType: CompressionJobSubmitter> CompressionJobHandle<SubmitterType>
     ///
     /// Returns an error if:
     ///
-    /// * Forwards [`Self::upsert_metadata_tables`]'s return values on failure.
+    /// * Forwards [`Self::get_dataset_id`]'s return values on failure.
     /// * Forwards [`CompressionJobSubmitter::submit_compression_job`]'s return values on failure.
     /// * Forwards [`Self::persist_spider_job_id`]'s return values on failure.
     async fn submit<ManifestType: CompressionManifest>(
@@ -225,7 +227,10 @@ impl<SubmitterType: CompressionJobSubmitter> CompressionJobHandle<SubmitterType>
     ) -> Result<SpiderJobId, Error> {
         let num_tasks = input_sources.len();
 
-        self.upsert_metadata_tables().await?;
+        let dataset = Dataset {
+            id: self.get_dataset_id().await?,
+            name: self.dataset.clone(),
+        };
 
         let spider_job_id = self
             .job_submitter
@@ -233,7 +238,7 @@ impl<SubmitterType: CompressionJobSubmitter> CompressionJobHandle<SubmitterType>
                 self.compression_job_id,
                 self.resource_group_id,
                 self.clp_s_compression_option.clone(),
-                self.dataset.clone(),
+                dataset,
                 input_sources,
                 self.context
                     .spider_option
@@ -528,62 +533,26 @@ impl<SubmitterType: CompressionJobSubmitter> CompressionJobHandle<SubmitterType>
         }
     }
 
-    /// Ensures that the required metadata tables exist for the configured dataset.
+    /// Looks up the ID of the job's dataset.
     ///
-    /// This method creates the following tables in the CLP database if they do not already exist:
+    /// # Returns
     ///
-    /// * The archive metadata table.
-    /// * The column metadata table.
+    /// The ID of the job's dataset on success.
     ///
     /// # Errors
     ///
     /// Returns an error if:
     ///
-    /// * [`Error::MetadataTableCreation`] if either table cannot be created.
-    async fn upsert_metadata_tables(&self) -> Result<(), Error> {
-        let archives_table = self.context.db_config.archives_table_name(&self.dataset);
-        let column_metadata_table = self
-            .context
-            .db_config
-            .column_metadata_table_name(&self.dataset);
-
-        sqlx::query(&format!(
-            "CREATE TABLE IF NOT EXISTS `{archives_table}` (
-                `pagination_id` BIGINT unsigned NOT NULL AUTO_INCREMENT,
-                `id` VARCHAR(64) NOT NULL,
-                `begin_timestamp` BIGINT NOT NULL,
-                `end_timestamp` BIGINT NOT NULL,
-                `uncompressed_size` BIGINT NOT NULL,
-                `size` BIGINT NOT NULL,
-                `creator_id` VARCHAR(64) NOT NULL,
-                `creation_ix` INT NOT NULL,
-                KEY `archives_creation_order` (`creator_id`,`creation_ix`) USING BTREE,
-                UNIQUE KEY `archive_id` (`id`) USING BTREE,
-                PRIMARY KEY (`pagination_id`)
-            )"
-        ))
-        .execute(&self.context.db_pool)
-        .await
-        .map_err(|source| Error::MetadataTableCreation {
-            table: archives_table,
-            source,
-        })?;
-
-        sqlx::query(&format!(
-            "CREATE TABLE IF NOT EXISTS `{column_metadata_table}` (
-                `name` VARCHAR(512) NOT NULL,
-                `type` TINYINT NOT NULL,
-                PRIMARY KEY (`name`, `type`)
-            )"
-        ))
-        .execute(&self.context.db_pool)
-        .await
-        .map_err(|source| Error::MetadataTableCreation {
-            table: column_metadata_table,
-            source,
-        })?;
-
-        Ok(())
+    /// * [`Error::DatasetNotFound`] if the dataset doesn't exist or is marked as deleted.
+    /// * Forwards [`sqlx::Pool::acquire`]'s return values on failure.
+    /// * Forwards [`MetadataTables::get_dataset_id_by_name`]'s return values on failure.
+    async fn get_dataset_id(&self) -> Result<DatasetId, Error> {
+        let mut conn = self.context.db_pool.acquire().await?;
+        self.context
+            .metadata_tables
+            .get_dataset_id_by_name(&mut conn, &self.dataset)
+            .await?
+            .ok_or_else(|| Error::DatasetNotFound(self.dataset.clone()))
     }
 
     /// Persists the Spider job ID and marks the compression job as running.
@@ -821,6 +790,8 @@ fn compression_timeout_policy(
 
 #[cfg(test)]
 mod tests {
+    use clp_rust_utils::clp_config::package::config::Database;
+    use clp_rust_utils::job_config::ingestion::JobId as IngestionJobId;
     use clp_rust_utils::logs_input::LogsInputPath;
     use spider_core::task::TaskGraph;
     use spider_core::task::TdlContext;
@@ -842,7 +813,7 @@ mod tests {
             _compression_job_id: CompressionJobId,
             _resource_group_id: ResourceGroupId,
             _clp_s_option: ClpSCompressionOption,
-            _dataset: DatasetName,
+            _dataset: Dataset,
             _input_sources: Vec<(ManifestType, ExecutionPolicy)>,
             _commit_task_execution_policy: ExecutionPolicy,
         ) -> Result<SpiderJobId, Error> {
@@ -875,7 +846,7 @@ mod tests {
                 Arc::new(CompressionJobHandleContext {
                     db_pool: MySqlPool::connect_lazy("mysql://localhost/clp-db")
                         .expect("the fixture database URL is valid"),
-                    db_config: Database::default(),
+                    metadata_tables: MetadataTables::new(&Database::default()),
                     spider_option: SpiderOption {
                         compression_task_max_retry: TEST_MAX_RETRY,
                         commit_task_execution_policy: ExecutionPolicy::default(),
@@ -1006,5 +977,363 @@ mod tests {
             None,
         )?;
         Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires a MariaDB or MySQL server; set CLP_METADATA_DB_TEST_URL"]
+    async fn run_submits_the_id_of_the_live_dataset() -> anyhow::Result<()> {
+        let test_db = TestDatabase::create().await;
+        let dataset_id = test_db.create_dataset().await;
+        let job_id = test_db.insert_job().await;
+        let submitter = RecordingSubmitter::default();
+
+        test_db
+            .create_job_handle(job_id, submitter.clone())
+            .run()
+            .await?;
+
+        assert_eq!(
+            submitter.submitted_datasets(),
+            vec![Dataset {
+                id: dataset_id,
+                name: TestDatabase::dataset(),
+            }]
+        );
+        assert_eq!(
+            test_db.get_job_status(job_id).await,
+            (CompressionJobStatus::Running, String::new())
+        );
+
+        test_db.drop_database().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires a MariaDB or MySQL server; set CLP_METADATA_DB_TEST_URL"]
+    async fn run_fails_the_job_without_submitting_it_if_the_dataset_is_missing()
+    -> anyhow::Result<()> {
+        let test_db = TestDatabase::create().await;
+        let job_id = test_db.insert_job().await;
+        let submitter = RecordingSubmitter::default();
+
+        let error = test_db
+            .create_job_handle(job_id, submitter.clone())
+            .run()
+            .await
+            .expect_err("a job whose dataset is missing must fail");
+        let Error::DatasetNotFound(dataset) = &error else {
+            panic!("unexpected error: {error}");
+        };
+        assert_eq!(*dataset, TestDatabase::dataset());
+
+        assert_eq!(submitter.submitted_datasets(), vec![]);
+        assert_eq!(
+            test_db.get_job_status(job_id).await,
+            (
+                CompressionJobStatus::Failed,
+                format!("Compression job failed: {error}")
+            )
+        );
+
+        test_db.drop_database().await;
+        Ok(())
+    }
+
+    /// A submitter that records the dataset of every submitted job, whose jobs succeed.
+    #[derive(Clone, Default)]
+    struct RecordingSubmitter {
+        submitted_datasets: Arc<std::sync::Mutex<Vec<Dataset>>>,
+    }
+
+    impl RecordingSubmitter {
+        /// # Returns
+        ///
+        /// The datasets of the submitted jobs, in submission order.
+        ///
+        /// # Panics
+        ///
+        /// Panics if the recorded datasets' lock is poisoned.
+        fn submitted_datasets(&self) -> Vec<Dataset> {
+            self.submitted_datasets
+                .lock()
+                .expect("the recorded datasets' lock should not be poisoned")
+                .clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl CompressionJobSubmitter for RecordingSubmitter {
+        async fn submit_compression_job<ManifestType: CompressionManifest>(
+            &self,
+            _compression_job_id: CompressionJobId,
+            _resource_group_id: ResourceGroupId,
+            _clp_s_option: ClpSCompressionOption,
+            dataset: Dataset,
+            _input_sources: Vec<(ManifestType, ExecutionPolicy)>,
+            _commit_task_execution_policy: ExecutionPolicy,
+        ) -> Result<SpiderJobId, Error> {
+            self.submitted_datasets
+                .lock()
+                .expect("the recorded datasets' lock should not be poisoned")
+                .push(dataset);
+            Ok(SpiderJobId::random())
+        }
+
+        async fn run_compression_job_to_completion(
+            &self,
+            _spider_job_id: SpiderJobId,
+            _initial_poll_backoff: Duration,
+            _max_poll_backoff: Duration,
+        ) -> Result<CompressionJobOutcome, Error> {
+            Ok(CompressionJobOutcome::Succeeded)
+        }
+    }
+
+    /// A uniquely named database on the test server, used by a single test, with the shared
+    /// metadata tables, the columns of the compression jobs table that job handles use, and the
+    /// ingested S3 object metadata of a single object.
+    struct TestDatabase {
+        pool: MySqlPool,
+        metadata_tables: MetadataTables,
+        name: String,
+    }
+
+    impl TestDatabase {
+        const INGESTION_JOB_ID: IngestionJobId = 1;
+        const S3_OBJECT_METADATA_ID: S3ObjectMetadataId = 1;
+
+        /// Factory function.
+        ///
+        /// Creates a uniquely named database on the server at `CLP_METADATA_DB_TEST_URL` (e.g.
+        /// `mysql://root:password@127.0.0.1:3306`), connects to it, and creates its tables.
+        ///
+        /// # Returns
+        ///
+        /// The newly created test database.
+        ///
+        /// # Panics
+        ///
+        /// Panics if:
+        ///
+        /// * `CLP_METADATA_DB_TEST_URL` isn't set or isn't a valid MySQL URL.
+        /// * The database or its tables can't be created, or the database can't be connected to.
+        async fn create() -> Self {
+            use std::str::FromStr;
+
+            use sqlx::mysql::MySqlConnectOptions;
+
+            let server_url = std::env::var("CLP_METADATA_DB_TEST_URL").expect(
+                "`CLP_METADATA_DB_TEST_URL` should be set to a MariaDB or MySQL server URL",
+            );
+            let server_options = MySqlConnectOptions::from_str(&server_url)
+                .expect("`CLP_METADATA_DB_TEST_URL` should be a valid MySQL URL");
+            let name = format!(
+                "compression_coordinator_test_{}",
+                uuid::Uuid::new_v4().simple()
+            );
+            let server_pool = MySqlPool::connect_with(server_options.clone())
+                .await
+                .expect("failed to connect to the test server");
+            sqlx::query(&format!("CREATE DATABASE `{name}`"))
+                .execute(&server_pool)
+                .await
+                .expect("failed to create the test database");
+            server_pool.close().await;
+
+            let pool = MySqlPool::connect_with(server_options.database(&name))
+                .await
+                .expect("failed to connect to the test database");
+            let metadata_tables = MetadataTables::new(&Database::default());
+            metadata_tables
+                .create_tables(&mut pool.acquire().await.expect("failed to get a connection"))
+                .await
+                .expect("failed to create the shared metadata tables");
+            for query in [
+                format!(
+                    r"
+CREATE TABLE `{COMPRESSION_JOBS_TABLE_NAME}` (
+    `id` INT NOT NULL AUTO_INCREMENT,
+    `status` INT NOT NULL,
+    `status_msg` VARCHAR(512) NOT NULL DEFAULT '',
+    `start_time` DATETIME(3) NULL DEFAULT NULL,
+    `num_tasks` INT NOT NULL DEFAULT '0',
+    `spider_id` BIGINT UNSIGNED NULL DEFAULT NULL,
+    `dispatch_time` DATETIME NULL DEFAULT NULL,
+    PRIMARY KEY (`id`)
+)"
+                ),
+                format!(
+                    r"
+CREATE TABLE `{INGESTED_S3_OBJECT_METADATA_TABLE_NAME}` (
+    `id` BIGINT UNSIGNED NOT NULL,
+    `ingestion_job_id` BIGINT UNSIGNED NOT NULL,
+    `bucket` VARCHAR(64) NOT NULL,
+    `key` VARCHAR(1024) NOT NULL,
+    `size` BIGINT UNSIGNED NOT NULL,
+    PRIMARY KEY (`id`)
+)"
+                ),
+            ] {
+                sqlx::query(&query)
+                    .execute(&pool)
+                    .await
+                    .expect("failed to create a table");
+            }
+            sqlx::query(&format!(
+                "INSERT INTO `{INGESTED_S3_OBJECT_METADATA_TABLE_NAME}` (`id`, \
+                 `ingestion_job_id`, `bucket`, `key`, `size`) VALUES (?, ?, 'logs', \
+                 'logs/a.json', 100)"
+            ))
+            .bind(Self::S3_OBJECT_METADATA_ID)
+            .bind(Self::INGESTION_JOB_ID)
+            .execute(&pool)
+            .await
+            .expect("failed to insert the S3 object metadata");
+
+            Self {
+                pool,
+                metadata_tables,
+                name,
+            }
+        }
+
+        /// # Returns
+        ///
+        /// The name of the dataset that the test jobs compress into.
+        fn dataset() -> DatasetName {
+            "logs".parse().expect("test dataset name should be valid")
+        }
+
+        /// Creates the dataset that the test jobs compress into.
+        ///
+        /// # Returns
+        ///
+        /// The created dataset's ID.
+        ///
+        /// # Panics
+        ///
+        /// Panics if the dataset can't be created.
+        async fn create_dataset(&self) -> DatasetId {
+            self.metadata_tables
+                .create_dataset(
+                    &mut self
+                        .pool
+                        .acquire()
+                        .await
+                        .expect("failed to get a connection"),
+                    &clp_metadata_db::NewDataset {
+                        name: Self::dataset(),
+                        archive_storage_path: "/var/data/archives/logs".to_owned(),
+                        retention_period_minutes: None,
+                    },
+                )
+                .await
+                .expect("failed to create the dataset")
+        }
+
+        /// Inserts a pending compression job.
+        ///
+        /// # Returns
+        ///
+        /// The inserted job's ID.
+        ///
+        /// # Panics
+        ///
+        /// Panics if the job can't be inserted.
+        async fn insert_job(&self) -> CompressionJobId {
+            let id = sqlx::query(formatcp!(
+                "INSERT INTO `{COMPRESSION_JOBS_TABLE_NAME}` (`status`) VALUES (?)"
+            ))
+            .bind(CompressionJobStatus::Pending)
+            .execute(&self.pool)
+            .await
+            .expect("failed to insert the compression job")
+            .last_insert_id();
+            CompressionJobId::try_from(id).expect("the test job's ID should fit in `i32`")
+        }
+
+        /// # Returns
+        ///
+        /// A handle for the given job that compresses the test S3 object into the test dataset.
+        ///
+        /// # Panics
+        ///
+        /// Panics if the handle can't be created.
+        fn create_job_handle(
+            &self,
+            job_id: CompressionJobId,
+            submitter: RecordingSubmitter,
+        ) -> CompressionJobHandle<RecordingSubmitter> {
+            use clp_rust_utils::clp_config::AwsAuthentication;
+            use clp_rust_utils::clp_config::S3Config;
+            use clp_rust_utils::clp_config::package::config::ArchiveOutput;
+            use clp_rust_utils::types::non_empty_string::ExpectedNonEmpty;
+
+            CompressionJobHandle::new(
+                Arc::new(CompressionJobHandleContext {
+                    db_pool: self.pool.clone(),
+                    metadata_tables: self.metadata_tables.clone(),
+                    spider_option: SpiderOption {
+                        compression_task_max_retry: TEST_MAX_RETRY,
+                        commit_task_execution_policy: ExecutionPolicy::default(),
+                        initial_poll_backoff: Duration::from_secs(1),
+                        max_poll_backoff: Duration::from_secs(1),
+                    },
+                }),
+                job_id,
+                submitter,
+                ResourceGroupId::from(1),
+                ClpIoConfig {
+                    input: InputConfig::S3ObjectMetadataInputConfig {
+                        config: S3ObjectMetadataInputConfig {
+                            s3_config: S3Config {
+                                bucket: NonEmptyString::from_static_str("logs"),
+                                region_code: None,
+                                key_prefix: NonEmptyString::from_static_str("logs/"),
+                                endpoint_url: None,
+                                aws_authentication: AwsAuthentication::Default,
+                            },
+                            ingestion_job_id: Self::INGESTION_JOB_ID,
+                            s3_object_metadata_ids: vec![Self::S3_OBJECT_METADATA_ID],
+                            dataset: Self::dataset(),
+                            timestamp_key: None,
+                            unstructured: false,
+                        },
+                    },
+                    output: (&ArchiveOutput::default()).into(),
+                },
+            )
+            .expect("the test job uses a supported S3 object metadata input configuration")
+        }
+
+        /// # Returns
+        ///
+        /// The status and status message of a compression job.
+        ///
+        /// # Panics
+        ///
+        /// Panics if the job can't be read.
+        async fn get_job_status(&self, id: CompressionJobId) -> (CompressionJobStatus, String) {
+            sqlx::query_as(formatcp!(
+                "SELECT `status`, `status_msg` FROM `{COMPRESSION_JOBS_TABLE_NAME}` WHERE `id` = ?"
+            ))
+            .bind(id)
+            .fetch_one(&self.pool)
+            .await
+            .expect("failed to read the compression job")
+        }
+
+        /// Drops the test database and closes the connections to it.
+        ///
+        /// # Panics
+        ///
+        /// Panics if the database can't be dropped.
+        async fn drop_database(self) {
+            sqlx::query(&format!("DROP DATABASE `{}`", self.name))
+                .execute(&self.pool)
+                .await
+                .expect("failed to drop the test database");
+            self.pool.close().await;
+        }
     }
 }

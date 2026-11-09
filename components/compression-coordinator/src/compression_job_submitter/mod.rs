@@ -6,9 +6,9 @@ mod spider;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use clp_rust_utils::dataset::DatasetName;
 use clp_rust_utils::job_config::CompressionJobId;
 use clp_rust_utils::task_io::compression::ClpSCompressionOption;
+use clp_rust_utils::task_io::compression::Dataset;
 use clp_rust_utils::task_io::compression::FsInputSource;
 use clp_rust_utils::task_io::compression::S3InputSource;
 use serde::Deserialize;
@@ -84,7 +84,7 @@ pub trait CompressionJobSubmitter: Clone + Send + Sync {
         compression_job_id: CompressionJobId,
         resource_group_id: ResourceGroupId,
         clp_s_option: ClpSCompressionOption,
-        dataset: DatasetName,
+        dataset: Dataset,
         input_sources: Vec<(ManifestType, ExecutionPolicy)>,
         commit_task_execution_policy: ExecutionPolicy,
     ) -> Result<JobId, Error>;

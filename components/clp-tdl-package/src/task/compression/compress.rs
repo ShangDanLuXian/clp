@@ -26,6 +26,7 @@ use clp_rust_utils::s3::generate_s3_url;
 use clp_rust_utils::task_io::compression::ArchiveMetadata;
 use clp_rust_utils::task_io::compression::ClpSCompressionOption;
 use clp_rust_utils::task_io::compression::CompressionTaskOutput;
+use clp_rust_utils::task_io::compression::Dataset;
 use clp_rust_utils::task_io::compression::FsInputSource;
 use clp_rust_utils::task_io::compression::S3InputSource;
 use clp_rust_utils::types::ArchiveId;
@@ -133,7 +134,7 @@ pub(super) fn compress<SourceType: Source>(
     ctx: &spider_tdl::TaskContext,
     config: &SpiderTaskExecutorConfig,
     clp_s_option: &ClpSCompressionOption,
-    dataset: DatasetName,
+    dataset: Dataset,
     input_source: SourceType,
 ) -> anyhow::Result<CompressionTaskOutput> {
     if StorageEngine::ClpS != config.package.storage_engine {
@@ -158,7 +159,7 @@ pub(super) fn compress<SourceType: Source>(
 
     let dataset_dir = config
         .abs_archive_output_staging(clp_home)
-        .join(dataset.as_str());
+        .join(dataset.name.as_str());
     let archive_dir = dataset_dir.join(format!(
         ".compression-{}-{}-{}-{}",
         ctx.job_id,
@@ -212,7 +213,7 @@ pub(super) fn compress<SourceType: Source>(
             destination,
             indexer_bin,
             database: config.database.clone(),
-            dataset: dataset.clone(),
+            dataset: dataset.name,
         },
     )?;
 
@@ -222,7 +223,10 @@ pub(super) fn compress<SourceType: Source>(
         task_instance_id = % ctx.task_instance_id,
         "CLP compression task completed successfully.",
     );
-    Ok(CompressionTaskOutput { dataset, archives })
+    Ok(CompressionTaskOutput {
+        dataset_id: dataset.id,
+        archives,
+    })
 }
 
 /// How the original input list's entries are authenticated.
@@ -1045,10 +1049,12 @@ mod tests {
     use clp_rust_utils::clp_config::package::config::Package;
     use clp_rust_utils::clp_config::package::config::SpiderTaskExecutorConfig;
     use clp_rust_utils::clp_config::package::config::StorageEngine;
+    use clp_rust_utils::dataset::DatasetId;
     use clp_rust_utils::dataset::DatasetName;
     use clp_rust_utils::logs_input::LogsInputMountPoint;
     use clp_rust_utils::logs_input::LogsInputPath;
     use clp_rust_utils::task_io::compression::ClpSCompressionOption;
+    use clp_rust_utils::task_io::compression::Dataset;
     use clp_rust_utils::task_io::compression::FsInputSource;
     use clp_rust_utils::task_io::compression::S3InputSource;
     use clp_rust_utils::types::non_empty_string::ExpectedNonEmpty;
@@ -1164,7 +1170,10 @@ mod tests {
             &task_context(),
             &FsFixture::config(),
             &BASE_OPTION,
-            DatasetName::default(),
+            Dataset {
+                id: DatasetId::new(1),
+                name: DatasetName::default(),
+            },
             source,
         )
         .expect_err("empty input must fail before runtime or output setup");
@@ -1415,7 +1424,10 @@ mod tests {
             &task_context(),
             &FsFixture::config(),
             &BASE_OPTION,
-            DatasetName::default(),
+            Dataset {
+                id: DatasetId::new(1),
+                name: DatasetName::default(),
+            },
             source,
         )
         .expect_err("empty input must fail before mount or output setup");
@@ -1513,7 +1525,10 @@ mod tests {
             &task_context(),
             &SpiderTaskExecutorConfig::default(),
             &BASE_OPTION,
-            DatasetName::default(),
+            Dataset {
+                id: DatasetId::new(1),
+                name: DatasetName::default(),
+            },
             FsInputSource { file_paths: vec![] },
         )
         .expect_err("unsupported engine must be rejected before input processing");

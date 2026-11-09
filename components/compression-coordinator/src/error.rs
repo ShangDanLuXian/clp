@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 
+use clp_rust_utils::dataset::DatasetName;
 use clp_rust_utils::job_config::ingestion::JobId as IngestionJobId;
 use clp_rust_utils::logs_input::LogsInputError;
 use clp_rust_utils::s3::S3ObjectMetadataId;
@@ -10,6 +11,9 @@ use spider_core::types::resource_group::ExternalResourceGroupCredentialsError;
 /// Errors returned by the compression coordinator.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("dataset {0} doesn't exist or is pending deletion")]
+    DatasetNotFound(DatasetName),
+
     #[error(
         "duplicate S3 object metadata IDs {ids:?} requested for ingestion job {ingestion_job_id}"
     )]
@@ -39,12 +43,8 @@ pub enum Error {
     #[error("logs-input error: {0}")]
     LogsInput(#[from] LogsInputError),
 
-    #[error("failed to create metadata table `{table}`: {source}")]
-    MetadataTableCreation {
-        table: String,
-        #[source]
-        source: sqlx::Error,
-    },
+    #[error("metadata DB error: {0}")]
+    MetadataDb(#[from] clp_metadata_db::Error),
 
     #[error("missing S3 object metadata {id} for ingestion job {ingestion_job_id}")]
     MissingS3ObjectMetadata {

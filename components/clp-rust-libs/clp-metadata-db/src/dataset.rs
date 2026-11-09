@@ -60,7 +60,7 @@ VALUES (?, ?, ?)",
                 e => e.into(),
             })?
             .last_insert_id();
-        Ok(DatasetId(u16::try_from(id).expect(
+        Ok(DatasetId::new(u16::try_from(id).expect(
             "the ID of a `SMALLINT UNSIGNED` column should fit in `u16`",
         )))
     }

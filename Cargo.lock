@@ -1010,6 +1010,7 @@ dependencies = [
  "anyhow",
  "aws-config",
  "aws-sdk-s3",
+ "clp-metadata-db",
  "clp-rust-utils",
  "const_format",
  "futures",
@@ -1066,6 +1067,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "clap",
+ "clp-metadata-db",
  "clp-rust-utils",
  "const_format",
  "non-empty-string",
@@ -1082,6 +1084,7 @@ dependencies = [
  "tokio-util",
  "tonic",
  "tracing",
+ "uuid",
  "walkdir",
 ]
 

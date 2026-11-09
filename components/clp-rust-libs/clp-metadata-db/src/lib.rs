@@ -11,11 +11,11 @@ mod schema;
 mod statistics;
 mod types;
 
+pub use clp_rust_utils::dataset::DatasetId;
 pub use error::Error;
 pub use types::Archive;
 pub use types::ArchiveRowId;
 pub use types::ColumnType;
-pub use types::DatasetId;
 pub use types::MarkedArchive;
 pub use types::MarkedDataset;
 pub use types::NewArchive;

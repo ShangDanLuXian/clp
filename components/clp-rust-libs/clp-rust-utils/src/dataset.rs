@@ -1,4 +1,4 @@
-//! Dataset names and the validation rules that the CLP package applies to them.
+//! Dataset IDs, dataset names, and the validation rules that the CLP package applies to names.
 
 use std::fmt::Display;
 use std::fmt::Formatter;
@@ -15,6 +15,19 @@ use sqlx::mysql::MySqlTypeInfo;
 use sqlx::mysql::MySqlValueRef;
 
 use crate::clp_config::package::config::CLP_METADATA_TABLE_PREFIX;
+
+/// A dataset's ID in the datasets table.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize, sqlx::Type)]
+#[serde(transparent)]
+#[sqlx(transparent)]
+pub struct DatasetId(u16);
+
+impl DatasetId {
+    #[must_use]
+    pub const fn new(id: u16) -> Self {
+        Self(id)
+    }
+}
 
 /// A validated dataset name.
 ///
