@@ -511,6 +511,7 @@ The output should show all pods are in the `Running` state:
 ```text
 NAME                                        READY   STATUS    RESTARTS   AGE
 clp-api-server-...                          1/1     Running   0          2m
+clp-archive-garbage-collector-...           1/1     Running   0          2m
 clp-compression-scheduler-...               1/1     Running   0          2m
 clp-compression-worker-...                  1/1     Running   0          2m
 clp-database-0                              1/1     Running   0          2m
@@ -534,6 +535,7 @@ kubectl get jobs
 
 # Expected output:
 # NAME                              COMPLETIONS   DURATION   AGE
+# clp-clp-s-db-table-creator        1/1           5s         2m
 # clp-db-table-creator              1/1           5s         2m
 # clp-results-cache-indices-creator 1/1           3s         2m
 ```
@@ -592,11 +594,7 @@ Alternatively, use the Web UI ([clp-json][webui-clp-json] or [clp-text][webui-cl
 logs and search interactively, or the [API server][api-server] to submit queries and view results
 programmatically.
 
-The [admin tools][admin-tools] (`sbin/admin-tools/archive-manager.sh` and
-`sbin/admin-tools/dataset-manager.sh`) are **not supported** in Kubernetes deployments with
-filesystem storage (`archive_output.storage.type: "fs"`). Those scripts require direct filesystem
-access to the archive directory via Docker bind mounts, which is not possible when archives are
-backed by PVCs inside the cluster.
+To manage clp-json datasets and archives, use the [API server][api-server].
 :::
 
 ---
@@ -693,7 +691,6 @@ To tear down a `kubeadm` cluster:
 * [Using Presto][presto-guide]: Distributed SQL queries on compressed logs
 * [Using Spider scheduler][spider-guide]: Spider-orchestrated compression
 
-[admin-tools]: reference-sbin-scripts/admin-tools.md
 [aks]: https://azure.microsoft.com/en-us/products/kubernetes-service
 [api-server]: guides-using-the-api-server.md
 [Cilium]: https://cilium.io/

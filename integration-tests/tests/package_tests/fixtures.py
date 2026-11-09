@@ -106,7 +106,7 @@ def clear_package_archives(clp_package: ClpPackage) -> Iterator[None]:
 
     :param clp_package:
     """
-    # TODO: fixture will be updated as archive-manager and dataset-manager capabilities are merged.
+    # TODO: fixture will be updated to delete archives through the package.
     package_path_config = clp_package.path_config
     package_path_config.clear_archives()
     yield

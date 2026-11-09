@@ -1,5 +1,7 @@
 {{- if or
-  .Values.clpConfig.archive_output.retention_period
+  (and
+    (eq .Values.clpConfig.package.storage_engine "clp")
+    .Values.clpConfig.archive_output.retention_period)
   .Values.clpConfig.results_cache.retention_period }}
 apiVersion: "apps/v1"
 kind: "Deployment"

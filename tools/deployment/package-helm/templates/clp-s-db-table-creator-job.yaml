@@ -1,0 +1,60 @@
+{{- if eq .Values.clpConfig.package.storage_engine "clp-s" }}
+apiVersion: "batch/v1"
+kind: "Job"
+metadata:
+  name: {{ include "clp.fullname" . }}-clp-s-db-table-creator
+  labels:
+    {{- include "clp.labels" . | nindent 4 }}
+    app.kubernetes.io/component: "clp-s-db-table-creator"
+spec:
+  template:
+    metadata:
+      labels:
+        {{- include "clp.labels" . | nindent 8 }}
+        app.kubernetes.io/component: "clp-s-db-table-creator"
+    spec:
+      serviceAccountName: {{ include "clp.fullname" . }}-service-account
+      restartPolicy: "OnFailure"
+      {{- if has "database" .Values.clpConfig.bundled }}
+      initContainers:
+        - {{- include "clp.waitFor" (dict
+            "root" .
+            "type" "service"
+            "name" "database"
+          ) | nindent 10 }}
+      {{- end }}
+      containers:
+        - name: "clp-s-db-table-creator"
+          image: {{ include "clp.imageRef" (dict "root" . "component" "clpPackage") | quote }}
+          imagePullPolicy: "{{ .Values.image.clpPackage.pullPolicy }}"
+          env:
+            - name: "CLP_DB_PASS"
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "clp.fullname" . }}-database
+                  key: "password"
+            - name: "CLP_DB_USER"
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "clp.fullname" . }}-database
+                  key: "username"
+            - name: "RUST_LOG"
+              value: "INFO"
+          {{- include "clp.createResourceLimits" (dict
+              "root" .
+              "component" "clpSDbTableCreator"
+            ) | nindent 10 }}
+          volumeMounts:
+            - name: "config"
+              mountPath: "/etc/clp-config.yaml"
+              subPath: "clp-config.yaml"
+              readOnly: true
+          command: [
+            "/opt/clp/bin/db-table-creator",
+            "--config", "/etc/clp-config.yaml"
+          ]
+      volumes:
+        - name: "config"
+          configMap:
+            name: {{ include "clp.fullname" . }}-config
+{{- end }}

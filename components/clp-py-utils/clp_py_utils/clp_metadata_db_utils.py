@@ -87,26 +87,6 @@ def _get_table_name(prefix: str, suffix: str, dataset: str | None) -> str:
     return table_name
 
 
-def create_datasets_table(db_cursor, table_prefix: str) -> None:
-    """
-    Creates the datasets information table.
-
-    :param db_cursor: The database cursor to execute the table creation.
-    :param table_prefix: A string to prepend to the table name.
-    """
-    # For a description of the table, see
-    # `../../../docs/src/dev-docs/design-metadata-db.md`
-    db_cursor.execute(
-        f"""
-        CREATE TABLE IF NOT EXISTS `{get_datasets_table_name(table_prefix)}` (
-            `name` VARCHAR(255) NOT NULL,
-            `archive_storage_directory` VARCHAR(4096) NOT NULL,
-            PRIMARY KEY (`name`)
-        )
-        """
-    )
-
-
 def add_dataset(
     db_conn,
     db_cursor,
@@ -206,34 +186,6 @@ def delete_archives_from_metadata_db(
         WHERE id in ({ids_list_string})
         """,
         archive_ids,
-    )
-
-
-def delete_dataset_from_metadata_db(db_cursor, table_prefix: str, dataset: str) -> None:
-    """
-    Deletes all tables associated with `dataset` from the metadata database.
-
-    :param db_cursor:
-    :param table_prefix:
-    :param dataset:
-    """
-    # Drop tables in an order such that no foreign key constraint is violated.
-    tables_in_removal_order = [
-        get_column_metadata_table_name(table_prefix, dataset),
-        get_files_table_name(table_prefix, dataset),
-        get_archives_table_name(table_prefix, dataset),
-    ]
-
-    for table in tables_in_removal_order:
-        db_cursor.execute(f"DROP TABLE IF EXISTS `{table}`")
-
-    # Remove the dataset row from the datasets table
-    db_cursor.execute(
-        f"""
-        DELETE FROM `{get_datasets_table_name(table_prefix)}`
-        WHERE name = %s
-        """,
-        (dataset,),
     )
 
 

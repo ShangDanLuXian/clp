@@ -52,14 +52,12 @@ MCP_SERVER_COMPONENT_NAME = "mcp_server"
 SPIDER_COMPONENT_NAME = "spider"
 SPIDER_STORAGE_COMPONENT_NAME = "spider-storage"
 GARBAGE_COLLECTOR_COMPONENT_NAME = "garbage_collector"
+ARCHIVE_GARBAGE_COLLECTOR_COMPONENT_NAME = "archive_garbage_collector"
 
 # Spider resource groups
 SPIDER_RESOURCE_GROUPS_CREDENTIALS_NAME = "spider_resource_groups"
 COMPRESSION_RESOURCE_GROUP_NAME = "compression"
 QUERY_RESOURCE_GROUP_NAME = "query"
-
-# Action names
-ARCHIVE_MANAGER_ACTION_NAME = "archive_manager"
 
 QUERY_JOBS_TABLE_NAME = "query_jobs"
 QUERY_TASKS_TABLE_NAME = "query_tasks"

@@ -4,7 +4,8 @@ The CLP package provides shell scripts in the `sbin/` directory for managing and
 
 * [start-clp.sh](#start-clpsh) for starting CLP services.
 * [stop-clp.sh](#stop-clpsh) for stopping CLP services.
-* [Admin tools][admin-tools] for managing archives and datasets.
+
+To manage clp-json datasets and archives, use the [API server][api-server].
 
 ---
 
@@ -43,8 +44,8 @@ The `--restart-policy` option accepts the following values:
 Restart policies are primarily meant for handling container failures.
 
 * Use `stop-clp.sh` to properly stop CLP.
-* Initialization jobs (`db-table-creator`, `results-cache-indices-creator`) always use
-  `on-failure:3` regardless of this setting.
+* Initialization jobs (`clp-s-db-table-creator`, `db-table-creator`,
+  `results-cache-indices-creator`) always use `on-failure:3` regardless of this setting.
 * Docker daemon restart (e.g., system reboot or `systemctl restart docker`) may cause some services
   to restart unexpectedly:
   * If `stop-clp.sh` was run beforehand, services stay stopped since containers are removed, not
@@ -74,10 +75,4 @@ sbin/stop-clp.sh [OPTIONS]
 |---------------------|--------------------------------------------------------------------|
 | `-c, --config PATH` | CLP package configuration file. Defaults to `etc/clp-config.yaml`. |
 
-:::{toctree}
-:hidden:
-
-admin-tools
-:::
-
-[admin-tools]: ./admin-tools.md
+[api-server]: ../guides-using-the-api-server.md

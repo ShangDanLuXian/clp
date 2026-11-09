@@ -9,6 +9,7 @@ from pathlib import Path
 from clp_py_utils.clp_config import (
     ClpConfig,
     GARBAGE_COLLECTOR_COMPONENT_NAME,
+    StorageEngine,
 )
 from clp_py_utils.clp_logging import configure_logging, get_logger
 from clp_py_utils.core import read_yaml_config_file
@@ -48,16 +49,16 @@ async def main(argv: list[str]) -> int:
         logger.exception("Failed to parse CLP configuration file.")
         return 1
 
-    gc_task_configs: dict[str, tuple[int | None, Callable[[ClpConfig], None]]] = {
-        ARCHIVE_GARBAGE_COLLECTOR_NAME: (
+    gc_task_configs: dict[str, tuple[int | None, Callable[[ClpConfig], None]]] = {}
+    if StorageEngine.CLP == clp_config.package.storage_engine:
+        gc_task_configs[ARCHIVE_GARBAGE_COLLECTOR_NAME] = (
             clp_config.archive_output.retention_period,
             archive_garbage_collector,
-        ),
-        SEARCH_RESULT_GARBAGE_COLLECTOR_NAME: (
-            clp_config.results_cache.retention_period,
-            search_result_garbage_collector,
-        ),
-    }
+        )
+    gc_task_configs[SEARCH_RESULT_GARBAGE_COLLECTOR_NAME] = (
+        clp_config.results_cache.retention_period,
+        search_result_garbage_collector,
+    )
     gc_tasks: list[asyncio.Task[None]] = []
 
     # Create GC tasks

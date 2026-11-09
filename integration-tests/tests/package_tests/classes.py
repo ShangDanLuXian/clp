@@ -45,11 +45,6 @@ class ClpPackageTestPathConfig(IntegrationTestPathConfig):
         self.package_decompression_dir.mkdir(parents=True, exist_ok=True)
 
     @property
-    def archive_manager_path(self) -> Path:
-        """:return: The absolute path to the package archive-manager script."""
-        return self.clp_package_dir / "sbin" / "admin-tools" / "archive-manager.sh"
-
-    @property
     def compress_from_s3_path(self) -> Path:
         """:return: The absolute path to the package compress-from-s3 script."""
         return self.clp_package_dir / "sbin" / "compress-from-s3.sh"
@@ -58,11 +53,6 @@ class ClpPackageTestPathConfig(IntegrationTestPathConfig):
     def compress_path(self) -> Path:
         """:return: The absolute path to the package compress script."""
         return self.clp_package_dir / "sbin" / "compress.sh"
-
-    @property
-    def dataset_manager_path(self) -> Path:
-        """:return: The absolute path to the package dataset-manager script."""
-        return self.clp_package_dir / "sbin" / "admin-tools" / "dataset-manager.sh"
 
     @property
     def decompress_path(self) -> Path:
@@ -108,10 +98,8 @@ class ClpPackageTestPathConfig(IntegrationTestPathConfig):
         """:return: Paths that must exist on disk at construction time."""
         return [
             *super()._static_paths(),
-            self.archive_manager_path,
             self.compress_from_s3_path,
             self.compress_path,
-            self.dataset_manager_path,
             self.decompress_path,
             self.search_path,
             self.start_clp_path,
@@ -120,8 +108,9 @@ class ClpPackageTestPathConfig(IntegrationTestPathConfig):
 
     def clear_archives(self) -> None:
         """Removes the contents of the package archives directory."""
-        # TODO: this method will be replaced with a more robust version that uses `archive-manager`
-        # or `dataset-manager` (as appropriate) to clear archives correctly.
+        # TODO: this method will be replaced with a more robust version that deletes archives
+        # through the package (e.g., the API server's dataset routes for `clp-json`) to clear
+        # archives correctly.
         logger.info("Clearing package archives.")
         clear_directory(self.package_archives_path)
 

@@ -14,13 +14,23 @@ spec:
     spec:
       serviceAccountName: {{ include "clp.fullname" . }}-service-account
       restartPolicy: "OnFailure"
-      {{- if has "database" .Values.clpConfig.bundled }}
+      {{- $isClpS := eq .Values.clpConfig.package.storage_engine "clp-s" }}
+      {{- if or (has "database" .Values.clpConfig.bundled) $isClpS }}
       initContainers:
+        {{- if has "database" .Values.clpConfig.bundled }}
         - {{- include "clp.waitFor" (dict
             "root" .
             "type" "service"
             "name" "database"
           ) | nindent 10 }}
+        {{- end }}
+        {{- if $isClpS }}
+        - {{- include "clp.waitFor" (dict
+            "root" .
+            "type" "job"
+            "name" "clp-s-db-table-creator"
+          ) | nindent 10 }}
+        {{- end }}
       {{- end }}
       containers:
         - name: "db-table-creator"

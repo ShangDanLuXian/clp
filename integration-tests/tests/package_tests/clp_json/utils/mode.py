@@ -13,6 +13,7 @@ from tests.package_tests.classes import (
 )
 from tests.package_tests.utils.modes import (
     CLP_API_SERVER_COMPONENT,
+    CLP_ARCHIVE_GARBAGE_COLLECTOR_COMPONENT,
     CLP_BASE_COMPONENTS,
     CLP_GARBAGE_COLLECTOR_COMPONENT,
     CLP_QUERY_COMPONENTS,
@@ -34,6 +35,7 @@ CLP_JSON_MODE = ClpPackageModeConfig(
         CLP_REDUCER_COMPONENT,
         *CLP_QUERY_COMPONENTS,
         CLP_GARBAGE_COLLECTOR_COMPONENT,
+        CLP_ARCHIVE_GARBAGE_COLLECTOR_COMPONENT,
         CLP_API_SERVER_COMPONENT,
     ),
 )

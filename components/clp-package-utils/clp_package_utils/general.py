@@ -35,6 +35,7 @@ from clp_py_utils.clp_config import (
     RESULTS_CACHE_COMPONENT_NAME,
     SPIDER_COMPONENT_NAME,
     SPIDER_RESOURCE_GROUPS_CREDENTIALS_NAME,
+    StorageEngine,
     StorageType,
     WEBUI_COMPONENT_NAME,
     WorkerConfig,
@@ -769,7 +770,10 @@ def validate_retention_config(clp_config: ClpConfig) -> None:
 
 
 def is_retention_period_configured(clp_config: ClpConfig) -> bool:
-    if clp_config.archive_output.retention_period is not None:
+    if (
+        StorageEngine.CLP == clp_config.package.storage_engine
+        and clp_config.archive_output.retention_period is not None
+    ):
         return True
 
     if clp_config.results_cache.retention_period is not None:

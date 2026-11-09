@@ -9,16 +9,16 @@ retention period. This guide explains:
 
 ## How retention works
 
-To support retention periods, CLP's garbage collector component periodically scans for and deletes
-expired data (archives or search results). To understand the high-level algorithm, first consider
-the following definitions:
+To support retention periods, CLP's garbage collectors periodically scan for and delete expired
+data (archives or search results). To understand the high-level algorithm, first consider the
+following definitions:
 
-| Term                | Description                                                                                                                                                                |
-|---------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| $sweep\_interval$   | The interval (in minutes) at which the garbage collector wakes up to check for expired data.                                                                               |
-| $retention\_period$ | The duration (in minutes) for which data (an archive or search result) is retained before it is considered expired.                                                        |
-| $current\_time$     | The time at which the garbage collector is performing a check.                                                                                                             |
-| $data\_timestamp$   | The end of the time range for the data being evaluated for expiration (e.g., for an archive, this is the timestamp of the most recent log event contained in the archive). |
+| Term                | Description                                                                                                                                                                       |
+|---------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| $sweep\_interval$   | The interval (in minutes) at which the garbage collector wakes up to check for expired data.                                                                                      |
+| $retention\_period$ | The duration (in minutes) for which data (an archive or search result) is retained before it is considered expired.                                                               |
+| $current\_time$     | The time at which the garbage collector is performing a check.                                                                                                                    |
+| $data\_timestamp$   | The timestamp of the data being evaluated for expiration (see the expiry criteria for [archives](#archive-expiry-criteria) and [search results](#search-result-expiry-criteria)). |
 
 When the garbage collector wakes up, it will scan for and delete any data that satisfies the expiry
 criteria shown in [Figure 1](#figure-1):
@@ -57,9 +57,23 @@ directory.
 ### Archive retention period
 
 This setting determines how long an archive should be retained before it is automatically deleted.
-To configure it, modify the value of `archive_output.retention_period` in `etc/clp-config.yaml`.
+How to configure it depends on the storage engine.
 
-For example, to configure an archive retention period of 30 days (43,200 minutes), use:
+For clp-json, each dataset has its own retention period, which is set with
+`retention_period_minutes` when the dataset is created through the [API server][api-server]. For
+example, to create a dataset whose archives are retained for 30 days (43,200 minutes), use:
+
+```bash
+curl -X POST http://localhost:3001/datasets \
+    -H "Content-Type: application/json" \
+    -d '{"name": "<dataset-name>", "retention_period_minutes": 43200}'
+```
+
+If `retention_period_minutes` is omitted, the dataset's archives are retained indefinitely.
+`archive_output.retention_period` doesn't apply to clp-json.
+
+For clp-text, modify the value of `archive_output.retention_period` in `etc/clp-config.yaml`. For
+example, to configure an archive retention period of 30 days (43,200 minutes), use:
 
 ```yaml
 archive_output:
@@ -74,24 +88,29 @@ By default, `archive_output.retention_period` is `null`, which means that archiv
 indefinitely.
 
 :::{warning}
-If your log events use timestamps that *aren't* in the UTC time zone, you will need to adjust the
-configured retention period to ensure expired archives are deleted at the correct time. See
-[Handling log events with non-UTC timestamps](#handling-log-events-with-non-utc-timestamps) for
+For clp-text, if your log events use timestamps that *aren't* in the UTC time zone, you will need to
+adjust the configured retention period to ensure expired archives are deleted at the correct time.
+See [Handling log events with non-UTC timestamps](#handling-log-events-with-non-utc-timestamps) for
 details.
 :::
 
 #### Archive expiry criteria
 
-For archives, $data\_timestamp$ (in the expiry criteria equation from [Figure 1](#figure-1)) is the
-timestamp of the most recent log event contained in the archive.
+For clp-json archives, $data\_timestamp$ (in the expiry criteria equation from
+[Figure 1](#figure-1)) is the time at which the archive was created.
+
+For clp-text archives, $data\_timestamp$ is the timestamp of the most recent log event contained in
+the archive.
 
 :::{note}
-This is not the timestamp at which your logs were compressed. Therefore, if you compress
-particularly old logs that have already expired according to the expiry criteria, they will be
-deleted the next time the garbage collector runs.
+For clp-text, this is not the timestamp at which your logs were compressed. Therefore, if you
+compress particularly old logs that have already expired according to the expiry criteria, they will
+be deleted the next time the garbage collector runs.
 :::
 
 #### Handling log events with non-UTC timestamps
+
+This section only applies to clp-text, since clp-json archives expire based on their creation time.
 
 If your log events use timestamps that **aren't** in the UTC time zone, you will need to adjust the
 configured retention period to ensure expired archives are deleted at the correct time. This is
@@ -182,9 +201,14 @@ $sweep\_interval$ minutes longer than the configured retention period.
 :::
 
 :::{note}
-If the value of `archive_output.retention_period` is `null`, the corresponding garbage collection
-task will not run even if `garbage_collector.sweep_interval.archive` is configured. The same applies
-for `results_cache.retention_period` and `garbage_collector.sweep_interval.search_result`.
+For clp-text, if the value of `archive_output.retention_period` is `null`, the corresponding garbage
+collection task will not run even if `garbage_collector.sweep_interval.archive` is configured. The
+same applies for `results_cache.retention_period` and
+`garbage_collector.sweep_interval.search_result`.
+
+For clp-json, the `archive-garbage-collector` service always runs every
+`garbage_collector.sweep_interval.archive` minutes, since it also removes the files of datasets and
+archives deleted through the [API server][api-server].
 :::
 
 ---
@@ -221,7 +245,14 @@ to a host machine shutdown), simply restart the package and the garbage collecto
 the point of failure.
 
 :::{note}
-During failure recovery, there may be a temporary period during which an archive no longer exists in
-the metadata database, but still exists on disk or in object storage. Once recovery is complete, the
-physical archive will also be deleted.
+For clp-text, during failure recovery, there may be a temporary period during which an archive no
+longer exists in the metadata database, but still exists on disk or in object storage. Once recovery
+is complete, the physical archive will also be deleted.
 :::
+
+For clp-json, an expired archive is first marked as deleted in the metadata database, after which
+it's no longer searched. The `archive-garbage-collector` then removes the archive from disk or
+object storage, followed by its metadata. If this fails, it's retried on the next sweep. Datasets
+and archives deleted through the [API server][api-server] are removed in the same way.
+
+[api-server]: ./guides-using-the-api-server.md

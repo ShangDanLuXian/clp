@@ -10,7 +10,6 @@ from botocore.config import Config
 from job_orchestration.scheduler.job_config import S3InputConfig
 
 from clp_py_utils.clp_config import (
-    ARCHIVE_MANAGER_ACTION_NAME,
     AwsAuthentication,
     AwsAuthType,
     ClpConfig,
@@ -128,8 +127,6 @@ def generate_container_auth_options(
     ):
         output_storages_by_component_type = [clp_config.archive_output.storage]
         input_storage_needed = True
-    elif container_type in (ARCHIVE_MANAGER_ACTION_NAME,):
-        output_storages_by_component_type = [clp_config.archive_output.storage]
     elif container_type in (WEBUI_COMPONENT_NAME,):
         output_storages_by_component_type = [clp_config.stream_output.storage]
     elif container_type in (
@@ -344,46 +341,6 @@ def s3_put(s3_config: S3Config, src_file: Path, dest_path: str) -> None:
         s3_client.put_object(
             Bucket=s3_config.bucket, Body=file_data, Key=s3_config.key_prefix + dest_path
         )
-
-
-def s3_delete_by_key_prefix(
-    endpoint_url: str | None,
-    region_code: str | None,
-    bucket_name: str,
-    key_prefix: str,
-    s3_auth: AwsAuthentication,
-) -> None:
-    """
-    Deletes all objects under the S3 path `bucket_name`/`key_prefix`.
-
-    :param endpoint_url:
-    :param region_code:
-    :param bucket_name:
-    :param key_prefix:
-    :param s3_auth:
-    :raises: ValueError if any parameter is invalid.
-    :raises: Propagates `boto3.client.delete_objects`'s exceptions.
-    """
-    if not bool(bucket_name):
-        raise ValueError("Bucket name is not specified")
-    if not bool(key_prefix):
-        raise ValueError("Key prefix is not specified")
-
-    boto3_config = Config(retries=dict(total_max_attempts=3, mode="adaptive"))
-    s3_client = _create_s3_client(endpoint_url, region_code, s3_auth, boto3_config)
-
-    paginator = s3_client.get_paginator("list_objects_v2")
-    for page in paginator.paginate(
-        Bucket=bucket_name,
-        Prefix=key_prefix,
-        PaginationConfig={"PageSize": S3_OBJECT_DELETION_BATCH_SIZE_MAX},
-    ):
-        contents = page.get("Contents", None)
-        if contents is None:
-            continue
-
-        deletion_config = {"Objects": [{"Key": obj["Key"]} for obj in contents]}
-        s3_client.delete_objects(Bucket=bucket_name, Delete=deletion_config)
 
 
 def s3_delete_objects(s3_config: S3Config, object_keys: set[str]) -> None:

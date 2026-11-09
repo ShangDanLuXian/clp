@@ -110,6 +110,7 @@ scheduling:
   queryScheduler: {}
   prestoCoordinator: {}
   garbageCollector: {}
+  archiveGarbageCollector: {}
   apiServer: {}
   webui: {}
   mcpServer: {}
@@ -142,12 +143,14 @@ resources:
   queryScheduler: {}
   prestoCoordinator: {}
   garbageCollector: {}
+  archiveGarbageCollector: {}
   apiServer: {}
   webui: {}
   mcpServer: {}
   otelCollector: {}
 
   # Jobs
+  clpSDbTableCreator: {}
   dbTableCreator: {}
   prestoWorkerSetupConfigs: {}
   resultsCacheIndicesCreator: {}
@@ -329,7 +332,8 @@ clpConfig:
   archive_output:
     storage: {}
 
-    # Retention period for archives, in minutes. Set to null to disable automatic deletion.
+    # Retention period for archives, in minutes. Set to null to disable automatic deletion. Only
+    # applies to the clp storage engine; clp-s datasets set their own retention period on creation.
     retention_period: null
 
     # How much data CLP should try to compress into each archive

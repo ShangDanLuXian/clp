@@ -14,6 +14,7 @@ from typing import Any
 
 from clp_py_utils.clp_config import (
     API_SERVER_COMPONENT_NAME,
+    ARCHIVE_GARBAGE_COLLECTOR_COMPONENT_NAME,
     BundledService,
     CLP_DB_PASS_ENV_VAR_NAME,
     CLP_DB_ROOT_PASS_ENV_VAR_NAME,
@@ -46,6 +47,7 @@ from clp_py_utils.clp_config import (
     SPIDER_COMPONENT_NAME,
     SpiderResourceGroupRoundRobin,
     SpiderRoundRobin,
+    StorageEngine,
     StorageType,
     WEBUI_COMPONENT_NAME,
 )
@@ -1021,6 +1023,50 @@ class BaseController(ABC):
 
         return env_vars
 
+    def _set_up_env_for_clp_s_db_table_creator(self) -> EnvVarsDict:
+        """
+        Sets up environment variables for the clp-s DB table creator component.
+
+        :return: Dictionary of environment variables necessary to launch the component.
+        """
+        is_enabled = StorageEngine.CLP_S == self._clp_config.package.storage_engine
+        return EnvVarsDict({"CLP_CLP_S_DB_TABLE_CREATOR_ENABLED": "1" if is_enabled else "0"})
+
+    def _set_up_env_for_archive_garbage_collector(self) -> EnvVarsDict:
+        """
+        Sets up environment variables for the archive garbage collector component.
+
+        :return: Dictionary of environment variables necessary to launch the component.
+        """
+        component_name = ARCHIVE_GARBAGE_COLLECTOR_COMPONENT_NAME
+        if StorageEngine.CLP_S != self._clp_config.package.storage_engine:
+            logger.info(
+                "%s only supports the clp-s storage engine, skipping environment setup...",
+                component_name,
+            )
+            return EnvVarsDict({"CLP_ARCHIVE_GARBAGE_COLLECTOR_ENABLED": "0"})
+
+        logger.info("Setting up environment for %s...", component_name)
+
+        logs_dir = self._clp_config.logs_directory / component_name
+        resolved_logs_dir = resolve_host_path_in_container(logs_dir)
+        resolved_logs_dir.mkdir(parents=True, exist_ok=True)
+
+        env_vars = EnvVarsDict()
+
+        env_vars |= {
+            "CLP_ARCHIVE_GARBAGE_COLLECTOR_ENABLED": "1",
+        }
+
+        # Logging config
+        env_vars |= {
+            "CLP_ARCHIVE_GARBAGE_COLLECTOR_LOGGING_LEVEL": (
+                self._clp_config.garbage_collector.logging_level
+            ),
+        }
+
+        return env_vars
+
     def _set_up_env_for_otel_collector_bundling(self) -> EnvVarsDict:
         """
         Sets up environment variables for bundling the OpenTelemetry Collector component.
@@ -1265,6 +1311,7 @@ class DockerComposeController(BaseController):
         env_vars |= self._set_up_env_for_redis()
         env_vars |= self._set_up_env_for_results_cache()
         env_vars |= self._set_up_env_for_otel_collector()
+        env_vars |= self._set_up_env_for_clp_s_db_table_creator()
         env_vars |= self._set_up_env_for_compression_scheduler()
         env_vars |= self._set_up_env_for_compression_coordinator()
         env_vars |= self._set_up_env_for_query_coordinator()
@@ -1278,6 +1325,7 @@ class DockerComposeController(BaseController):
         env_vars |= self._set_up_env_for_webui(container_clp_config)
         env_vars |= self._set_up_env_for_mcp_server()
         env_vars |= self._set_up_env_for_garbage_collector()
+        env_vars |= self._set_up_env_for_archive_garbage_collector()
 
         # Write the environment variables to the `.env` file.
         with open(f"{self._clp_home}/.env", "w") as env_file:

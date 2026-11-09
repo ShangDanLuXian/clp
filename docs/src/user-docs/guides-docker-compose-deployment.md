@@ -160,6 +160,12 @@ docker compose \
   up database \
     --no-deps --wait
 
+# Initialize clp-json's metadata tables (only for clp-json)
+docker compose \
+  --project-name "clp-package-$(cat var/log/instance-id)" \
+  up clp-s-db-table-creator \
+    --no-deps
+
 # Initialize database
 docker compose \
   --project-name "clp-package-$(cat var/log/instance-id)" \
@@ -228,6 +234,12 @@ docker compose \
 docker compose \
   --project-name "clp-package-$(cat var/log/instance-id)" \
   up garbage-collector \
+    --no-deps --wait
+
+# Start archive garbage collector (only for clp-json)
+docker compose \
+  --project-name "clp-package-$(cat var/log/instance-id)" \
+  up archive-garbage-collector \
     --no-deps --wait
 
 # Start MCP server (optional, only if configured)

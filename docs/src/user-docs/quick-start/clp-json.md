@@ -129,6 +129,21 @@ results_cache:
 
 ## Compressing JSON logs
 
+clp-json compresses logs into a *dataset*, which must first be created through the
+[API server][api-server]. By default, logs are compressed into the dataset named `default`; to use
+another dataset, run the compression script with `--dataset <name>`. Assuming the API server is
+running on the default host and port (`localhost:3001`), create the `default` dataset by running:
+
+```bash
+curl -X POST http://localhost:3001/datasets \
+    -H "Content-Type: application/json" \
+    -d '{"name": "default"}'
+```
+
+Compression into a dataset that doesn't exist fails. To have CLP delete a dataset's archives
+automatically, set `retention_period_minutes` when creating the dataset (see
+[Configuring retention periods][retention]).
+
 To compress some JSON logs, run:
 
 ```bash
@@ -423,3 +438,4 @@ kind delete cluster --name clp
 [datasets]: ../resources-datasets.md
 [json-search-syntax]: ../reference-json-search-syntax.md
 [object-storage]: ../guides-using-object-storage/index.md
+[retention]: ../guides-retention.md

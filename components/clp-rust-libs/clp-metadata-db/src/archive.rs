@@ -30,8 +30,6 @@ const MILLISECS_PER_MINUTE: i64 = 60 * 1000;
 impl MetadataTables {
     /// Finds a dataset's live archives whose timestamp ranges lie within `range`.
     ///
-    /// Archives are selected the same way as `archive_manager.py` selects them.
-    ///
     /// # Returns
     ///
     /// The matching archives on success.

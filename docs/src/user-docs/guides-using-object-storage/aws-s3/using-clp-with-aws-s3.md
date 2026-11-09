@@ -6,8 +6,10 @@ searching or viewing logs in the Web UI), use CLP as described in the
 
 ## Compressing logs from AWS S3
 
-To compress logs from AWS S3, use the `sbin/compress-from-s3.sh` script. The script supports two
-modes of operation:
+To compress logs from AWS S3, use the `sbin/compress-from-s3.sh` script. The dataset you compress
+into must already exist; see the
+[clp-json quick-start guide](../../quick-start/clp-json.md#compressing-json-logs) for how to create
+it. The script supports two modes of operation:
 
 * [**s3-object** mode](#s3-object-compression-mode): Compress S3 objects specified by their full
   S3 URLs.

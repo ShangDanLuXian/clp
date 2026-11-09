@@ -9,6 +9,11 @@ services:
       file: "docker-compose-all.yaml"
       service: "database"
 
+  clp-s-db-table-creator:
+    extends:
+      file: "docker-compose-all.yaml"
+      service: "clp-s-db-table-creator"
+
   db-table-creator:
     extends:
       file: "docker-compose-all.yaml"
@@ -53,6 +58,11 @@ services:
     extends:
       file: "docker-compose-all.yaml"
       service: "garbage-collector"
+
+  archive-garbage-collector:
+    extends:
+      file: "docker-compose-all.yaml"
+      service: "archive-garbage-collector"
 
   api-server:
     extends:

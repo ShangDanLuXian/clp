@@ -158,6 +158,7 @@ helm install test "${script_dir}" \
     --set "scheduling.queryScheduler.nodeSelector.yscope\.io/nodeType=core" \
     --set "scheduling.prestoCoordinator.nodeSelector.yscope\.io/nodeType=core" \
     --set "scheduling.garbageCollector.nodeSelector.yscope\.io/nodeType=core" \
+    --set "scheduling.archiveGarbageCollector.nodeSelector.yscope\.io/nodeType=core" \
     --set "scheduling.apiServer.nodeSelector.yscope\.io/nodeType=core" \
     --set "scheduling.webui.nodeSelector.yscope\.io/nodeType=core" \
     --set "scheduling.mcpServer.nodeSelector.yscope\.io/nodeType=core" \

@@ -51,6 +51,7 @@ graph LR
   reducer["reducer"]
   api_server["api-server"]
   garbage_collector["garbage-collector"]
+  archive_garbage_collector["archive-garbage-collector"]
   webui["webui"]
   mcp_server["mcp-server"]
   log_ingestor["log-ingestor"]
@@ -59,6 +60,7 @@ graph LR
   spider_service["spider-service"]
 
   %% One-time jobs
+  clp_s_db_table_creator["clp-s-db-table-creator"]
   db_table_creator["db-table-creator"]
   results_cache_indices_creator["results-cache-indices-creator"]
 
@@ -102,6 +104,15 @@ graph LR
   spider_service -->|healthy| compression_coordinator
   linkStyle 20 stroke:#008080
 
+  %% Link 21-22: Database --> clp-s database initialization job --> Database initialization job
+  database -->|healthy| clp_s_db_table_creator
+  clp_s_db_table_creator -->|completed_successfully| db_table_creator
+  linkStyle 21,22 stroke:#ffa500
+
+  %% Link 23: Database initialization job --> clp-s archive garbage collector
+  db_table_creator -->|completed_successfully| archive_garbage_collector
+  linkStyle 23 stroke:#0000ff
+
   subgraph Databases
     database
     results_cache
@@ -116,6 +127,7 @@ graph LR
   end
 
   subgraph Initialization jobs
+    clp_s_db_table_creator
     db_table_creator
     results_cache_indices_creator
   end
@@ -139,6 +151,7 @@ graph LR
     api_server
     log_ingestor
     garbage_collector
+    archive_garbage_collector
     webui
   end
 
@@ -159,24 +172,25 @@ graph LR
 :::{table}
 :align: left
 
-| Service                 | Description                                                                             |
-|-------------------------|-----------------------------------------------------------------------------------------|
-| database                | Database for archive metadata, compression jobs, and query jobs                         |
-| queue                   | Task queue for schedulers                                                               |
-| redis                   | Task result storage for workers                                                         |
-| compression_scheduler   | Scheduler for compression jobs                                                          |
-| query_scheduler         | Scheduler for search/aggregation jobs                                                   |
-| results_cache           | Storage for the workers to return search results to the UI                              |
-| compression_worker      | Worker processes for compression jobs using Celery                                      |
-| query_worker            | Worker processes for search/aggregation jobs using Celery                               |
-| reducer                 | Reducers for performing the final stages of aggregation jobs                            |
-| api_server              | API server for submitting queries                                                       |
-| webui                   | Web server for the UI                                                                   |
-| mcp_server              | MCP server for AI agent to access CLP functionalities                                   |
-| garbage_collector       | Process to manage data retention                                                        |
-| spider_service          | Spider distributed scheduling framework, containing sub-services such as Spider workers |
-| compression_coordinator | Coordinator for running CLP compression jobs on Spider                                  |
-| log_ingestor            | Server for orchestrating and running continuous log ingestion jobs                      |
+| Service                   | Description                                                                             |
+|---------------------------|-----------------------------------------------------------------------------------------|
+| database                  | Database for archive metadata, compression jobs, and query jobs                         |
+| queue                     | Task queue for schedulers                                                               |
+| redis                     | Task result storage for workers                                                         |
+| compression_scheduler     | Scheduler for compression jobs                                                          |
+| query_scheduler           | Scheduler for search/aggregation jobs                                                   |
+| results_cache             | Storage for the workers to return search results to the UI                              |
+| compression_worker        | Worker processes for compression jobs using Celery                                      |
+| query_worker              | Worker processes for search/aggregation jobs using Celery                               |
+| reducer                   | Reducers for performing the final stages of aggregation jobs                            |
+| api_server                | API server for submitting queries                                                       |
+| webui                     | Web server for the UI                                                                   |
+| mcp_server                | MCP server for AI agent to access CLP functionalities                                   |
+| garbage_collector         | Process to manage data retention                                                        |
+| archive_garbage_collector | Process to delete clp-s archives that are expired or marked as deleted                  |
+| spider_service            | Spider distributed scheduling framework, containing sub-services such as Spider workers |
+| compression_coordinator   | Coordinator for running CLP compression jobs on Spider                                  |
+| log_ingestor              | Server for orchestrating and running continuous log ingestion jobs                      |
 
 :::
 
@@ -192,6 +206,7 @@ graph LR
 
 | Job                           | Description                                           |
 |-------------------------------|-------------------------------------------------------|
+| clp-s-db-table-creator        | Creates the clp-s metadata tables (clp-s only)        |
 | db-table-creator              | Creates and initializes database tables               |
 | results-cache-indices-creator | Creates a single-node replica set and sets up indices |
 

@@ -240,7 +240,8 @@ mysql -h <mariadb-hostname-or-ip> -u clp-user -p clp-db
 When using external databases in a multi-host deployment, you do **not** need to start the
 `database` and `results-cache` Docker Compose services. Skip those services when following the
 [multi-host deployment guide][multi-host-guide]. However, you still need to run the database
-initialization jobs (`db-table-creator` and `results-cache-indices-creator`).
+initialization jobs (`db-table-creator` and `results-cache-indices-creator`, and for clp-json,
+`clp-s-db-table-creator`).
 ```
 
 :::

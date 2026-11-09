@@ -99,6 +99,27 @@ services:
         "--password=${CLP_DB_PASS:?Please set a value.}"
       ]
 
+  clp-s-db-table-creator:
+    <<: *service_defaults
+    restart: "on-failure:3"
+    hostname: "clp_s_db_table_creator"
+    deploy:
+      # Value must be either 0 or 1. Set to 1 only for the clp-s storage engine.
+      replicas: "${CLP_CLP_S_DB_TABLE_CREATOR_ENABLED:-0}"
+    environment:
+      CLP_DB_PASS: "${CLP_DB_PASS:?Please set a value.}"
+      CLP_DB_USER: "${CLP_DB_USER:-clp-user}"
+      RUST_LOG: "INFO"
+    volumes:
+      - *volume_clp_config_readonly
+    depends_on:
+      database:
+        condition: "service_healthy"
+    command: [
+      "/opt/clp/bin/db-table-creator",
+      "--config", "/etc/clp-config.yaml"
+    ]
+
   db-table-creator:
     <<: *service_defaults
     restart: "on-failure:3"
@@ -112,6 +133,8 @@ services:
     volumes:
       - *volume_clp_config_readonly
     depends_on:
+      clp-s-db-table-creator:
+        condition: "service_completed_successfully"
       database:
         condition: "service_healthy"
     command: [
@@ -405,6 +428,31 @@ services:
       "python3", "-u",
       "-m", "job_orchestration.garbage_collector.garbage_collector",
       "--config", "/etc/clp-config.yaml",
+    ]
+
+  archive-garbage-collector:
+    <<: *service_defaults
+    hostname: "archive_garbage_collector"
+    stop_grace_period: "10s"
+    deploy:
+      # Value must be either 0 or 1. Set to 1 only for the clp-s storage engine.
+      replicas: "${CLP_ARCHIVE_GARBAGE_COLLECTOR_ENABLED:-0}"
+    environment:
+      CLP_DB_PASS: "${CLP_DB_PASS:?Please set a value.}"
+      CLP_DB_USER: "${CLP_DB_USER:-clp-user}"
+      CLP_LOGS_DIR: "/var/log/archive_garbage_collector"
+      RUST_LOG: "${CLP_ARCHIVE_GARBAGE_COLLECTOR_LOGGING_LEVEL:-INFO}"
+    volumes:
+      - *volume_clp_config_readonly
+      - *volume_clp_logs
+      - "${CLP_ARCHIVE_OUTPUT_DIR_HOST:-empty}:/var/data/archives"
+      - "${CLP_AWS_CONFIG_DIR_HOST:-empty}:/opt/clp/.aws:ro"
+    depends_on:
+      db-table-creator:
+        condition: "service_completed_successfully"
+    command: [
+      "/opt/clp/bin/archive-garbage-collector",
+      "--config", "/etc/clp-config.yaml"
     ]
 
   query-coordinator:

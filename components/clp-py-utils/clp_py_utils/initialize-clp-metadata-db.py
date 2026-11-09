@@ -7,8 +7,8 @@ from contextlib import closing
 
 from pydantic import ValidationError
 
-from clp_py_utils.clp_config import ClpConfig, StorageEngine
-from clp_py_utils.clp_metadata_db_utils import create_datasets_table, create_metadata_db_tables
+from clp_py_utils.clp_config import ClpConfig
+from clp_py_utils.clp_metadata_db_utils import create_metadata_db_tables
 from clp_py_utils.core import read_yaml_config_file
 from clp_py_utils.sql_adapter import SqlAdapter
 
@@ -24,17 +24,11 @@ logger.addHandler(logging_console_handler)
 
 
 def main(argv):
-    args_parser = argparse.ArgumentParser(description="Sets up CLP's metadata tables.")
-    args_parser.add_argument("--config", "-c", required=True, help="CLP configuration file.")
-    args_parser.add_argument(
-        "--storage-engine",
-        type=str,
-        choices=[engine.value for engine in StorageEngine],
-        required=True,
-        help="Storage engine to create tables for.",
+    args_parser = argparse.ArgumentParser(
+        description="Sets up the metadata tables of CLP's `clp` storage engine."
     )
+    args_parser.add_argument("--config", "-c", required=True, help="CLP configuration file.")
     parsed_args = args_parser.parse_args(argv[1:])
-    storage_engine = StorageEngine(parsed_args.storage_engine)
 
     # Load configuration
     config_path = pathlib.Path(parsed_args.config)
@@ -56,10 +50,7 @@ def main(argv):
             closing(sql_adapter.create_connection(True)) as metadata_db,
             closing(metadata_db.cursor(dictionary=True)) as metadata_db_cursor,
         ):
-            if StorageEngine.CLP_S == storage_engine:
-                create_datasets_table(metadata_db_cursor, table_prefix)
-            else:
-                create_metadata_db_tables(metadata_db_cursor, table_prefix)
+            create_metadata_db_tables(metadata_db_cursor, table_prefix)
             metadata_db.commit()
     except:
         logger.exception("Failed to create clp metadata tables.")

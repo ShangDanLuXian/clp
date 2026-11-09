@@ -32,14 +32,14 @@ def main(argv):
     config_file_path = pathlib.Path(parsed_args.config)
     storage_engine = StorageEngine(parsed_args.storage_engine)
 
-    # fmt: off
-    cmd = [
-        "python3", "-m", "clp_py_utils.initialize-clp-metadata-db",
-        "--config", str(config_file_path),
-        "--storage-engine", str(storage_engine),
-    ]
-    # fmt: on
-    subprocess.run(cmd, check=True)
+    if StorageEngine.CLP == storage_engine:
+        # fmt: off
+        cmd = [
+            "python3", "-m", "clp_py_utils.initialize-clp-metadata-db",
+            "--config", str(config_file_path),
+        ]
+        # fmt: on
+        subprocess.run(cmd, check=True)
 
     # fmt: off
     cmd = [
