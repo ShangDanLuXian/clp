@@ -2,12 +2,7 @@
 
 use clp_rust_utils::job_config::CompressionJobId;
 use clp_rust_utils::types::ArchiveId;
-use clp_rust_utils::types::UuidBytes;
 use sqlx::MySql;
-use sqlx::encode::IsNull;
-use sqlx::error::BoxDynError;
-use sqlx::mysql::MySqlTypeInfo;
-use sqlx::mysql::MySqlValueRef;
 
 use crate::Archive;
 use crate::ArchiveRowId;
@@ -19,6 +14,7 @@ use crate::NewArchive;
 use crate::QueryArchive;
 use crate::QueryArchiveFilter;
 use crate::TimestampRange;
+use crate::types::BinaryArchiveId;
 
 /// The DB clock's current time, in milliseconds since the Unix epoch.
 ///
@@ -478,32 +474,6 @@ WHERE `is_deleted` = TRUE AND `dataset_id` = ",
                 .rows_affected();
         }
         Ok(num_deleted_archives)
-    }
-}
-
-/// An [`ArchiveId`] stored as a `BINARY(16)` column value.
-struct BinaryArchiveId(ArchiveId);
-
-impl sqlx::Type<MySql> for BinaryArchiveId {
-    fn type_info() -> MySqlTypeInfo {
-        <[u8] as sqlx::Type<MySql>>::type_info()
-    }
-
-    fn compatible(ty: &MySqlTypeInfo) -> bool {
-        <[u8] as sqlx::Type<MySql>>::compatible(ty)
-    }
-}
-
-impl sqlx::Encode<'_, MySql> for BinaryArchiveId {
-    fn encode_by_ref(&self, buf: &mut Vec<u8>) -> Result<IsNull, BoxDynError> {
-        <&[u8] as sqlx::Encode<MySql>>::encode(self.0.as_bytes().as_slice(), buf)
-    }
-}
-
-impl<'r> sqlx::Decode<'r, MySql> for BinaryArchiveId {
-    fn decode(value: MySqlValueRef<'r>) -> Result<Self, BoxDynError> {
-        let bytes = <&[u8] as sqlx::Decode<MySql>>::decode(value)?;
-        Ok(Self(ArchiveId::from_bytes(UuidBytes::try_from(bytes)?)))
     }
 }
 

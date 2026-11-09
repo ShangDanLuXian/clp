@@ -4,6 +4,12 @@ use std::num::NonZeroU32;
 
 use clp_rust_utils::dataset::DatasetName;
 use clp_rust_utils::types::ArchiveId;
+use clp_rust_utils::types::UuidBytes;
+use sqlx::MySql;
+use sqlx::encode::IsNull;
+use sqlx::error::BoxDynError;
+use sqlx::mysql::MySqlTypeInfo;
+use sqlx::mysql::MySqlValueRef;
 
 /// A dataset's ID in the datasets table.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, sqlx::Type)]
@@ -143,4 +149,30 @@ pub struct TimestampBounds {
 pub struct SpaceSavings {
     pub num_uncompressed_bytes: u64,
     pub num_compressed_bytes: u64,
+}
+
+/// An [`ArchiveId`] stored as a `BINARY(16)` column value.
+pub struct BinaryArchiveId(pub ArchiveId);
+
+impl sqlx::Type<MySql> for BinaryArchiveId {
+    fn type_info() -> MySqlTypeInfo {
+        <[u8] as sqlx::Type<MySql>>::type_info()
+    }
+
+    fn compatible(ty: &MySqlTypeInfo) -> bool {
+        <[u8] as sqlx::Type<MySql>>::compatible(ty)
+    }
+}
+
+impl sqlx::Encode<'_, MySql> for BinaryArchiveId {
+    fn encode_by_ref(&self, buf: &mut Vec<u8>) -> Result<IsNull, BoxDynError> {
+        <&[u8] as sqlx::Encode<MySql>>::encode(self.0.as_bytes().as_slice(), buf)
+    }
+}
+
+impl<'r> sqlx::Decode<'r, MySql> for BinaryArchiveId {
+    fn decode(value: MySqlValueRef<'r>) -> Result<Self, BoxDynError> {
+        let bytes = <&[u8] as sqlx::Decode<MySql>>::decode(value)?;
+        Ok(Self(ArchiveId::from_bytes(UuidBytes::try_from(bytes)?)))
+    }
 }
