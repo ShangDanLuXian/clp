@@ -8,7 +8,7 @@ use clp_rust_utils::types::ArchiveId;
 /// A dataset's ID in the datasets table.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, sqlx::Type)]
 #[sqlx(transparent)]
-pub struct DatasetId(u16);
+pub struct DatasetId(pub(crate) u16);
 
 /// An archive's row ID in the archives table, distinct from its UUID ([`ArchiveId`]).
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, sqlx::Type)]

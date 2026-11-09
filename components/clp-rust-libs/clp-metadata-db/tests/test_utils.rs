@@ -13,6 +13,7 @@ pub struct TestDatabase {
     pub database_config: Database,
     pub tables: MetadataTables,
     name: String,
+    options: MySqlConnectOptions,
 }
 
 impl TestDatabase {
@@ -53,7 +54,8 @@ impl TestDatabase {
             .await
             .expect("failed to close the test server connection");
 
-        let conn = MySqlConnection::connect_with(&server_options.database(&name))
+        let options = server_options.database(&name);
+        let conn = MySqlConnection::connect_with(&options)
             .await
             .expect("failed to connect to the test database");
         let database_config = Database::default();
@@ -63,7 +65,23 @@ impl TestDatabase {
             database_config,
             tables,
             name,
+            options,
         }
+    }
+
+    /// Opens another connection to the test database.
+    ///
+    /// # Returns
+    ///
+    /// The new connection.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the test database can't be connected to.
+    pub async fn connect(&self) -> MySqlConnection {
+        MySqlConnection::connect_with(&self.options)
+            .await
+            .expect("failed to connect to the test database")
     }
 
     /// Drops the test database and closes the connection to it.
