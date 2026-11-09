@@ -1,0 +1,13 @@
+[package]
+name = "clp-metadata-db"
+version = { workspace = true }
+edition = { workspace = true }
+
+[lib]
+name = "clp_metadata_db"
+path = "src/lib.rs"
+
+[dependencies]
+clp-rust-utils = { workspace = true }
+sqlx = { workspace = true }
+thiserror = { workspace = true }

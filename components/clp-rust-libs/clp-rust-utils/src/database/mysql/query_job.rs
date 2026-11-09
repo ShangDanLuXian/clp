@@ -103,3 +103,26 @@ pub async fn get_status(
         .fetch_optional(db_pool)
         .await?)
 }
+
+/// Gets the earliest creation time among the query jobs with any of `statuses`.
+///
+/// # Returns
+///
+/// The earliest `creation_time`, in milliseconds since the Unix epoch, on success, or `None` if no
+/// query job has any of `statuses`.
+///
+/// # Errors
+///
+/// Returns an error if:
+///
+/// * [`crate::Error::Sqlx`] if a database operation fails.
+///
+/// # Panics
+///
+/// Always panics, since this function isn't implemented yet.
+pub async fn get_earliest_creation_timestamp_millisecs(
+    _conn: &mut sqlx::MySqlConnection,
+    _statuses: &[QueryJobStatus],
+) -> Result<Option<i64>, crate::Error> {
+    todo!("not implemented")
+}
