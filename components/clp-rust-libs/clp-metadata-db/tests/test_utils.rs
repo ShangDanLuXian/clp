@@ -1,7 +1,9 @@
 use std::str::FromStr;
 
 use clp_metadata_db::MetadataTables;
+use clp_metadata_db::NewArchive;
 use clp_rust_utils::clp_config::package::config::Database;
+use clp_rust_utils::types::ArchiveId;
 use sqlx::Connection;
 use sqlx::MySqlConnection;
 use sqlx::mysql::MySqlConnectOptions;
@@ -69,6 +71,31 @@ impl TestDatabase {
         }
     }
 
+    /// Factory function.
+    ///
+    /// Creates a test database like [`Self::create`], then creates the shared metadata tables in
+    /// it.
+    ///
+    /// # Returns
+    ///
+    /// The newly created test database.
+    ///
+    /// # Panics
+    ///
+    /// Panics if:
+    ///
+    /// * Forwards [`Self::create`]'s panics.
+    /// * The shared metadata tables can't be created.
+    pub async fn create_with_tables() -> Self {
+        let mut test_db = Self::create().await;
+        test_db
+            .tables
+            .create_tables(&mut test_db.conn)
+            .await
+            .expect("failed to create the shared metadata tables");
+        test_db
+    }
+
     /// Opens another connection to the test database.
     ///
     /// # Returns
@@ -98,5 +125,18 @@ impl TestDatabase {
             .close()
             .await
             .expect("failed to close the test database connection");
+    }
+}
+
+/// # Returns
+///
+/// An archive to insert with a random UUID, the given timestamp range, and fixed sizes.
+pub fn new_archive(begin_timestamp_millisecs: i64, end_timestamp_millisecs: i64) -> NewArchive {
+    NewArchive {
+        uuid: ArchiveId::from_bytes(*Uuid::new_v4().as_bytes()),
+        begin_timestamp_millisecs,
+        end_timestamp_millisecs,
+        num_uncompressed_bytes: 1000,
+        num_compressed_bytes: 100,
     }
 }

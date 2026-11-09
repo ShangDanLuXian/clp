@@ -9,14 +9,14 @@ use clp_metadata_db::NewDataset;
 use clp_rust_utils::dataset::DatasetName;
 use sqlx::Connection;
 use sqlx::mysql::MySqlDatabaseError;
-use uuid::Uuid;
 
 use super::test_utils::TestDatabase;
+use super::test_utils::new_archive;
 
 #[tokio::test]
 #[ignore = "Requires a MariaDB or MySQL server; set CLP_METADATA_DB_TEST_URL"]
 async fn create_dataset_stores_the_dataset_and_returns_its_id() -> Result<()> {
-    let mut test_db = create_test_database().await;
+    let mut test_db = TestDatabase::create_with_tables().await;
     let first_dataset = new_dataset("first");
     let second_dataset = NewDataset {
         retention_period_minutes: NonZeroU32::new(60),
@@ -65,7 +65,7 @@ ORDER BY `id`",
 #[ignore = "Requires a MariaDB or MySQL server; set CLP_METADATA_DB_TEST_URL"]
 async fn create_dataset_returns_dataset_already_exists_if_live_or_marked_dataset_has_name()
 -> Result<()> {
-    let mut test_db = create_test_database().await;
+    let mut test_db = TestDatabase::create_with_tables().await;
     let live_dataset = new_dataset("live");
     let marked_dataset = new_dataset("marked");
     test_db
@@ -99,7 +99,7 @@ async fn create_dataset_returns_dataset_already_exists_if_live_or_marked_dataset
 #[tokio::test]
 #[ignore = "Requires a MariaDB or MySQL server; set CLP_METADATA_DB_TEST_URL"]
 async fn get_dataset_names_returns_live_names_ordered_by_name() -> Result<()> {
-    let mut test_db = create_test_database().await;
+    let mut test_db = TestDatabase::create_with_tables().await;
     for name in ["zeta", "alpha", "marked"] {
         let id = test_db
             .tables
@@ -125,7 +125,7 @@ async fn get_dataset_names_returns_live_names_ordered_by_name() -> Result<()> {
 #[tokio::test]
 #[ignore = "Requires a MariaDB or MySQL server; set CLP_METADATA_DB_TEST_URL"]
 async fn get_dataset_id_by_name_returns_only_live_datasets() -> Result<()> {
-    let mut test_db = create_test_database().await;
+    let mut test_db = TestDatabase::create_with_tables().await;
     let live_id = test_db
         .tables
         .create_dataset(&mut test_db.conn, &new_dataset("live"))
@@ -157,7 +157,7 @@ async fn get_dataset_id_by_name_returns_only_live_datasets() -> Result<()> {
 #[tokio::test]
 #[ignore = "Requires a MariaDB or MySQL server; set CLP_METADATA_DB_TEST_URL"]
 async fn get_dataset_ids_by_names_omits_unknown_and_marked_names() -> Result<()> {
-    let mut test_db = create_test_database().await;
+    let mut test_db = TestDatabase::create_with_tables().await;
     let mut ids = HashMap::new();
     for name in ["first", "second", "marked"] {
         let id = test_db
@@ -190,7 +190,7 @@ async fn get_dataset_ids_by_names_omits_unknown_and_marked_names() -> Result<()>
 #[tokio::test]
 #[ignore = "Requires a MariaDB or MySQL server; set CLP_METADATA_DB_TEST_URL"]
 async fn get_dataset_ids_by_names_resolves_names_beyond_the_first_1000() -> Result<()> {
-    let mut test_db = create_test_database().await;
+    let mut test_db = TestDatabase::create_with_tables().await;
     let mut ids = HashMap::new();
     for name in ["first", "last"] {
         let id = test_db
@@ -219,7 +219,7 @@ async fn get_dataset_ids_by_names_resolves_names_beyond_the_first_1000() -> Resu
 #[tokio::test]
 #[ignore = "Requires a MariaDB or MySQL server; set CLP_METADATA_DB_TEST_URL"]
 async fn get_dataset_ids_by_names_returns_empty_map_for_no_names() -> Result<()> {
-    let mut test_db = create_test_database().await;
+    let mut test_db = TestDatabase::create_with_tables().await;
 
     assert_eq!(
         test_db
@@ -236,7 +236,7 @@ async fn get_dataset_ids_by_names_returns_empty_map_for_no_names() -> Result<()>
 #[tokio::test]
 #[ignore = "Requires a MariaDB or MySQL server; set CLP_METADATA_DB_TEST_URL"]
 async fn mark_dataset_deleted_marks_a_live_dataset_only_once() -> Result<()> {
-    let mut test_db = create_test_database().await;
+    let mut test_db = TestDatabase::create_with_tables().await;
     let id = test_db
         .tables
         .create_dataset(&mut test_db.conn, &new_dataset("dataset"))
@@ -262,7 +262,7 @@ async fn mark_dataset_deleted_marks_a_live_dataset_only_once() -> Result<()> {
 #[tokio::test]
 #[ignore = "Requires a MariaDB or MySQL server; set CLP_METADATA_DB_TEST_URL"]
 async fn lock_live_dataset_returns_whether_dataset_is_live() -> Result<()> {
-    let mut test_db = create_test_database().await;
+    let mut test_db = TestDatabase::create_with_tables().await;
     let live_id = test_db
         .tables
         .create_dataset(&mut test_db.conn, &new_dataset("live"))
@@ -309,7 +309,7 @@ async fn lock_live_dataset_blocks_concurrent_mark_dataset_deleted() -> Result<()
     // MySQL error number for "Lock wait timeout exceeded".
     const MYSQL_ER_LOCK_WAIT_TIMEOUT: u16 = 1205;
 
-    let mut test_db = create_test_database().await;
+    let mut test_db = TestDatabase::create_with_tables().await;
     let id = test_db
         .tables
         .create_dataset(&mut test_db.conn, &new_dataset("dataset"))
@@ -344,7 +344,7 @@ async fn lock_live_dataset_blocks_concurrent_mark_dataset_deleted() -> Result<()
 #[tokio::test]
 #[ignore = "Requires a MariaDB or MySQL server; set CLP_METADATA_DB_TEST_URL"]
 async fn get_marked_datasets_returns_only_marked_datasets() -> Result<()> {
-    let mut test_db = create_test_database().await;
+    let mut test_db = TestDatabase::create_with_tables().await;
     let marked_dataset = new_dataset("marked");
     let marked_id = test_db
         .tables
@@ -377,7 +377,7 @@ async fn get_marked_datasets_returns_only_marked_datasets() -> Result<()> {
 #[tokio::test]
 #[ignore = "Requires a MariaDB or MySQL server; set CLP_METADATA_DB_TEST_URL"]
 async fn delete_marked_dataset_removes_its_rows_and_keeps_other_datasets() -> Result<()> {
-    let mut test_db = create_test_database().await;
+    let mut test_db = TestDatabase::create_with_tables().await;
     let marked_id = test_db
         .tables
         .create_dataset(&mut test_db.conn, &new_dataset("marked"))
@@ -410,7 +410,7 @@ async fn delete_marked_dataset_removes_its_rows_and_keeps_other_datasets() -> Re
 #[tokio::test]
 #[ignore = "Requires a MariaDB or MySQL server; set CLP_METADATA_DB_TEST_URL"]
 async fn delete_marked_dataset_leaves_an_unmarked_dataset_alone() -> Result<()> {
-    let mut test_db = create_test_database().await;
+    let mut test_db = TestDatabase::create_with_tables().await;
     let id = test_db
         .tables
         .create_dataset(&mut test_db.conn, &new_dataset("live"))
@@ -431,25 +431,6 @@ async fn delete_marked_dataset_leaves_an_unmarked_dataset_alone() -> Result<()> 
 
     test_db.drop_database().await;
     Ok(())
-}
-
-/// Creates a test database with the shared metadata tables.
-///
-/// # Returns
-///
-/// The newly created test database.
-///
-/// # Panics
-///
-/// Panics if the test database or the shared metadata tables can't be created.
-async fn create_test_database() -> TestDatabase {
-    let mut test_db = TestDatabase::create().await;
-    test_db
-        .tables
-        .create_tables(&mut test_db.conn)
-        .await
-        .expect("failed to create the shared metadata tables");
-    test_db
 }
 
 /// # Returns
@@ -486,41 +467,18 @@ fn new_dataset(name: &str) -> NewDataset {
 ///
 /// Panics if a row can't be inserted.
 async fn seed_child_rows(test_db: &mut TestDatabase, dataset_id: DatasetId) {
-    let archive_id = sqlx::query(&format!(
-        r"
-INSERT INTO `{archives}` (
-    `dataset_id`,
-    `uuid`,
-    `begin_timestamp_millisecs`,
-    `end_timestamp_millisecs`,
-    `num_uncompressed_bytes`,
-    `num_compressed_bytes`,
-    `creation_timestamp_millisecs`,
-    `compression_job_id`
-)
-VALUES (?, ?, 0, 0, 0, 0, 0, 0)",
-        archives = test_db.database_config.unscoped_archives_table_name(),
-    ))
-    .bind(dataset_id)
-    .bind(Uuid::new_v4().as_bytes().as_slice())
-    .execute(&mut test_db.conn)
-    .await
-    .expect("failed to insert an archive row")
-    .last_insert_id();
+    const TWO_DAYS_IN_MILLISECS: i64 = 2 * 24 * 60 * 60 * 1000;
 
-    sqlx::query(&format!(
-        r"
-INSERT INTO `{long_span_archives}` (
-    `dataset_id`, `begin_timestamp_millisecs`, `end_timestamp_millisecs`, `archive_id`
-)
-VALUES (?, 0, 0, ?)",
-        long_span_archives = test_db.database_config.long_span_archives_table_name(),
-    ))
-    .bind(dataset_id)
-    .bind(archive_id)
-    .execute(&mut test_db.conn)
-    .await
-    .expect("failed to insert a long-span archive row");
+    test_db
+        .tables
+        .insert_archives(
+            &mut test_db.conn,
+            dataset_id,
+            1,
+            &[new_archive(0, TWO_DAYS_IN_MILLISECS)],
+        )
+        .await
+        .expect("failed to insert a long-span archive");
 
     sqlx::query(&format!(
         r"
