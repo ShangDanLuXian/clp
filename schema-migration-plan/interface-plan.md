@@ -15,7 +15,8 @@ Every operation on the shared tables goes through one Rust library, `clp-metadat
 (`components/clp-rust-libs/clp-metadata-db`): typed Rust functions with SQL underneath, written with
 `sqlx`. Each function takes an arbitrary `&mut sqlx::MySqlConnection`, so a caller can combine
 operations inside its own transaction (`&mut *tx`) or run them on a pooled connection. The library
-never creates pools or transactions.
+never creates pools or transactions. The one exception is the C++ indexer, which keeps writing
+column metadata itself until clp-s is rewritten in Rust (see "The indexer").
 
 ## Scope
 
@@ -29,6 +30,7 @@ In scope:
 
 Out of scope:
 
+* The C++ indexer's move to `clp_column_metadata`, a separate change (see "The indexer").
 * The Celery compression scheduler and workers, which the compression coordinator replaces.
 * The query/compression job tables.
 * Files tables and top-level-filtering tables.
@@ -214,6 +216,8 @@ Known limitations, unchanged from `main` and left for later:
   fail to read them.
 * Archives that an in-flight compression writes to a dataset after it's marked are never committed,
   so nothing references them. Like other ingestion-failure leftovers, they aren't reclaimed.
+* An indexer that finishes after its dataset is reclaimed can leave `clp_column_metadata` rows for
+  a dataset ID that no longer exists. IDs aren't reused, so nothing reads them.
 * Compression writes to the location derived from the current package config, while deletion uses
   `archive_storage_path` recorded at creation. They differ only if the config changes.
 * A recreated dataset name maps to the same storage location, which may still hold the unreferenced
@@ -558,6 +562,21 @@ pub struct SpaceSavings {
 The query-speed route currently joins `query_jobs` / `query_tasks` with the archives table in one
 statement. `query_tasks.archive_id` (text UUID) doesn't match `clp_archives.uuid` (bytes), so the
 route reads the job's archive IDs from the job tables, then calls `get_uncompressed_bytes_by_uuids`.
+
+## The indexer
+
+`components/core/src/clp_s/indexer` is a separate C++ executable that the compression task runs on
+each archive. It opens the archive, walks the schema tree, and `INSERT IGNORE`s `(name, type)` into
+the dataset's column-metadata table.
+
+Decision (Devin): keep the C++ indexer, writing column metadata itself, until clp-s is rewritten in
+Rust. Its move to `clp_column_metadata` (taking the dataset ID instead of a name, dropping
+`--create-table`) is a separate change outside this plan; at the switch, the compression task
+passes it the job's dataset ID.
+
+When the Rust rewrite replaces the indexer, it must reproduce the key escaping (`escape_key_name`)
+and the skipped node types (`StructuredArray`, `Object`, `Unknown`) exactly, and write through a new
+`insert_column_metadata`.
 
 ## Open questions
 
