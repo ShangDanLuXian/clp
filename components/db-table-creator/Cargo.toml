@@ -1,0 +1,16 @@
+[package]
+name = "db-table-creator"
+version = { workspace = true }
+edition = { workspace = true }
+
+[[bin]]
+name = "db-table-creator"
+path = "src/bin/db_table_creator.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+clp-metadata-db = { workspace = true }
+clp-rust-utils = { workspace = true }
+tokio = { workspace = true, features = ["macros"] }
+tracing = { workspace = true }
