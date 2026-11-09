@@ -28,10 +28,6 @@ pub use types::TimestampRange;
 
 /// The clp-s metadata tables that every dataset shares, identified by their names.
 #[derive(Clone, Debug)]
-#[expect(
-    dead_code,
-    reason = "the table names are read once the operations are implemented"
-)]
 pub struct MetadataTables {
     datasets: String,
     archives: String,
@@ -47,12 +43,13 @@ impl MetadataTables {
     /// # Returns
     ///
     /// The shared metadata tables of the configured database.
-    ///
-    /// # Panics
-    ///
-    /// Always panics, since this function isn't implemented yet.
     #[must_use]
-    pub fn new(_database_config: &clp_rust_utils::clp_config::package::config::Database) -> Self {
-        todo!("not implemented")
+    pub fn new(database_config: &clp_rust_utils::clp_config::package::config::Database) -> Self {
+        Self {
+            datasets: database_config.datasets_table_name(),
+            archives: database_config.unscoped_archives_table_name(),
+            long_span_archives: database_config.long_span_archives_table_name(),
+            column_metadata: database_config.unscoped_column_metadata_table_name(),
+        }
     }
 }
