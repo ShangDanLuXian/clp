@@ -402,7 +402,8 @@ impl From<ClientError> for HandlerError {
                 | LogsInputError::Unresolvable { .. },
             )
             | ClientError::CompressionJobIdOutOfRange(_)
-            | ClientError::Telemetry(_) => Self::InternalServer,
+            | ClientError::Telemetry(_)
+            | ClientError::QueryResultSession(_) => Self::InternalServer,
         }
     }
 }

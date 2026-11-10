@@ -56,7 +56,8 @@ fn log_unexpected_error(operation: &str, error: &ClientError) {
             | LogsInputError::Unresolvable { .. },
         )
         | ClientError::CompressionJobIdOutOfRange(_)
-        | ClientError::Telemetry(_) => {
+        | ClientError::Telemetry(_)
+        | ClientError::QueryResultSession(_) => {
             tracing::error!(operation, error = ? error, "WebUI API request failed.");
         }
     }

@@ -71,6 +71,9 @@ pub enum ClientError {
 
     #[error(transparent)]
     Telemetry(#[from] opentelemetry_otlp::ExporterBuildError),
+
+    #[error(transparent)]
+    QueryResultSession(#[from] query_result_listener::SessionError),
 }
 
 /// Empty trait to mark errors that indicate malformed data.
