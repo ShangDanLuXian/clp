@@ -707,6 +707,48 @@ async fn dropping_the_stream_while_its_job_runs_requests_cancellation_once() -> 
     Ok(())
 }
 
+#[tokio::test]
+async fn dropping_the_stream_while_its_job_runs_keeps_its_session_open_until_the_job_terminates()
+-> Result<()> {
+    let query_job_table = FakeQueryJobTable::default();
+    let streamer = start_streamer::<QueryResultEncoding>(&query_job_table);
+    let query_stream = streamer.submit(base_query_config()).await?;
+    let query_job_id = query_stream.query_job_id();
+    let network_output = network_output_of_the_only_query_job(&query_job_table);
+    query_job_table.set_status(query_job_id, QueryJobStatus::Running);
+    let mut attempt = FakeClpS::connect(&network_output).await;
+    attempt.send_results(0..2).await;
+
+    drop(query_stream);
+    query_job_table.wait_for_cancellation_requests(1).await;
+    let acknowledgement_after_drop = attempt.finish(2).await;
+    query_job_table.set_status(query_job_id, QueryJobStatus::Cancelled);
+    sleep(2 * QUERY_JOB_STATUS_POLL_INTERVAL).await;
+    let attempt_after_termination = FakeClpS::connect(&network_output).await;
+
+    assert_eq!(acknowledgement_after_drop, Ack { num_results: 2 }.encode());
+    attempt_after_termination.expect_closed_by_listener().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn dropping_the_stream_ends_its_session_once_its_jobs_status_cant_be_read() -> Result<()> {
+    let query_job_table = FakeQueryJobTable::default();
+    let streamer = start_streamer::<QueryResultEncoding>(&query_job_table);
+    let query_stream = streamer.submit(base_query_config()).await?;
+    query_job_table.set_status(query_stream.query_job_id(), QueryJobStatus::Running);
+    let mut attempt =
+        FakeClpS::connect(&network_output_of_the_only_query_job(&query_job_table)).await;
+    attempt.send_results(0..2).await;
+
+    drop(query_stream);
+    query_job_table.wait_for_cancellation_requests(1).await;
+    query_job_table.fail_status_reads();
+
+    attempt.expect_closed_by_listener().await;
+    Ok(())
+}
+
 #[tokio::test(start_paused = true)]
 async fn dropping_the_stream_after_its_end_does_not_request_cancellation() -> Result<()> {
     let query_job_table = FakeQueryJobTable::default();

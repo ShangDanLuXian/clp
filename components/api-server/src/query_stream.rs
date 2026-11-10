@@ -167,7 +167,9 @@ impl<QueryJobTableType: QueryJobTable, EncodingType: ResultEncoding>
 /// the stream ends the query's session, forwards the batches that the session's connections had
 /// already claimed, and then ends.
 ///
-/// Dropping the stream before its job has terminated requests the job's cancellation.
+/// Dropping the stream before its job has terminated requests the job's cancellation, and keeps the
+/// query's session open until the job has terminated, discarding the results that its connections
+/// still deliver, so that the job's tasks don't fail before the cancellation reaches them.
 ///
 /// # Type Parameters
 ///
@@ -287,14 +289,18 @@ impl<QueryJobTableType: QueryJobTable, EncodingType: ResultEncoding> Drop
     for QueryStream<QueryJobTableType, EncodingType>
 {
     fn drop(&mut self) {
-        if !matches!(self.state, State::Running { .. }) {
+        let State::Running {
+            _session: session, ..
+        } = std::mem::replace(&mut self.state, State::Ended)
+        else {
             return;
-        }
+        };
         tracing::info!(
             query_job_id = self.query_job.id,
             "A streamed query was dropped while its job was running; requesting its cancellation."
         );
         self.query_job.spawn_cancellation();
+        self.query_job.spawn_session_keeper(session);
     }
 }
 
@@ -412,6 +418,43 @@ impl<QueryJobTableType: QueryJobTable> QueryJob<QueryJobTableType> {
                     "Failed to request the cancellation of a streamed query's job."
                 ),
             }
+        });
+    }
+
+    /// Keeps `session` open in a background task until the job has terminated, so that the job's
+    /// tasks still finish their connections, whose results are discarded once the session's result
+    /// stream is gone, instead of failing before the job's cancellation reaches them.
+    ///
+    /// The session ends early once a read of the job's status fails, and right away outside a Tokio
+    /// runtime.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `EncodingType` - The encoding of the results the session delivers.
+    fn spawn_session_keeper<EncodingType: ResultEncoding>(&self, session: Session<EncodingType>) {
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let query_job = Self {
+            id: self.id,
+            table: Arc::clone(&self.table),
+        };
+        runtime.spawn(async move {
+            let mut status_poll = StatusPoll::new();
+            match std::future::poll_fn(|cx| status_poll.poll(cx, &query_job)).await {
+                Ok(status) => tracing::debug!(
+                    query_job_id = query_job.id,
+                    status = ? status,
+                    "The job of a dropped streamed query has terminated; ending its session."
+                ),
+                Err(e) => tracing::warn!(
+                    query_job_id = query_job.id,
+                    error = % e,
+                    "Failed to read the status of a dropped streamed query's job; ending its \
+                     session."
+                ),
+            }
+            drop(session);
         });
     }
 }
