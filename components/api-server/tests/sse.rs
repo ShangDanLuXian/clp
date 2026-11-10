@@ -4,6 +4,7 @@ use std::time::Duration;
 use anyhow::Result;
 use api_server::sse::SseEncoding;
 use api_server::sse::SseResponse;
+use api_server::sse::StreamingQueryResult;
 use axum::body::Body;
 use axum::body::Bytes;
 use axum::response::IntoResponse;
@@ -16,7 +17,6 @@ use http_body_util::BodyExt;
 use query_result_listener::encoding::ResultEncoder;
 use query_result_listener::encoding::ResultEncoding;
 use query_result_listener::test_utils::ARCHIVE_ID;
-use serde::Serialize;
 use tokio::time::advance;
 
 /// The interval of [`KeepAlive::default`].
@@ -24,14 +24,6 @@ const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(15);
 
 /// The smallest step of tokio's timer.
 const TICK: Duration = Duration::from_millis(1);
-
-/// The data of a query result's event.
-#[derive(Serialize)]
-struct StreamingQueryResult {
-    archive_id: ArchiveId,
-    timestamp_millisecs: i64,
-    message: String,
-}
 
 /// The next frame of a response body, as far as polling the body once shows.
 #[derive(Debug, Eq, PartialEq)]

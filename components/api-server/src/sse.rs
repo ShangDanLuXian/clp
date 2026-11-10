@@ -17,6 +17,7 @@ use query_result_listener::encoding::ResultEncoder;
 use query_result_listener::encoding::ResultEncoding;
 use serde::Serialize;
 use tokio::time::Sleep;
+use utoipa::ToSchema;
 
 /// A [`ResultEncoding`] that encodes each result as an unnamed event whose data is the result
 /// serialized as JSON, without its message's trailing newline.
@@ -86,6 +87,21 @@ impl ResultEncoder for SseEncoder {
     fn take_batch(&mut self) -> Bytes {
         Bytes::from(std::mem::take(&mut self.batch))
     }
+}
+
+/// The data of a streamed query's result event.
+// Documents the events that `SseEncoder` writes without serializing this type.
+#[derive(Serialize, ToSchema)]
+pub struct StreamingQueryResult {
+    /// The ID of the archive that contains the result.
+    #[schema(value_type = String)]
+    pub archive_id: ArchiveId,
+
+    /// The result's timestamp in milliseconds since the Unix epoch.
+    pub timestamp_millisecs: i64,
+
+    /// The result's log event message, without its trailing newline.
+    pub message: String,
 }
 
 /// A Server-Sent Events response whose events are already encoded, laid out as

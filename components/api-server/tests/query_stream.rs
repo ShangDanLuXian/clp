@@ -19,6 +19,7 @@ use clp_rust_utils::job_config::QueryJobConfig;
 use clp_rust_utils::job_config::QueryJobStatus;
 use clp_rust_utils::types::SessionToken;
 use futures::StreamExt;
+use query_result_listener::encoding::ResultEncoding;
 use query_result_listener::protocol::Ack;
 use query_result_listener::protocol::PROTOCOL_VERSION;
 use query_result_listener::session::SessionStats;
@@ -40,8 +41,6 @@ use tokio::time::timeout;
 
 /// The index of the query task that the tests' attempts stream the results of.
 const TASK_INDEX: usize = 0;
-
-type TestQueryStreamer = QueryStreamer<FakeQueryJobTable, QueryResultEncoding>;
 
 type TestQueryStream = QueryStream<FakeQueryJobTable, QueryResultEncoding>;
 
@@ -419,10 +418,16 @@ impl Ending {
 /// A streamer whose loopback listener's handshake timeout outlasts [`TIMEOUT`], and whose query
 /// jobs are submitted to `query_job_table`.
 ///
+/// # Type Parameters
+///
+/// * `EncodingType` - The encoding of the results the streamer streams back.
+///
 /// # Panics
 ///
 /// Panics if the advertised host fixture is empty, or the listener can't be bound.
-fn start_streamer(query_job_table: &FakeQueryJobTable) -> TestQueryStreamer {
+fn start_streamer<EncodingType: ResultEncoding>(
+    query_job_table: &FakeQueryJobTable,
+) -> QueryStreamer<FakeQueryJobTable, EncodingType> {
     use std::net::Ipv4Addr;
     use std::net::SocketAddr;
     use std::num::NonZeroU64;
@@ -440,6 +445,49 @@ fn start_streamer(query_job_table: &FakeQueryJobTable) -> TestQueryStreamer {
     })
     .expect("binding a loopback listener should succeed");
     QueryStreamer::new(listener, query_job_table.clone())
+}
+
+/// An event of a Server-Sent Events body.
+#[derive(Debug, PartialEq)]
+struct SseEvent {
+    name: Option<String>,
+    data: serde_json::Value,
+}
+
+impl SseEvent {
+    /// Parses the events of a Server-Sent Events body, skipping comments.
+    ///
+    /// # Returns
+    ///
+    /// The parsed events.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `body` isn't UTF-8, doesn't end at the end of an event or comment, holds a line
+    /// that is neither a name, a data line nor a comment, or holds event data that isn't JSON.
+    fn parse_all(body: &[u8]) -> Vec<Self> {
+        std::str::from_utf8(body)
+            .expect("the body should be UTF-8")
+            .strip_suffix("\n\n")
+            .expect("the body should end at the end of an event or comment")
+            .split("\n\n")
+            .filter_map(|block| {
+                let mut name = None;
+                let mut data = None;
+                for line in block.lines() {
+                    if let Some(value) = line.strip_prefix("event: ") {
+                        name = Some(value.to_owned());
+                    } else if let Some(value) = line.strip_prefix("data: ") {
+                        data =
+                            Some(serde_json::from_str(value).expect("event data should be JSON"));
+                    } else {
+                        assert!(line.starts_with(':'), "unexpected line: {line:?}");
+                    }
+                }
+                data.map(|data| Self { name, data })
+            })
+            .collect()
+    }
 }
 
 /// # Returns
@@ -521,7 +569,7 @@ async fn results_stream_until_the_job_succeeds_and_the_end_carries_its_status_an
     use clp_rust_utils::job_config::QueryOutput;
 
     let query_job_table = FakeQueryJobTable::default();
-    let streamer = start_streamer(&query_job_table);
+    let streamer = start_streamer::<QueryResultEncoding>(&query_job_table);
     let mut query_stream = streamer.submit(base_query_config()).await?;
     let network_output = network_output_of_the_only_query_job(&query_job_table);
     let mut first_attempt = FakeClpS::connect(&network_output).await;
@@ -565,7 +613,7 @@ async fn results_stream_until_the_job_succeeds_and_the_end_carries_its_status_an
 #[tokio::test]
 async fn failed_job_ends_its_session_and_cuts_off_its_open_connection() -> Result<()> {
     let query_job_table = FakeQueryJobTable::default();
-    let streamer = start_streamer(&query_job_table);
+    let streamer = start_streamer::<QueryResultEncoding>(&query_job_table);
     let mut query_stream = streamer.submit(base_query_config()).await?;
     let mut attempt =
         FakeClpS::connect(&network_output_of_the_only_query_job(&query_job_table)).await;
@@ -596,7 +644,7 @@ async fn status_is_read_every_poll_interval_until_the_job_terminates() -> Result
     const NUM_READS: u32 = 10;
 
     let query_job_table = FakeQueryJobTable::default();
-    let streamer = start_streamer(&query_job_table);
+    let streamer = start_streamer::<QueryResultEncoding>(&query_job_table);
     let mut query_stream = streamer.submit(base_query_config()).await?;
     query_job_table.set_status(query_stream.query_job_id(), QueryJobStatus::Running);
 
@@ -622,7 +670,7 @@ async fn status_is_read_every_poll_interval_until_the_job_terminates() -> Result
 async fn failed_status_read_ends_the_stream_with_its_error_and_requests_cancellation_once()
 -> Result<()> {
     let query_job_table = FakeQueryJobTable::default();
-    let streamer = start_streamer(&query_job_table);
+    let streamer = start_streamer::<QueryResultEncoding>(&query_job_table);
     let mut query_stream = streamer.submit(base_query_config()).await?;
     let query_job_id = query_stream.query_job_id();
 
@@ -645,7 +693,7 @@ async fn failed_status_read_ends_the_stream_with_its_error_and_requests_cancella
 #[tokio::test(start_paused = true)]
 async fn dropping_the_stream_while_its_job_runs_requests_cancellation_once() -> Result<()> {
     let query_job_table = FakeQueryJobTable::default();
-    let streamer = start_streamer(&query_job_table);
+    let streamer = start_streamer::<QueryResultEncoding>(&query_job_table);
     let query_stream = streamer.submit(base_query_config()).await?;
     let query_job_id = query_stream.query_job_id();
     query_job_table.set_status(query_job_id, QueryJobStatus::Running);
@@ -662,7 +710,7 @@ async fn dropping_the_stream_while_its_job_runs_requests_cancellation_once() -> 
 #[tokio::test(start_paused = true)]
 async fn dropping_the_stream_after_its_end_does_not_request_cancellation() -> Result<()> {
     let query_job_table = FakeQueryJobTable::default();
-    let streamer = start_streamer(&query_job_table);
+    let streamer = start_streamer::<QueryResultEncoding>(&query_job_table);
     let mut query_stream = streamer.submit(base_query_config()).await?;
     query_job_table.set_status(query_stream.query_job_id(), QueryJobStatus::Succeeded);
     Ending::receive(&mut query_stream).await;
@@ -680,7 +728,7 @@ async fn dropping_the_stream_while_it_drains_a_terminated_job_does_not_request_c
     use futures::FutureExt;
 
     let query_job_table = FakeQueryJobTable::default();
-    let streamer = start_streamer(&query_job_table);
+    let streamer = start_streamer::<QueryResultEncoding>(&query_job_table);
     let mut query_stream = streamer.submit(base_query_config()).await?;
     let mut attempt =
         FakeClpS::connect(&network_output_of_the_only_query_job(&query_job_table)).await;
@@ -708,7 +756,7 @@ async fn dropping_the_stream_while_it_drains_a_terminated_job_does_not_request_c
 #[tokio::test(start_paused = true)]
 async fn dropping_a_started_submission_requests_the_submitted_jobs_cancellation() -> Result<()> {
     let query_job_table = FakeQueryJobTable::default();
-    let streamer = Arc::new(start_streamer(&query_job_table));
+    let streamer = Arc::new(start_streamer::<QueryResultEncoding>(&query_job_table));
     let submission_gate = query_job_table.hold_submissions();
     let submission = tokio::spawn({
         let streamer = Arc::clone(&streamer);
@@ -734,7 +782,7 @@ async fn query_config_with_an_option_that_does_not_apply_to_streamed_results_is_
     use std::num::NonZeroU32;
 
     let query_job_table = FakeQueryJobTable::default();
-    let streamer = start_streamer(&query_job_table);
+    let streamer = start_streamer::<QueryResultEncoding>(&query_job_table);
 
     for (query_config, rejected_option) in [
         (
@@ -774,5 +822,152 @@ async fn query_config_with_an_option_that_does_not_apply_to_streamed_results_is_
         query_job_table.query_job_configs(),
         [] as [QueryJobConfig; 0]
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn sse_response_streams_the_job_event_then_the_results_then_the_end_event() -> Result<()> {
+    use api_server::sse::SseEncoding;
+    use axum::response::IntoResponse;
+    use http_body_util::BodyExt;
+    use query_result_listener::test_utils::message;
+    use query_result_listener::test_utils::timestamp;
+    use serde_json::json;
+
+    let query_job_table = FakeQueryJobTable::default();
+    let streamer = start_streamer::<SseEncoding>(&query_job_table);
+    let query_stream = streamer.submit(base_query_config()).await?;
+    let query_job_id = query_stream.query_job_id();
+    let response = query_stream.into_sse_response().into_response();
+    let network_output = network_output_of_the_only_query_job(&query_job_table);
+    let mut first_attempt = FakeClpS::connect(&network_output).await;
+    first_attempt.send_results(0..3).await;
+    first_attempt.finish(3).await;
+    let mut retry = FakeClpS::connect(&network_output).await;
+    retry.send_results(0..2).await;
+    retry.finish(2).await;
+
+    query_job_table.set_status(query_job_id, QueryJobStatus::Failed);
+    let body = timeout(TIMEOUT, response.into_body().collect())
+        .await
+        .expect("the response should end")?
+        .to_bytes();
+
+    let mut expected_events = vec![SseEvent {
+        name: Some("job".to_owned()),
+        data: json!({"query_job_id": query_job_id}),
+    }];
+    expected_events.extend((0..3).map(|result_index| SseEvent {
+        name: None,
+        data: json!({
+            "archive_id": ARCHIVE_ID,
+            "timestamp_millisecs": timestamp(result_index),
+            "message": message(TASK_INDEX, result_index).trim_end_matches('\n'),
+        }),
+    }));
+    expected_events.push(SseEvent {
+        name: Some("end".to_owned()),
+        data: json!({
+            "status": "Failed",
+            "num_results_emitted": 3,
+            "num_duplicates_dropped": 2,
+        }),
+    });
+    assert_eq!(SseEvent::parse_all(&body), expected_events);
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+async fn sse_response_ends_with_an_error_event_if_the_jobs_status_cant_be_read() -> Result<()> {
+    use api_server::sse::SseEncoding;
+    use axum::response::IntoResponse;
+    use http_body_util::BodyExt;
+
+    let query_job_table = FakeQueryJobTable::default();
+    let streamer = start_streamer::<SseEncoding>(&query_job_table);
+    let response = streamer
+        .submit(base_query_config())
+        .await?
+        .into_sse_response()
+        .into_response();
+
+    query_job_table.fail_status_reads();
+    let body = timeout(TIMEOUT, response.into_body().collect())
+        .await
+        .expect("the response should end")?
+        .to_bytes();
+    let events = SseEvent::parse_all(&body);
+
+    assert_eq!(
+        events
+            .iter()
+            .map(|event| event.name.as_deref())
+            .collect::<Vec<_>>(),
+        [Some("job"), Some("error")]
+    );
+    assert!(
+        events[1].data["message"].is_string(),
+        "the `error` event should describe the error: {:?}",
+        events[1]
+    );
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+async fn sse_response_sends_keep_alive_comments_only_between_whole_events() -> Result<()> {
+    use std::time::Duration;
+
+    use api_server::sse::SseEncoding;
+    use axum::body::Body;
+    use axum::body::Bytes;
+    use axum::response::IntoResponse;
+    use http_body_util::BodyExt;
+
+    /// Longer than the keep-alive interval of [`api_server::sse::SseResponse`], 15 seconds.
+    const FRAME_TIMEOUT: Duration = Duration::from_secs(30);
+
+    /// # Returns
+    ///
+    /// The data of `body`'s next frame, or `None` if the body has ended.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the frame doesn't arrive within [`FRAME_TIMEOUT`], can't be read, or doesn't hold
+    /// data.
+    async fn next_frame(body: &mut Body) -> Option<Bytes> {
+        timeout(FRAME_TIMEOUT, body.frame())
+            .await
+            .expect("the next frame should arrive")
+            .map(|frame| {
+                frame
+                    .expect("the frame should be readable")
+                    .into_data()
+                    .expect("the frame should hold data")
+            })
+    }
+
+    let query_job_table = FakeQueryJobTable::default();
+    let streamer = start_streamer::<SseEncoding>(&query_job_table);
+    let query_stream = streamer.submit(base_query_config()).await?;
+    let query_job_id = query_stream.query_job_id();
+    query_job_table.set_status(query_job_id, QueryJobStatus::Running);
+    let mut body = query_stream.into_sse_response().into_response().into_body();
+
+    let job_frame = next_frame(&mut body).await;
+    let keep_alive_frame = next_frame(&mut body).await;
+    query_job_table.set_status(query_job_id, QueryJobStatus::Succeeded);
+    let end_frame = next_frame(&mut body).await;
+    let after_end = next_frame(&mut body).await;
+
+    let names = |frame: Option<Bytes>| {
+        SseEvent::parse_all(&frame.expect("the body shouldn't end yet"))
+            .into_iter()
+            .map(|event| event.name)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(names(job_frame), [Some("job".to_owned())]);
+    assert_eq!(keep_alive_frame.as_deref(), Some(b":\n\n".as_slice()));
+    assert_eq!(names(end_frame), [Some("end".to_owned())]);
+    assert_eq!(after_end, None);
     Ok(())
 }

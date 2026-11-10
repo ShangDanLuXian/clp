@@ -1,6 +1,9 @@
 mod webui;
 
+use std::sync::Arc;
+
 use axum::Json;
+use axum::body::Bytes;
 use axum::extract::FromRef;
 use axum::extract::Path;
 use axum::extract::Query;
@@ -31,6 +34,9 @@ use crate::client::CompressionUsage;
 use crate::client::CompressionUsageParams;
 use crate::client::QueryConfig;
 use crate::client::ValidatedCompressionUsageParams;
+use crate::query_stream::QueryStreamer;
+use crate::sse::SseEncoding;
+use crate::sse::SseResponse;
 use crate::webui_client::WebuiClient;
 
 /// Shared application state passed to all route handlers.
@@ -40,6 +46,9 @@ pub struct AppState {
     pub client: Client,
     /// Client for the `WebUI`'s routes.
     pub webui_client: WebuiClient,
+    /// Streamer of query results, or `None` if the package doesn't run queries on the query
+    /// coordinator.
+    pub query_streamer: Option<Arc<QueryStreamer<Client, SseEncoding>>>,
 }
 
 impl FromRef<AppState> for Client {
@@ -51,6 +60,12 @@ impl FromRef<AppState> for Client {
 impl FromRef<AppState> for WebuiClient {
     fn from_ref(state: &AppState) -> Self {
         state.webui_client.clone()
+    }
+}
+
+impl FromRef<AppState> for Option<Arc<QueryStreamer<Client, SseEncoding>>> {
+    fn from_ref(state: &AppState) -> Self {
+        state.query_streamer.clone()
     }
 }
 
@@ -70,6 +85,7 @@ pub fn from_app_state(state: AppState) -> Result<axum::Router, serde_json::Error
         .route("/", get(health))
         .routes(routes!(health))
         .routes(routes!(query))
+        .routes(routes!(stream_query))
         .routes(routes!(query_results))
         .routes(routes!(cancel_query))
         .routes(routes!(compression_usage))
@@ -88,6 +104,8 @@ pub fn from_app_state(state: AppState) -> Result<axum::Router, serde_json::Error
 // `utoipa::OpenApi` triggers `clippy::needless_for_each`
 #[allow(clippy::needless_for_each)]
 mod api_doc {
+    use clp_rust_utils::job_config::QueryJobStatus;
+
     // Using `super::...` can cause `super` to appear as a tag in the generated OpenAPI
     // documentation. Importing the paths directly prevents this issue.
     use super::__path_cancel_query;
@@ -95,11 +113,16 @@ mod api_doc {
     use super::__path_health;
     use super::__path_query;
     use super::__path_query_results;
+    use super::__path_stream_query;
     use super::CompressionUsage;
     use super::OpenApi;
     use super::OpenApiRouter;
     use super::webui;
     use crate::client::CompressionJobStatus;
+    use crate::query_stream::StreamingQueryEnd;
+    use crate::query_stream::StreamingQueryError;
+    use crate::query_stream::StreamingQueryJob;
+    use crate::sse::StreamingQueryResult;
 
     #[derive(utoipa::OpenApi)]
     #[openapi(
@@ -108,8 +131,23 @@ mod api_doc {
             description = "API Server for CLP",
             contact(name = "YScope")
         ),
-        paths(health, query, query_results, cancel_query, compression_usage),
-        components(schemas(CompressionUsage, CompressionJobStatus))
+        paths(
+            health,
+            query,
+            stream_query,
+            query_results,
+            cancel_query,
+            compression_usage
+        ),
+        components(schemas(
+            CompressionUsage,
+            CompressionJobStatus,
+            QueryJobStatus,
+            StreamingQueryEnd,
+            StreamingQueryError,
+            StreamingQueryJob,
+            StreamingQueryResult
+        ))
     )]
     pub struct ApiDoc;
 
@@ -190,6 +228,76 @@ async fn query(
 struct QueryResultsUri {
     /// The uri to get the query results.
     query_results_uri: String,
+}
+
+#[utoipa::path(
+    post,
+    path = "/query/stream",
+    description = "Submits a new query job and streams its results back as Server-Sent Events \
+        (SSE) in the same response, while the job runs. Only available when the package runs \
+        queries on the query coordinator, which requires the clp-json storage engine. If the \
+        client disconnects before the `end` event, or the job's status can no longer be read, the \
+        job's cancellation is requested.",
+    request_body(
+        content = QueryConfig,
+        example = json!({
+            "query_string": "*",
+            "datasets": ["default"],
+            "time_range_begin_millisecs": 0,
+            "time_range_end_millisecs": 17_356_896,
+            "ignore_case": true
+        })),
+    responses(
+        (
+            status = OK,
+            body = String,
+            content_type = "text/event-stream",
+            description = "Server-Sent Events stream of the query: first a `job` event whose data \
+                is a `StreamingQueryJob`, then one unnamed event per result whose data is a \
+                `StreamingQueryResult`, and finally, once the job has terminated, an `end` event \
+                whose data is a `StreamingQueryEnd`. If the job's status can't be read, an \
+                `error` event whose data is a `StreamingQueryError` replaces the `end` event. \
+                Results from different archives arrive in no particular order.",
+            example = "event: job\ndata: {\"query_job_id\":1}\n\ndata: \
+                {\"archive_id\":\"018e90e5-8b2a-4a61-a2fc-cac799936caf\",\
+                \"timestamp_millisecs\":1633036800000,\"message\":\"Example log message\"}\n\n\
+                event: end\ndata: {\"status\":\"Succeeded\",\"num_results_emitted\":1,\
+                \"num_duplicates_dropped\":0}\n\n"
+        ),
+        (
+            status = BAD_REQUEST,
+            description = "Invalid query config (e.g., empty query_string, \
+                time_range_begin_millisecs > time_range_end_millisecs), or one that sets an \
+                option that doesn't apply to streamed results: max_num_results, \
+                buffer_results_in_mongodb, or count_by_time_bucket_size_millisecs."
+        ),
+        (
+            status = NOT_IMPLEMENTED,
+            description = "The package doesn't run queries on the query coordinator."
+        ),
+        (status = INTERNAL_SERVER_ERROR)
+    )
+)]
+async fn stream_query(
+    State(query_streamer): State<Option<Arc<QueryStreamer<Client, SseEncoding>>>>,
+    Json(query_config): Json<QueryConfig>,
+) -> Result<SseResponse<impl Stream<Item = Result<Bytes, serde_json::Error>>>, HandlerError> {
+    let Some(query_streamer) = query_streamer else {
+        return Err(HandlerError::NotImplemented(
+            "streaming query results requires the package to run queries on the query coordinator"
+                .to_owned(),
+        ));
+    };
+    tracing::info!(query_config = ? query_config, "Submitting a streamed query.");
+    let query_stream = query_streamer
+        .submit(query_config)
+        .await
+        .inspect_err(|e| tracing::error!(error = ? e, "Failed to submit a streamed query."))?;
+    tracing::info!(
+        query_job_id = query_stream.query_job_id(),
+        "Submitted a streamed query."
+    );
+    Ok(query_stream.into_sse_response())
 }
 
 /// Query parameters for the query results endpoint.
@@ -363,6 +471,8 @@ enum HandlerError {
     BadRequest(String),
     #[error("Gateway timeout: {0}")]
     GatewayTimeout(String),
+    #[error("Not implemented: {0}")]
+    NotImplemented(String),
 }
 
 impl From<axum::Error> for HandlerError {
@@ -417,6 +527,7 @@ impl IntoResponse for HandlerError {
             Self::InternalServer => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
             Self::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg).into_response(),
             Self::GatewayTimeout(msg) => (StatusCode::GATEWAY_TIMEOUT, msg).into_response(),
+            Self::NotImplemented(msg) => (StatusCode::NOT_IMPLEMENTED, msg).into_response(),
         }
     }
 }
@@ -461,6 +572,42 @@ mod tests {
     /// Builds the application router for the CLP-S storage engine, with clients whose `MySQL` and
     /// `MongoDB` connections are only established on first use.
     async fn clp_s_app_with_lazy_clients() -> axum::Router {
+        from_app_state(clp_s_app_state_with_lazy_clients().await)
+            .expect("the OpenAPI document should serialize")
+    }
+
+    /// Builds the application router of [`clp_s_app_with_lazy_clients`], with a streamer of query
+    /// results whose listener is bound to a loopback port.
+    async fn clp_s_app_with_lazy_clients_and_a_query_streamer() -> axum::Router {
+        use std::net::Ipv4Addr;
+        use std::net::SocketAddr;
+        use std::num::NonZeroU64;
+
+        use non_empty_string::NonEmptyString;
+        use query_result_listener::listener::ListenerConfig;
+        use query_result_listener::listener::ResultListener;
+
+        let state = clp_s_app_state_with_lazy_clients().await;
+        let listener = ResultListener::bind(ListenerConfig {
+            bind_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+            advertised_host: NonEmptyString::new("127.0.0.1".to_owned())
+                .expect("the advertised host fixture should be non-empty"),
+            handshake_timeout_sec: NonZeroU64::MIN,
+        })
+        .expect("binding a loopback listener should succeed");
+        from_app_state(AppState {
+            query_streamer: Some(Arc::new(QueryStreamer::new(listener, state.client.clone()))),
+            ..state
+        })
+        .expect("the OpenAPI document should serialize")
+    }
+
+    /// # Returns
+    ///
+    /// The application state for the CLP-S storage engine, with clients whose `MySQL` and
+    /// `MongoDB` connections are only established on first use, and without a streamer of query
+    /// results.
+    async fn clp_s_app_state_with_lazy_clients() -> AppState {
         let config = Config {
             package: Package {
                 storage_engine: StorageEngine::ClpS,
@@ -473,11 +620,36 @@ mod tests {
         let sql_pool = sqlx::mysql::MySqlPoolOptions::new()
             .connect_lazy("mysql://localhost/clp-db")
             .expect("the MySQL URI should be valid");
-        from_app_state(AppState {
+        AppState {
             client: Client::new(config.clone(), mongodb_client.clone(), sql_pool.clone()),
             webui_client: WebuiClient::new(config, sql_pool, mongodb_client).await,
-        })
-        .expect("the OpenAPI document should serialize")
+            query_streamer: None,
+        }
+    }
+
+    /// Posts `query_config` to `app`'s route that streams query results.
+    ///
+    /// # Returns
+    ///
+    /// The app's response.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the request can't be built or the app fails to respond.
+    async fn post_stream_query(
+        app: axum::Router,
+        query_config: &serde_json::Value,
+    ) -> axum::response::Response {
+        app.oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/query/stream")
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(query_config.to_string()))
+                .expect("the request should be valid"),
+        )
+        .await
+        .expect("the app should respond")
     }
 
     async fn get_body(response: axum::response::Response) -> String {
@@ -635,6 +807,30 @@ mod tests {
             .await?;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn stream_query_route_is_not_implemented_without_a_query_streamer() {
+        let response = post_stream_query(
+            clp_s_app_with_lazy_clients().await,
+            &serde_json::json!({"query_string": "*"}),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+    }
+
+    #[tokio::test]
+    async fn stream_query_route_rejects_an_option_that_does_not_apply_to_streamed_results() {
+        let response = post_stream_query(
+            clp_s_app_with_lazy_clients_and_a_query_streamer().await,
+            &serde_json::json!({"query_string": "*", "max_num_results": 10}),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = get_body(response).await;
+        assert!(body.contains("max_num_results"), "unexpected body: {body}");
     }
 
     #[tokio::test]

@@ -10,19 +10,26 @@ use std::task::ready;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use axum::body::Bytes;
 use clp_rust_utils::job_config::QueryJobConfig;
 use clp_rust_utils::job_config::QueryJobStatus;
 use futures::Stream;
+use futures::StreamExt;
 use query_result_listener::encoding::ResultEncoding;
 use query_result_listener::listener::ResultListener;
 use query_result_listener::session::ResultStream;
 use query_result_listener::session::Session;
 use query_result_listener::session::SessionConfig;
 use query_result_listener::session::SessionStats;
+use serde::Serialize;
 use tokio::time::Sleep;
+use utoipa::ToSchema;
 
 use crate::client::ClientError;
 use crate::client::QueryConfig;
+use crate::sse;
+use crate::sse::SseEncoding;
+use crate::sse::SseResponse;
 
 /// The interval between the end of one read of a streamed query's job status and the start of the
 /// next.
@@ -184,6 +191,45 @@ impl<QueryJobTableType: QueryJobTable, EncodingType: ResultEncoding>
     }
 }
 
+impl<QueryJobTableType: QueryJobTable> QueryStream<QueryJobTableType, SseEncoding> {
+    /// Converts the stream into the Server-Sent Events response of a streamed query: a `job` event
+    /// whose data is a [`StreamingQueryJob`], then one unnamed event per result whose data is a
+    /// [`sse::StreamingQueryResult`], and finally an `end` event whose data is a
+    /// [`StreamingQueryEnd`], or an `error` event whose data is a [`StreamingQueryError`] if the
+    /// job's status couldn't be read.
+    ///
+    /// # Returns
+    ///
+    /// The response.
+    #[must_use]
+    pub fn into_sse_response(
+        self,
+    ) -> SseResponse<impl Stream<Item = Result<Bytes, serde_json::Error>> + Send + 'static> {
+        const END_EVENT: &str = "end";
+        const ERROR_EVENT: &str = "error";
+        const JOB_EVENT: &str = "job";
+
+        let job_event = sse::encode_event(
+            JOB_EVENT,
+            &StreamingQueryJob {
+                query_job_id: self.query_job_id(),
+            },
+        );
+        let events = self.map(|event| match event {
+            QueryEvent::Results(batch) => Ok(batch),
+            QueryEvent::End(end) => sse::encode_event(END_EVENT, &StreamingQueryEnd::from(end)),
+            // The error was logged when it ended the stream, and its details stay internal.
+            QueryEvent::Error(_) => sse::encode_event(
+                ERROR_EVENT,
+                &StreamingQueryError {
+                    message: "failed to read the status of the query job".to_owned(),
+                },
+            ),
+        });
+        SseResponse::new(futures::stream::iter([job_event]).chain(events))
+    }
+}
+
 impl<QueryJobTableType: QueryJobTable, EncodingType: ResultEncoding> Stream
     for QueryStream<QueryJobTableType, EncodingType>
 {
@@ -279,6 +325,43 @@ pub struct QueryEnd {
 
     /// The final statistics of the query's session.
     pub stats: SessionStats,
+}
+
+/// The data of a streamed query's `job` event.
+#[derive(Serialize, ToSchema)]
+pub struct StreamingQueryJob {
+    /// The ID of the query's job.
+    pub query_job_id: u64,
+}
+
+/// The data of a streamed query's `end` event.
+#[derive(Serialize, ToSchema)]
+pub struct StreamingQueryEnd {
+    /// The terminal status of the query's job.
+    pub status: QueryJobStatus,
+
+    /// The number of results streamed.
+    pub num_results_emitted: u64,
+
+    /// The number of results dropped because a retried query task had already streamed them.
+    pub num_duplicates_dropped: u64,
+}
+
+impl From<QueryEnd> for StreamingQueryEnd {
+    fn from(end: QueryEnd) -> Self {
+        Self {
+            status: end.status,
+            num_results_emitted: end.stats.num_results_emitted,
+            num_duplicates_dropped: end.stats.num_duplicates_dropped,
+        }
+    }
+}
+
+/// The data of a streamed query's `error` event.
+#[derive(Serialize, ToSchema)]
+pub struct StreamingQueryError {
+    /// A description of the error.
+    pub message: String,
 }
 
 /// A read of a query job's status.

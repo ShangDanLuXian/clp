@@ -1,8 +1,17 @@
+use std::net::Ipv4Addr;
+use std::net::SocketAddr;
+use std::sync::Arc;
+
 use anyhow::Context;
+use api_server::client::Client;
+use api_server::query_stream::QueryStreamer;
+use api_server::sse::SseEncoding;
 use clap::Parser;
 use clp_rust_utils::clp_config::package;
 use clp_rust_utils::database::mysql::create_clp_db_mysql_pool;
 use clp_rust_utils::serde::yaml;
+use query_result_listener::listener::ListenerConfig;
+use query_result_listener::listener::ResultListener;
 
 #[derive(Parser)]
 #[command(version, about = "API Server for CLP.")]
@@ -35,6 +44,37 @@ fn read_config_and_credentials(
         },
     };
     Ok((config, credentials))
+}
+
+/// Binds the listener that receives the results query tasks stream, on every interface.
+///
+/// # Returns
+///
+/// The newly bound listener on success.
+///
+/// # Errors
+///
+/// Returns an error if:
+///
+/// * Forwards [`ResultListener::bind`]'s return values on failure.
+fn bind_query_result_listener(
+    config: &package::config::QueryResultListener,
+) -> anyhow::Result<ResultListener<SseEncoding>> {
+    let listener = ResultListener::bind(ListenerConfig {
+        bind_addr: SocketAddr::from((Ipv4Addr::UNSPECIFIED, config.port)),
+        advertised_host: config.advertised_host.clone(),
+        handshake_timeout_sec: config.handshake_timeout_secs,
+    })
+    .context(format!(
+        "cannot bind the query result listener to port {}",
+        config.port
+    ))?;
+    tracing::info!(
+        port = config.port,
+        advertised_host = % config.advertised_host,
+        "Listening for the results of streamed queries."
+    );
+    Ok(listener)
 }
 
 async fn shutdown_signal() {
@@ -84,14 +124,22 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("cannot connect to MongoDB")?;
 
-    let client =
-        api_server::client::Client::new(config.clone(), mongodb_client.clone(), sql_pool.clone());
+    let client = Client::new(config.clone(), mongodb_client.clone(), sql_pool.clone());
+    // Only the query coordinator runs query jobs whose tasks stream their results.
+    let query_streamer = match config.query_coordinator {
+        Some(_) => Some(Arc::new(QueryStreamer::new(
+            bind_query_result_listener(&api_server_config.query_result_listener)?,
+            client.clone(),
+        ))),
+        None => None,
+    };
     let webui_client =
         api_server::webui_client::WebuiClient::new(config, sql_pool, mongodb_client).await;
 
     let router = api_server::routes::from_app_state(api_server::routes::AppState {
         client,
         webui_client,
+        query_streamer,
     })?;
     startup_counter.add(1, &[opentelemetry::KeyValue::new("type", "start")]);
 
