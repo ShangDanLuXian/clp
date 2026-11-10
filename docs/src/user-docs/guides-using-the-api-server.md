@@ -67,6 +67,42 @@ following commands to submit a query to clp-json and stream the results.
    data: {"timestamp": 1767225600020, "message": "No logs found" }
    ```
 
+## Example: Streaming query results in a single request
+
+When CLP runs queries on the query coordinator (`package.scheduler` is `spider`, which requires
+clp-json), the API server can also submit a query and stream its results back in the same request,
+while the query runs:
+
+```shell
+curl -N -X POST http://localhost:3001/query/stream \
+    -H "Content-Type: application/json" \
+    -d '{
+       "query_string": "*log*",
+       "datasets": ["default"],
+       "ignore_case": false
+    }'
+```
+
+The response is a stream of [Server-sent Events][server-sent-events]: a `job` event with the query
+job's ID, one event per result, and an `end` event with the job's terminal status once the job has
+finished:
+
+```text
+event: job
+data: {"query_job_id":100}
+
+data: {"archive_id":"018e90e5-8b2a-4a61-a2fc-cac799936caf","timestamp_millisecs":1767225600000,"message":"Example log message"}
+
+event: end
+data: {"status":"Succeeded","num_results_emitted":1,"num_duplicates_dropped":0}
+```
+
+Results from different archives arrive in no particular order. Streaming doesn't support
+`max_num_results`, `buffer_results_in_mongodb`, or `count_by_time_bucket_size_millisecs`. If the
+client disconnects before the `end` event, the query job's cancellation is requested. If the API
+server can no longer read the job's status, an `error` event replaces the `end` event, and the job's
+cancellation is also requested.
+
 [OpenAPI]: https://swagger.io/specification/
 [server-sent-events]: https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events
 [swagger-ui]: https://petstore.swagger.io/?url=https://docs.yscope.com/clp/DOCS_VAR_CLP_GIT_REF/_static/generated/api-server-openapi.json

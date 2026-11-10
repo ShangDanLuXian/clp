@@ -190,6 +190,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/query/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Submits a new query job and streams its results back as Server-Sent Events (SSE) in the same response, while the job runs. Only available when the package runs queries on the query coordinator, which requires the clp-json storage engine. If the client disconnects before the `end` event, or the job's status can no longer be read, the job's cancellation is requested. */
+        post: operations["stream_query"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/query/{query_job_id}": {
         parameters: {
             query?: never;
@@ -522,6 +539,8 @@ export interface components {
              */
             time_range_end_millisecs?: number | null;
         };
+        /** @enum {string} */
+        QueryJobStatus: "Pending" | "Running" | "Succeeded" | "Failed" | "CancelRequested" | "Cancelling" | "Cancelled" | "Killed";
         QueryResultsUri: {
             /** @description The uri to get the query results. */
             query_results_uri: string;
@@ -592,6 +611,46 @@ export interface components {
             path: string;
             /** @description ID of the stream the file was extracted from. */
             stream_id: string;
+        };
+        /** @description The data of a streamed query's `end` event. */
+        StreamingQueryEnd: {
+            /**
+             * Format: int64
+             * @description The number of results dropped because a retried query task had already streamed them.
+             */
+            num_duplicates_dropped: number;
+            /**
+             * Format: int64
+             * @description The number of results streamed.
+             */
+            num_results_emitted: number;
+            /** @description The terminal status of the query's job. */
+            status: components["schemas"]["QueryJobStatus"];
+        };
+        /** @description The data of a streamed query's `error` event. */
+        StreamingQueryError: {
+            /** @description A description of the error. */
+            message: string;
+        };
+        /** @description The data of a streamed query's `job` event. */
+        StreamingQueryJob: {
+            /**
+             * Format: int64
+             * @description The ID of the query's job.
+             */
+            query_job_id: number;
+        };
+        /** @description The data of a streamed query's result event. */
+        StreamingQueryResult: {
+            /** @description The ID of the archive that contains the result. */
+            archive_id: string;
+            /** @description The result's log event message, without its trailing newline. */
+            message: string;
+            /**
+             * Format: int64
+             * @description The result's timestamp in milliseconds since the Unix epoch.
+             */
+            timestamp_millisecs: number;
         };
         /** @description Earliest and latest log entry timestamps across the selected datasets. */
         TimeRange: {
@@ -1024,6 +1083,70 @@ export interface operations {
                 content?: never;
             };
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    stream_query: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "query_string": "*",
+                 *       "datasets": [
+                 *         "default"
+                 *       ],
+                 *       "time_range_begin_millisecs": 0,
+                 *       "time_range_end_millisecs": 17356896,
+                 *       "ignore_case": true
+                 *     }
+                 */
+                "application/json": components["schemas"]["QueryConfig"];
+            };
+        };
+        responses: {
+            /** @description Server-Sent Events stream of the query: first a `job` event whose data is a `StreamingQueryJob`, then one unnamed event per result whose data is a `StreamingQueryResult`, and finally, once the job has terminated, an `end` event whose data is a `StreamingQueryEnd`. If the job's status can't be read, an `error` event whose data is a `StreamingQueryError` replaces the `end` event. Results from different archives arrive in no particular order. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example event: job
+                     *     data: {"query_job_id":1}
+                     *
+                     *     data: {"archive_id":"018e90e5-8b2a-4a61-a2fc-cac799936caf","timestamp_millisecs":1633036800000,"message":"Example log message"}
+                     *
+                     *     event: end
+                     *     data: {"status":"Succeeded","num_results_emitted":1,"num_duplicates_dropped":0}
+                     */
+                    "text/event-stream": string;
+                };
+            };
+            /** @description Invalid query config (e.g., empty query_string, time_range_begin_millisecs > time_range_end_millisecs), or one that sets an option that doesn't apply to streamed results: max_num_results, buffer_results_in_mongodb, or count_by_time_bucket_size_millisecs. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The package doesn't run queries on the query coordinator. */
+            501: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -79,6 +79,54 @@
         }
       }
     },
+    "/query/stream": {
+      "post": {
+        "tags": [],
+        "description": "Submits a new query job and streams its results back as Server-Sent Events (SSE) in the same response, while the job runs. Only available when the package runs queries on the query coordinator, which requires the clp-json storage engine. If the client disconnects before the `end` event, or the job's status can no longer be read, the job's cancellation is requested.",
+        "operationId": "stream_query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueryConfig"
+              },
+              "example": {
+                "query_string": "*",
+                "datasets": [
+                  "default"
+                ],
+                "time_range_begin_millisecs": 0,
+                "time_range_end_millisecs": 17356896,
+                "ignore_case": true
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Server-Sent Events stream of the query: first a `job` event whose data is a `StreamingQueryJob`, then one unnamed event per result whose data is a `StreamingQueryResult`, and finally, once the job has terminated, an `end` event whose data is a `StreamingQueryEnd`. If the job's status can't be read, an `error` event whose data is a `StreamingQueryError` replaces the `end` event. Results from different archives arrive in no particular order.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "event: job\ndata: {\"query_job_id\":1}\n\ndata: {\"archive_id\":\"018e90e5-8b2a-4a61-a2fc-cac799936caf\",\"timestamp_millisecs\":1633036800000,\"message\":\"Example log message\"}\n\nevent: end\ndata: {\"status\":\"Succeeded\",\"num_results_emitted\":1,\"num_duplicates_dropped\":0}\n\n"
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query config (e.g., empty query_string, time_range_begin_millisecs > time_range_end_millisecs), or one that sets an option that doesn't apply to streamed results: max_num_results, buffer_results_in_mongodb, or count_by_time_bucket_size_millisecs."
+          },
+          "500": {
+            "description": ""
+          },
+          "501": {
+            "description": "The package doesn't run queries on the query coordinator."
+          }
+        }
+      }
+    },
     "/query/{query_job_id}": {
       "delete": {
         "tags": [],
@@ -382,6 +430,19 @@
         },
         "additionalProperties": false
       },
+      "QueryJobStatus": {
+        "type": "string",
+        "enum": [
+          "Pending",
+          "Running",
+          "Succeeded",
+          "Failed",
+          "CancelRequested",
+          "Cancelling",
+          "Cancelled",
+          "Killed"
+        ]
+      },
       "QueryResultsUri": {
         "type": "object",
         "required": [
@@ -394,6 +455,85 @@
           }
         },
         "additionalProperties": false
+      },
+      "StreamingQueryEnd": {
+        "type": "object",
+        "description": "The data of a streamed query's `end` event.",
+        "required": [
+          "status",
+          "num_results_emitted",
+          "num_duplicates_dropped"
+        ],
+        "properties": {
+          "num_duplicates_dropped": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The number of results dropped because a retried query task had already streamed them.",
+            "minimum": 0
+          },
+          "num_results_emitted": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The number of results streamed.",
+            "minimum": 0
+          },
+          "status": {
+            "$ref": "#/components/schemas/QueryJobStatus",
+            "description": "The terminal status of the query's job."
+          }
+        }
+      },
+      "StreamingQueryError": {
+        "type": "object",
+        "description": "The data of a streamed query's `error` event.",
+        "required": [
+          "message"
+        ],
+        "properties": {
+          "message": {
+            "type": "string",
+            "description": "A description of the error."
+          }
+        }
+      },
+      "StreamingQueryJob": {
+        "type": "object",
+        "description": "The data of a streamed query's `job` event.",
+        "required": [
+          "query_job_id"
+        ],
+        "properties": {
+          "query_job_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The ID of the query's job.",
+            "minimum": 0
+          }
+        }
+      },
+      "StreamingQueryResult": {
+        "type": "object",
+        "description": "The data of a streamed query's result event.",
+        "required": [
+          "archive_id",
+          "timestamp_millisecs",
+          "message"
+        ],
+        "properties": {
+          "archive_id": {
+            "type": "string",
+            "description": "The ID of the archive that contains the result."
+          },
+          "message": {
+            "type": "string",
+            "description": "The result's log event message, without its trailing newline."
+          },
+          "timestamp_millisecs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The result's timestamp in milliseconds since the Unix epoch."
+          }
+        }
       }
     }
   }
