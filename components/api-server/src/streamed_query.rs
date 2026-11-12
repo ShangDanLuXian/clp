@@ -123,10 +123,6 @@ pub fn stream_events<EncodingType: ResultEncoding>(
             }
             Err(error) => {
                 drop(results);
-                tracing::error!(
-                    error = % error,
-                    "A streamed query failed; requesting the cancellation of its job."
-                );
                 cancellation.request();
                 yield StreamedQueryEvent::Error(error);
             }

@@ -429,6 +429,11 @@ impl Client {
                         query_job_id,
                         "Requested the cancellation of a streamed query's job."
                     ),
+                    Err(ClientError::QueryJobAlreadyTerminated(_)) => tracing::info!(
+                        query_job_id,
+                        "Requested the cancellation of a streamed query's job, which had already \
+                         terminated."
+                    ),
                     Err(e) => tracing::warn!(
                         query_job_id,
                         error = % e,
