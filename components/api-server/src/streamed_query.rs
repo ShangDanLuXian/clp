@@ -361,7 +361,6 @@ impl<QueryJobTableType: QueryJobTable> Drop for QueryJob<QueryJobTableType> {
 
 #[cfg(test)]
 mod tests {
-    use std::io::ErrorKind;
     use std::sync::Arc;
     use std::sync::Mutex;
     use std::sync::MutexGuard;
@@ -378,11 +377,11 @@ mod tests {
     use query_result_listener::session::SessionConfig;
     use query_result_listener::session::SessionStats;
     use query_result_listener::test_utils::ARCHIVE_ID;
+    use query_result_listener::test_utils::FakeClpS;
     use query_result_listener::test_utils::QueryResult;
     use query_result_listener::test_utils::QueryResultEncoding;
     use query_result_listener::test_utils::TIMEOUT;
     use query_result_listener::test_utils::expected_results;
-    use tokio::net::TcpStream;
     use tokio::sync::Notify;
     use tokio::sync::Semaphore;
     use tokio::time::sleep;
@@ -614,152 +613,6 @@ mod tests {
         cancellation_requests: Vec<u64>,
     }
 
-    /// A simulated attempt of a `clp-s` query task, streaming the results of task [`TASK_INDEX`] of
-    /// archive [`ARCHIVE_ID`] over TCP.
-    struct FakeClpS {
-        stream: TcpStream,
-    }
-
-    impl FakeClpS {
-        /// Connects to the listener that `network_output` names, and sends the handshake of task
-        /// [`TASK_INDEX`] of archive [`ARCHIVE_ID`] for its session.
-        ///
-        /// # Returns
-        ///
-        /// The connected attempt.
-        ///
-        /// # Panics
-        ///
-        /// Panics if connecting or sending the handshake fails.
-        async fn connect(network_output: &NetworkOutput) -> Self {
-            use query_result_listener::protocol::PROTOCOL_VERSION;
-            use query_result_listener::test_utils::encode_handshake;
-
-            let stream =
-                TcpStream::connect((network_output.host.as_str(), network_output.port.get()))
-                    .await
-                    .expect("connecting to the listener should succeed");
-            let mut attempt = Self { stream };
-            attempt
-                .send(&encode_handshake(
-                    PROTOCOL_VERSION,
-                    &network_output.session_token.to_string(),
-                    u64::try_from(TASK_INDEX).expect("the test task index fits in `u64`"),
-                    ARCHIVE_ID,
-                ))
-                .await;
-            attempt
-        }
-
-        /// Connects to the listener that `network_output` names, and sends the results at `0..2`,
-        /// then those at `2..4` in a separate read, so that the first batch fills a session's
-        /// channel of capacity 1 that nothing consumes, and the attempt waits to send the second.
-        ///
-        /// # Returns
-        ///
-        /// The connected attempt.
-        ///
-        /// # Panics
-        ///
-        /// Panics if connecting or sending fails.
-        async fn connect_blocked_on_its_second_batch(network_output: &NetworkOutput) -> Self {
-            let mut attempt = Self::connect(network_output).await;
-            attempt.send_results(0..2).await;
-            sleep(SETTLE_DELAY).await;
-            attempt.send_results(2..4).await;
-            sleep(SETTLE_DELAY).await;
-            attempt
-        }
-
-        /// Sends `bytes` as they are.
-        ///
-        /// # Panics
-        ///
-        /// Panics if the write fails.
-        async fn send(&mut self, bytes: &[u8]) {
-            use tokio::io::AsyncWriteExt;
-
-            self.stream
-                .write_all(bytes)
-                .await
-                .expect("sending to the listener should succeed");
-        }
-
-        /// Sends the results at `result_indices` in a single write.
-        ///
-        /// # Panics
-        ///
-        /// Panics if the write fails.
-        async fn send_results(&mut self, result_indices: impl IntoIterator<Item = u64>) {
-            use query_result_listener::test_utils::encode_results;
-
-            self.send(&encode_results(TASK_INDEX, result_indices)).await;
-        }
-
-        /// Ends the stream the way `clp-s` does: sends a trailer counting `num_results` results,
-        /// then EOF, and waits until the listener closes the connection.
-        ///
-        /// # Returns
-        ///
-        /// The bytes the listener sent back.
-        ///
-        /// # Panics
-        ///
-        /// Panics if sending fails, or the listener doesn't close the connection within
-        /// [`TIMEOUT`].
-        async fn finish(mut self, num_results: u64) -> Vec<u8> {
-            use query_result_listener::test_utils::encode_trailer;
-            use tokio::io::AsyncWriteExt;
-
-            self.send(&encode_trailer(num_results)).await;
-            self.stream
-                .shutdown()
-                .await
-                .expect("sending EOF to the listener should succeed");
-            self.read_until_closed().await
-        }
-
-        /// Waits until the listener closes the connection without sending anything.
-        ///
-        /// # Panics
-        ///
-        /// Panics if the listener sends anything, or doesn't close the connection within
-        /// [`TIMEOUT`].
-        async fn expect_closed_by_listener(self) {
-            assert_eq!(
-                self.read_until_closed().await,
-                [] as [u8; 0],
-                "the listener shouldn't acknowledge the connection"
-            );
-        }
-
-        /// Waits until the listener closes the connection, either cleanly or with a reset.
-        ///
-        /// # Returns
-        ///
-        /// The bytes the listener sent before closing.
-        ///
-        /// # Panics
-        ///
-        /// Panics if the listener doesn't close the connection within [`TIMEOUT`], or reading fails
-        /// with an error other than a reset.
-        async fn read_until_closed(mut self) -> Vec<u8> {
-            use tokio::io::AsyncReadExt;
-
-            let mut received = Vec::new();
-            match timeout(TIMEOUT, self.stream.read_to_end(&mut received))
-                .await
-                .expect("the listener should close the connection")
-            {
-                Ok(_) => received,
-                // The listener resets the connection if it closes it before reading every byte
-                // sent.
-                Err(e) if ErrorKind::ConnectionReset == e.kind() => received,
-                Err(e) => panic!("reading from the listener failed: {e}"),
-            }
-        }
-    }
-
     /// The items that a streamed query's stream yields from some point until its last item.
     struct Ending {
         results: Vec<QueryResult>,
@@ -935,6 +788,30 @@ mod tests {
         received
     }
 
+    /// Connects an attempt of task [`TASK_INDEX`] of archive [`ARCHIVE_ID`] to the session that
+    /// `network_output` names, and sends its results at `0..2`, then those at `2..4` in a separate
+    /// read, so that the first batch fills a session's channel of capacity 1 that nothing consumes,
+    /// and the attempt waits to send the second.
+    ///
+    /// # Returns
+    ///
+    /// The connected attempt.
+    ///
+    /// # Panics
+    ///
+    /// Panics if connecting or sending fails.
+    async fn connect_attempt_blocked_on_its_second_batch(
+        network_output: &NetworkOutput,
+    ) -> FakeClpS {
+        let mut attempt = FakeClpS::connect(network_output).await;
+        attempt.send_handshake(TASK_INDEX, ARCHIVE_ID).await;
+        attempt.send_results(TASK_INDEX, 0..2).await;
+        sleep(SETTLE_DELAY).await;
+        attempt.send_results(TASK_INDEX, 2..4).await;
+        sleep(SETTLE_DELAY).await;
+        attempt
+    }
+
     #[tokio::test]
     async fn results_are_forwarded_while_the_job_runs_and_the_end_carries_its_status_and_stats()
     -> Result<()> {
@@ -945,11 +822,13 @@ mod tests {
         let mut query_events = Box::pin(streamed_query.events);
         let network_output = query_job_table.network_output();
         let mut first_attempt = FakeClpS::connect(&network_output).await;
-        first_attempt.send_results(0..3).await;
+        first_attempt.send_handshake(TASK_INDEX, ARCHIVE_ID).await;
+        first_attempt.send_results(TASK_INDEX, 0..3).await;
         let mut received = receive_results(&mut query_events, 3).await;
         first_attempt.finish(3).await;
         let mut retry = FakeClpS::connect(&network_output).await;
-        retry.send_results(0..5).await;
+        retry.send_handshake(TASK_INDEX, ARCHIVE_ID).await;
+        retry.send_results(TASK_INDEX, 0..5).await;
         received.extend(receive_results(&mut query_events, 2).await);
         retry.finish(5).await;
 
@@ -987,7 +866,7 @@ mod tests {
         let mut query_events = Box::pin(streamer.submit(query_config()).await?.events);
         expect_pending(&mut query_events);
         let _attempt =
-            FakeClpS::connect_blocked_on_its_second_batch(&query_job_table.network_output()).await;
+            connect_attempt_blocked_on_its_second_batch(&query_job_table.network_output()).await;
         query_job_table.set_status(QueryJobStatus::Succeeded);
         // Lets the first status read become due, so that the next poll finds the terminal status
         // while the attempt still waits to send its second batch.
@@ -1019,7 +898,8 @@ mod tests {
         let streamer =
             start_streamer::<QueryResultEncoding>(&query_job_table, SessionConfig::default());
         let mut query_events = Box::pin(streamer.submit(query_config()).await?.events);
-        let attempt = FakeClpS::connect(&query_job_table.network_output()).await;
+        let mut attempt = FakeClpS::connect(&query_job_table.network_output()).await;
+        attempt.send_handshake(TASK_INDEX, ARCHIVE_ID).await;
         // Lets the listener join the attempt to the session while the job runs.
         sleep(SETTLE_DELAY).await;
 
@@ -1055,6 +935,7 @@ mod tests {
         let mut query_events = Box::pin(streamer.submit(query_config()).await?.events);
         expect_pending(&mut query_events);
         let mut failing_attempt = FakeClpS::connect(&query_job_table.network_output()).await;
+        failing_attempt.send_handshake(TASK_INDEX, ARCHIVE_ID).await;
         failing_attempt
             .send(&encode_result(0, timestamp(0), UNENCODABLE_MESSAGE))
             .await;
@@ -1100,7 +981,7 @@ mod tests {
         let mut query_events = Box::pin(streamer.submit(query_config()).await?.events);
         expect_pending(&mut query_events);
         let attempt =
-            FakeClpS::connect_blocked_on_its_second_batch(&query_job_table.network_output()).await;
+            connect_attempt_blocked_on_its_second_batch(&query_job_table.network_output()).await;
         query_job_table.fail_status_reads();
         // Lets the first status read become due, so that it fails at the next poll.
         sleep(QUERY_JOB_STATUS_POLL_INTERVAL).await;
@@ -1152,7 +1033,8 @@ mod tests {
         let streamer =
             start_streamer::<QueryResultEncoding>(&query_job_table, SessionConfig::default());
         let mut query_events = Box::pin(streamer.submit(query_config()).await?.events);
-        let attempt = FakeClpS::connect(&query_job_table.network_output()).await;
+        let mut attempt = FakeClpS::connect(&query_job_table.network_output()).await;
+        attempt.send_handshake(TASK_INDEX, ARCHIVE_ID).await;
         // Lets the listener join the attempt to the session while the job runs.
         sleep(SETTLE_DELAY).await;
         expect_pending(&mut query_events);
@@ -1178,7 +1060,7 @@ mod tests {
         let mut query_events = Box::pin(streamer.submit(query_config()).await?.events);
         expect_pending(&mut query_events);
         let _attempt =
-            FakeClpS::connect_blocked_on_its_second_batch(&query_job_table.network_output()).await;
+            connect_attempt_blocked_on_its_second_batch(&query_job_table.network_output()).await;
         query_job_table.set_status(QueryJobStatus::Succeeded);
         // Lets the first status read become due, so that the next poll finds the terminal status
         // before it forwards the first batch, and the stream then waits for the second.
