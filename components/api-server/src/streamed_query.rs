@@ -86,8 +86,8 @@ pub struct StreamedQueryEnd {
 ///
 /// # Panics
 ///
-/// Panics if called outside a Tokio runtime. The returned stream panics if `results` ends while
-/// `session` is open, which the listener never lets it do.
+/// The returned stream panics if `results` ends while `session` is open, which the listener never
+/// lets it do.
 pub fn stream_events<EncodingType: ResultEncoding>(
     session: Session<EncodingType>,
     mut results: ResultStream<EncodingType::Batch>,
