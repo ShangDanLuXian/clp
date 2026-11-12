@@ -2,6 +2,7 @@ use std::num::NonZeroU32;
 use std::pin::Pin;
 
 use async_stream::stream;
+use async_trait::async_trait;
 use chrono::DateTime;
 use chrono::TimeZone;
 use chrono::Utc;
@@ -13,6 +14,7 @@ use clp_rust_utils::dataset::DatasetName;
 use clp_rust_utils::job_config::Aggregation;
 use clp_rust_utils::job_config::Cancellability;
 pub use clp_rust_utils::job_config::CompressionJobStatus;
+use clp_rust_utils::job_config::NetworkOutput;
 use clp_rust_utils::job_config::QUERY_JOBS_TABLE_NAME;
 use clp_rust_utils::job_config::QueryJobConfig;
 use clp_rust_utils::job_config::QueryJobStatus;
@@ -32,6 +34,7 @@ use utoipa::IntoParams;
 use utoipa::ToSchema;
 
 pub use crate::error::ClientError;
+use crate::streamed_query::QueryJobTable;
 
 /// Default job statuses to include when the caller does not specify `job_status`.
 /// Covers all terminal states that consumed compute resources (succeeded, failed).
@@ -220,6 +223,53 @@ pub struct QueryConfig {
     #[serde(default)]
     #[schema(value_type = Option<i64>, minimum = 1)]
     pub count_by_time_bucket_size_millisecs: Option<PositiveI64>,
+}
+
+impl QueryConfig {
+    /// Converts the config into the config of a query job whose tasks stream their results to
+    /// `network_output`.
+    ///
+    /// # Returns
+    ///
+    /// The query job config on success.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    ///
+    /// * [`ClientError::InvalidInput`] if the config sets an option that doesn't apply to streamed
+    ///   results: `max_num_results`, `buffer_results_in_mongodb` or
+    ///   `count_by_time_bucket_size_millisecs`.
+    /// * Forwards [`QueryJobConfig::try_from`]'s return values on failure.
+    #[expect(
+        dead_code,
+        reason = "the streamed query endpoint that converts its config comes in a later change"
+    )]
+    pub(crate) fn into_streamed_query_job_config(
+        self,
+        network_output: NetworkOutput,
+    ) -> Result<QueryJobConfig, ClientError> {
+        if self.max_num_results.is_some() {
+            return Err(ClientError::InvalidInput(
+                "max_num_results must be omitted from a streamed query".to_owned(),
+            ));
+        }
+        if self.buffer_results_in_mongodb {
+            return Err(ClientError::InvalidInput(
+                "buffer_results_in_mongodb must be false for a streamed query".to_owned(),
+            ));
+        }
+        if self.count_by_time_bucket_size_millisecs.is_some() {
+            return Err(ClientError::InvalidInput(
+                "count_by_time_bucket_size_millisecs must be omitted from a streamed query"
+                    .to_owned(),
+            ));
+        }
+        Ok(QueryJobConfig {
+            output: QueryOutput::Network(network_output),
+            ..QueryJobConfig::try_from(self)?
+        })
+    }
 }
 
 impl TryFrom<QueryConfig> for QueryJobConfig {
@@ -763,6 +813,36 @@ impl Client {
             .api_server
             .as_ref()
             .expect("api_server configuration is missing")
+    }
+}
+
+#[async_trait]
+impl QueryJobTable for Client {
+    /// # Errors
+    ///
+    /// Returns an error if:
+    ///
+    /// * Forwards [`query_job::submit`]'s return values on failure.
+    async fn submit(&self, query_job_config: &QueryJobConfig) -> Result<u64, ClientError> {
+        Ok(query_job::submit(&self.sql_pool, query_job_config).await?)
+    }
+
+    /// # Errors
+    ///
+    /// Returns an error if:
+    ///
+    /// * Forwards [`query_job::get_status`]'s return values on failure.
+    async fn read_status(&self, query_job_id: u64) -> Result<Option<QueryJobStatus>, ClientError> {
+        Ok(query_job::get_status(&self.sql_pool, query_job_id).await?)
+    }
+
+    /// # Errors
+    ///
+    /// Returns an error if:
+    ///
+    /// * Forwards [`Client::cancel_query_job`]'s return values on failure.
+    async fn request_cancellation(&self, query_job_id: u64) -> Result<(), ClientError> {
+        self.cancel_query_job(query_job_id).await
     }
 }
 
