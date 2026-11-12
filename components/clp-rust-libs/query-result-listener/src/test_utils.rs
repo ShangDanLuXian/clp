@@ -277,7 +277,7 @@ impl FakeClpS {
     ///
     /// Panics if the listener doesn't close the connection within [`TIMEOUT`], or reading fails
     /// with an error other than a reset.
-    pub async fn read_until_closed(mut self) -> Vec<u8> {
+    async fn read_until_closed(mut self) -> Vec<u8> {
         use std::io::ErrorKind;
 
         use tokio::io::AsyncReadExt;
