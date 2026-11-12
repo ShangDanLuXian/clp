@@ -1,8 +1,8 @@
 use std::num::NonZeroU32;
 use std::pin::Pin;
+use std::time::Duration;
 
 use async_stream::stream;
-use async_trait::async_trait;
 use chrono::DateTime;
 use chrono::TimeZone;
 use chrono::Utc;
@@ -27,6 +27,9 @@ use futures::Stream;
 use futures::StreamExt;
 use non_empty_string::NonEmptyString;
 use pin_project_lite::pin_project;
+use query_result_listener::encoding::ResultEncoding;
+use query_result_listener::listener::ResultListener;
+use query_result_listener::session::SessionConfig;
 use serde::Deserialize;
 use serde::Serialize;
 use sqlx::Row;
@@ -34,7 +37,9 @@ use utoipa::IntoParams;
 use utoipa::ToSchema;
 
 pub use crate::error::ClientError;
-use crate::streamed_query::QueryJobTable;
+use crate::streamed_query;
+use crate::streamed_query::StreamedQuery;
+use crate::streamed_query::StreamedQueryEvent;
 
 /// Default job statuses to include when the caller does not specify `job_status`.
 /// Covers all terminal states that consumed compute resources (succeeded, failed).
@@ -241,13 +246,6 @@ impl QueryConfig {
     ///   results: `max_num_results`, `buffer_results_in_mongodb` or
     ///   `count_by_time_bucket_size_millisecs`.
     /// * Forwards [`QueryJobConfig::try_from`]'s return values on failure.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the streamed query endpoint that converts its config comes in a later change"
-        )
-    )]
     pub(crate) fn into_streamed_query_job_config(
         self,
         network_output: NetworkOutput,
@@ -366,6 +364,83 @@ impl Client {
     pub async fn submit_query(&self, query_config: QueryConfig) -> Result<u64, ClientError> {
         let query_job_config = QueryJobConfig::try_from(query_config)?;
         Ok(query_job::submit(&self.sql_pool, &query_job_config).await?)
+    }
+
+    /// Submits a query job whose tasks stream their results to a new session of `listener`.
+    ///
+    /// The returned query's events are streamed as [`streamed_query::stream_events`] describes. The
+    /// stream finds the job terminated by reading its status at a fixed interval, and ends with an
+    /// error if the status can't be read or the job doesn't exist. It requests the job's
+    /// cancellation with [`Client::cancel_query_job`], and logs the request's outcome.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `EncodingType` - The encoding of the query's results.
+    ///
+    /// # Returns
+    ///
+    /// The submitted query on success.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    ///
+    /// * Forwards [`ResultListener::open_session`]'s return values on failure.
+    /// * Forwards [`QueryConfig::into_streamed_query_job_config`]'s return values on failure.
+    /// * Forwards [`query_job::submit`]'s return values on failure.
+    #[expect(
+        dead_code,
+        reason = "the streamed query endpoint that submits its queries comes in a later change"
+    )]
+    pub(crate) async fn submit_streamed_query<EncodingType: ResultEncoding>(
+        &self,
+        listener: &ResultListener<EncodingType>,
+        query_config: QueryConfig,
+    ) -> Result<
+        StreamedQuery<
+            impl Stream<Item = StreamedQueryEvent<EncodingType::Batch>> + Send + use<EncodingType>,
+        >,
+        ClientError,
+    > {
+        /// The interval between the end of one read of the job's status and the start of the next.
+        const QUERY_JOB_STATUS_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+        let (session, results) = listener.open_session(SessionConfig::default())?;
+        let query_job_config =
+            query_config.into_streamed_query_job_config(session.network_output().clone())?;
+        let query_job_id = query_job::submit(&self.sql_pool, &query_job_config).await?;
+        let termination = {
+            let client = self.clone();
+            async move {
+                loop {
+                    tokio::time::sleep(QUERY_JOB_STATUS_POLL_INTERVAL).await;
+                    let status = client.get_status(query_job_id).await?;
+                    if status.is_terminal() {
+                        return Ok(status);
+                    }
+                }
+            }
+        };
+        let cancellation = {
+            let client = self.clone();
+            async move {
+                match client.cancel_query_job(query_job_id).await {
+                    Ok(()) => tracing::info!(
+                        query_job_id,
+                        "Requested the cancellation of a streamed query's job."
+                    ),
+                    Err(e) => tracing::warn!(
+                        query_job_id,
+                        error = % e,
+                        "Failed to request the cancellation of a streamed query's job."
+                    ),
+                }
+            }
+        };
+        Ok(StreamedQuery {
+            query_job_id,
+            events: streamed_query::stream_events(session, results, termination, cancellation),
+        })
     }
 
     /// Asynchronously fetches the results of a completed query job.
@@ -816,36 +891,6 @@ impl Client {
             .api_server
             .as_ref()
             .expect("api_server configuration is missing")
-    }
-}
-
-#[async_trait]
-impl QueryJobTable for Client {
-    /// # Errors
-    ///
-    /// Returns an error if:
-    ///
-    /// * Forwards [`query_job::submit`]'s return values on failure.
-    async fn submit(&self, query_job_config: &QueryJobConfig) -> Result<u64, ClientError> {
-        Ok(query_job::submit(&self.sql_pool, query_job_config).await?)
-    }
-
-    /// # Errors
-    ///
-    /// Returns an error if:
-    ///
-    /// * Forwards [`query_job::get_status`]'s return values on failure.
-    async fn read_status(&self, query_job_id: u64) -> Result<Option<QueryJobStatus>, ClientError> {
-        Ok(query_job::get_status(&self.sql_pool, query_job_id).await?)
-    }
-
-    /// # Errors
-    ///
-    /// Returns an error if:
-    ///
-    /// * Forwards [`Client::cancel_query_job`]'s return values on failure.
-    async fn request_cancellation(&self, query_job_id: u64) -> Result<(), ClientError> {
-        self.cancel_query_job(query_job_id).await
     }
 }
 
