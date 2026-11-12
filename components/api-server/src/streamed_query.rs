@@ -11,6 +11,7 @@ use query_result_listener::encoding::ResultEncoding;
 use query_result_listener::session::ResultStream;
 use query_result_listener::session::Session;
 use query_result_listener::session::SessionStats;
+use tokio_util::task::AbortOnDropHandle;
 
 use crate::client::ClientError;
 
@@ -61,12 +62,16 @@ pub struct StreamedQueryEnd {
 /// The stream yields the batches of the query's results as they arrive, until `termination`
 /// resolves. Once `termination` resolves with the job's terminal status, the stream ends the
 /// session, yields the batches that the session's connections had already claimed until `results`
-/// ends, and then yields a [`StreamedQueryEvent::End`]. Instead, if the session fails or
-/// `termination` resolves with an error, the stream requests the job's cancellation and yields a
-/// [`StreamedQueryEvent::Error`].
+/// ends, and then yields a [`StreamedQueryEvent::End`]. Instead, if the session fails, or
+/// `termination` resolves with an error or panics, the stream requests the job's cancellation and
+/// yields a [`StreamedQueryEvent::Error`].
 ///
-/// Dropping the stream ends the session. If the stream hasn't yet found the job terminated or
-/// yielded an error, dropping it also requests the job's cancellation.
+/// `termination` runs in a task of its own on the current Tokio runtime from when this function is
+/// called, so that it makes progress even while the stream isn't polled.
+///
+/// Dropping the stream ends the session and stops the task that runs `termination`. If the stream
+/// hasn't yet found the job terminated or yielded an error, dropping it also requests the job's
+/// cancellation.
 ///
 /// The stream requests the job's cancellation by spawning `cancellation` on the current Tokio
 /// runtime. Outside a Tokio runtime, it only logs that the cancellation can't be requested.
@@ -81,32 +86,31 @@ pub struct StreamedQueryEnd {
 ///
 /// # Panics
 ///
-/// The returned stream panics if `results` ends while `session` is open, which the listener never
-/// lets it do.
+/// Panics if called outside a Tokio runtime. The returned stream panics if `results` ends while
+/// `session` is open, which the listener never lets it do.
 pub fn stream_events<EncodingType: ResultEncoding>(
     session: Session<EncodingType>,
     mut results: ResultStream<EncodingType::Batch>,
-    termination: impl Future<Output = Result<QueryJobStatus, ClientError>> + Send,
+    termination: impl Future<Output = Result<QueryJobStatus, ClientError>> + Send + 'static,
     cancellation: impl Future<Output = ()> + Send + 'static,
 ) -> impl Stream<Item = StreamedQueryEvent<EncodingType::Batch>> + Send {
     let mut cancellation = CancellationGuard::new(cancellation);
+    let mut termination = AbortOnDropHandle::new(tokio::spawn(termination));
     stream! {
-        let end = {
-            tokio::pin!(termination);
-            loop {
-                // `biased`, so that a session failure isn't missed because the job's status was
-                // seen first, and a steady flow of batches doesn't keep the job's status from being
-                // noticed.
-                tokio::select! {
-                    biased;
-                    error = session.failed() => {
-                        break Err(ClientError::QueryResultEncoding(error.to_string()));
-                    }
-                    status = &mut termination => break status,
-                    batch = results.next() => yield StreamedQueryEvent::Results(batch.expect(
-                        "a session's result stream shouldn't end while the session is open",
-                    )),
+        let end = loop {
+            // `biased`, so that a session failure isn't missed because the job's status was seen
+            // first, and a steady flow of batches doesn't keep the job's status from being noticed.
+            tokio::select! {
+                biased;
+                error = session.failed() => {
+                    break Err(ClientError::QueryResultEncoding(error.to_string()));
                 }
+                status = &mut termination => {
+                    break status.unwrap_or_else(|error| Err(ClientError::TaskJoin(error)));
+                }
+                batch = results.next() => yield StreamedQueryEvent::Results(batch.expect(
+                    "a session's result stream shouldn't end while the session is open",
+                )),
             }
         };
         drop(session);
@@ -203,6 +207,7 @@ mod tests {
     use query_result_listener::test_utils::TIMEOUT;
     use query_result_listener::test_utils::expected_results;
     use tokio::sync::oneshot;
+    use tokio::task::yield_now;
     use tokio::time::sleep;
     use tokio::time::timeout;
 
@@ -330,7 +335,7 @@ mod tests {
     /// The returned future panics if the sender is dropped without sending a result.
     fn termination() -> (
         oneshot::Sender<Result<QueryJobStatus, ClientError>>,
-        impl Future<Output = Result<QueryJobStatus, ClientError>> + Send,
+        impl Future<Output = Result<QueryJobStatus, ClientError>> + Send + 'static,
     ) {
         let (sender, receiver) = oneshot::channel();
         let termination = async move {
@@ -498,6 +503,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn termination_is_waited_for_while_the_stream_is_not_polled() -> Result<()> {
+        let listener = bind_listener::<QueryResultEncoding>();
+        let (session, results) = listener.open_session(SessionConfig::default())?;
+        let (termination_finished_sender, termination_finished) = oneshot::channel();
+        let termination = async move {
+            for _ in 0..3 {
+                yield_now().await;
+            }
+            termination_finished_sender
+                .send(())
+                .expect("the test should wait for the job's termination to finish");
+            Ok(QueryJobStatus::Succeeded)
+        };
+        let _events = stream_events(session, results, termination, async {});
+
+        timeout(TIMEOUT, termination_finished).await??;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn session_failure_takes_priority_over_a_terminal_status_and_requests_cancellation_once()
     -> Result<()> {
         use clp_rust_utils::types::ArchiveId;
@@ -523,6 +548,8 @@ mod tests {
         termination_sender
             .send(Ok(QueryJobStatus::Succeeded))
             .expect("the stream should wait for the job's termination");
+        // Lets the task waiting for the job's termination finish before the stream is polled.
+        yield_now().await;
 
         let ending = Ending::receive(&mut events).await;
 
@@ -565,6 +592,8 @@ mod tests {
                 TERMINATION_ERROR,
             ))))
             .expect("the stream should wait for the job's termination");
+        // Lets the task waiting for the job's termination finish before the stream is polled.
+        yield_now().await;
 
         let ending = Ending::receive(&mut events).await;
         attempt.expect_closed_by_listener().await;
@@ -575,6 +604,32 @@ mod tests {
                 ending.error(),
                 ClientError::Io(error) if TERMINATION_ERROR == error.to_string()
             ),
+            "unexpected error: {:?}",
+            ending.error()
+        );
+        // Counted while the stream is alive, so that only the error can have requested the
+        // cancellation.
+        assert_eq!(timeout(TIMEOUT, cancellation_requests.count()).await?, 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn panicked_termination_ends_the_stream_with_a_join_error_and_requests_cancellation_once()
+    -> Result<()> {
+        let listener = bind_listener::<QueryResultEncoding>();
+        let (session, results) = listener.open_session(SessionConfig::default())?;
+        let (cancellation, cancellation_requests) = cancellation();
+        let mut events = Box::pin(stream_events(
+            session,
+            results,
+            async { panic!("the test's termination panics") },
+            cancellation,
+        ));
+
+        let ending = Ending::receive(&mut events).await;
+
+        assert!(
+            matches!(ending.error(), ClientError::TaskJoin(error) if error.is_panic()),
             "unexpected error: {:?}",
             ending.error()
         );
@@ -605,6 +660,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn dropping_the_stream_while_the_job_runs_stops_waiting_for_termination() -> Result<()> {
+        let listener = bind_listener::<QueryResultEncoding>();
+        let (session, results) = listener.open_session(SessionConfig::default())?;
+        let (mut termination_sender, termination) = termination();
+        let events = stream_events(session, results, termination, async {});
+
+        drop(events);
+
+        timeout(TIMEOUT, termination_sender.closed()).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn dropping_the_stream_while_it_drains_after_the_job_terminated_requests_nothing()
     -> Result<()> {
         use std::num::NonZeroUsize;
@@ -621,6 +689,8 @@ mod tests {
         termination_sender
             .send(Ok(QueryJobStatus::Succeeded))
             .expect("the stream should wait for the job's termination");
+        // Lets the task waiting for the job's termination finish before the stream is polled.
+        yield_now().await;
         // The stream finds the job terminated before it forwards the first batch, and then waits
         // for the second.
         receive_results(&mut events, 2).await;
