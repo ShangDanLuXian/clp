@@ -9,4 +9,9 @@ pub mod routes;
     )
 )]
 mod sse;
+#[expect(
+    dead_code,
+    reason = "the streamed query endpoint that consumes streamed queries comes in a later change"
+)]
+mod streamed_query;
 pub mod webui_client;
