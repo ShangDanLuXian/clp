@@ -163,7 +163,7 @@ pub struct NetworkOutput {
     pub session_token: SessionToken,
 }
 
-/// Mirror of `job_orchestration.scheduler.constants.QueryJobStatus`. Must be kept in sync.
+// Mirror of `job_orchestration.scheduler.constants.QueryJobStatus`. Must be kept in sync.
 #[derive(
     Clone,
     Copy,

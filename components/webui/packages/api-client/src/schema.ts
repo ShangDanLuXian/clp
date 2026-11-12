@@ -190,6 +190,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/query/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Submits a new query job and streams its results back as Server-Sent Events (SSE) in the same response while the job runs. Only available when the API server's query result listener is configured. If the client disconnects while the job runs, the job's cancellation is requested. */
+        post: operations["stream_query"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/query/{query_job_id}": {
         parameters: {
             query?: never;
@@ -485,6 +502,8 @@ export interface components {
              */
             num_messages: number;
         };
+        /** @description The options of an output that takes none: an empty object, which may be omitted. */
+        NoOutputOptions: Record<string, never>;
         /** @description Defines the request configuration for submitting a search query. */
         QueryConfig: {
             /**
@@ -509,6 +528,29 @@ export interface components {
              * @description The maximum number of results to return. Omit for no limit.
              */
             max_num_results?: number | null;
+            /** @description The search query as a KQL string. */
+            query_string: string;
+            /**
+             * Format: int64
+             * @description The beginning timestamp (in epoch milliseconds) for the search range (inclusive).
+             */
+            time_range_begin_millisecs?: number | null;
+            /**
+             * Format: int64
+             * @description The ending timestamp (in epoch milliseconds) for the search range (inclusive).
+             */
+            time_range_end_millisecs?: number | null;
+        };
+        /** @enum {string} */
+        QueryJobStatus: "Pending" | "Running" | "Succeeded" | "Failed" | "CancelRequested" | "Cancelling" | "Cancelled" | "Killed";
+        /** @description Defines the request for submitting a search query whose results go to the output of the endpoint that receives it, along with that output's options. */
+        QueryRequest_NoOutputOptions: {
+            /** @description The datasets to search within. If not provided, only `default` dataset will be searched. */
+            datasets?: string[] | null;
+            /** @description Whether the string match should be case-insensitive. */
+            ignore_case?: boolean;
+            /** @description The options of the output that the query's results go to. */
+            output?: Record<string, never>;
             /** @description The search query as a KQL string. */
             query_string: string;
             /**
@@ -592,6 +634,35 @@ export interface components {
             path: string;
             /** @description ID of the stream the file was extracted from. */
             stream_id: string;
+        };
+        /** @description The data of a streaming query's `end` event. */
+        StreamingQueryEndEvent: {
+            /**
+             * Format: int64
+             * @description The number of results dropped because another attempt of their query task had already
+             *     streamed them.
+             */
+            num_duplicates_dropped: number;
+            /**
+             * Format: int64
+             * @description The number of results streamed.
+             */
+            num_results_emitted: number;
+            /** @description The terminal status of the query's job: `Succeeded`, `Failed`, `Cancelled` or `Killed`. */
+            status: components["schemas"]["QueryJobStatus"];
+        };
+        /** @description The data of a streaming query's `error` event. */
+        StreamingQueryErrorEvent: {
+            /** @description A description of the error. */
+            message: string;
+        };
+        /** @description The data of a streaming query's `job` event. */
+        StreamingQueryJobEvent: {
+            /**
+             * Format: int64
+             * @description The ID of the query's job.
+             */
+            query_job_id: number;
         };
         /** @description Earliest and latest log entry timestamps across the selected datasets. */
         TimeRange: {
@@ -1057,6 +1128,102 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    stream_query: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "query_string": "*",
+                 *       "datasets": [
+                 *         "default"
+                 *       ],
+                 *       "time_range_begin_millisecs": 0,
+                 *       "time_range_end_millisecs": 17356896,
+                 *       "ignore_case": true
+                 *     }
+                 */
+                "application/json": components["schemas"]["QueryRequest_NoOutputOptions"];
+            };
+        };
+        responses: {
+            /** @description Server-Sent Events stream of the query. First comes a `job` event whose data is a `StreamingQueryJobEvent`. Then comes one unnamed event per result, whose data is a JSON object with the result's `archive_id`, `timestamp_millisecs` and `message` (without its trailing newline); results from different archives arrive in no particular order. Once the job has terminated, the stream ends with an `end` event whose data is a `StreamingQueryEndEvent`. If the query fails after its job was submitted (e.g., a result can't be encoded, or the job's status can't be read), the stream ends instead with an `error` event whose data is a `StreamingQueryErrorEvent`, and the job's cancellation is requested. While nothing else is sent, the stream periodically sends an SSE comment, so that the idle connection stays open. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example event: job
+                     *     data: {"query_job_id":1}
+                     *
+                     *     data: {"archive_id":"018e90e5-8b2a-4a61-a2fc-cac799936caf","timestamp_millisecs":1633036800000,"message":"Example log message"}
+                     *
+                     *     event: end
+                     *     data: {"status":"Succeeded","num_results_emitted":1,"num_duplicates_dropped":0}
+                     */
+                    "text/event-stream": string;
+                };
+            };
+            /** @description The request body is not valid JSON or could not be read, query_string is empty, or time_range_begin_millisecs > time_range_end_millisecs. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            /** @description The request body exceeds the configured size limit. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            /** @description The Content-Type header is missing or is not a JSON media type. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            /** @description The JSON body has missing or unknown fields (including the options of `POST /query`, such as `max_num_results`), or fields with invalid types or values. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            /** @description The query's session couldn't be opened, or its job couldn't be submitted. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The API server's query result listener isn't configured. */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
             };
         };
     };

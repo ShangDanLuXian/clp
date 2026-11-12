@@ -258,6 +258,10 @@ pub struct ApiServer {
     pub port: u16,
     pub query_job_polling: QueryJobPollingConfig,
     pub stream_file_extraction_timeout_secs: NonZeroU64,
+
+    /// The listener for the results of streaming queries, or `None` if the API server doesn't
+    /// accept streaming queries.
+    pub query_result_listener: Option<QueryResultListener>,
 }
 
 impl Default for ApiServer {
@@ -268,6 +272,7 @@ impl Default for ApiServer {
             query_job_polling: QueryJobPollingConfig::default(),
             stream_file_extraction_timeout_secs: NonZeroU64::new(270)
                 .expect("default stream file extraction timeout should not be zero"),
+            query_result_listener: None,
         }
     }
 }
@@ -287,6 +292,32 @@ impl Default for QueryJobPollingConfig {
         Self {
             initial_backoff_ms: 100,
             max_backoff_ms: 5000,
+        }
+    }
+}
+
+/// Configuration of the API server's query result listener, which receives the results that the
+/// tasks of streaming queries' jobs stream to the API server.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(default)]
+pub struct QueryResultListener {
+    /// The port that the listener binds to on every interface.
+    pub port: u16,
+
+    /// The host that query tasks connect to the listener at.
+    pub advertised_host: NonEmptyString,
+
+    /// How long a query task's connection may take to send its handshake, in seconds.
+    pub handshake_timeout_secs: NonZeroU64,
+}
+
+impl Default for QueryResultListener {
+    fn default() -> Self {
+        Self {
+            port: 3003,
+            advertised_host: NonEmptyString::from_static_str("localhost"),
+            handshake_timeout_secs: NonZeroU64::new(10)
+                .expect("default handshake timeout should not be zero"),
         }
     }
 }

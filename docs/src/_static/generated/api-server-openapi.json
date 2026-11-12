@@ -116,6 +116,98 @@
         }
       }
     },
+    "/query/stream": {
+      "post": {
+        "tags": [],
+        "description": "Submits a new query job and streams its results back as Server-Sent Events (SSE) in the same response while the job runs. Only available when the API server's query result listener is configured. If the client disconnects while the job runs, the job's cancellation is requested.",
+        "operationId": "stream_query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueryRequest_NoOutputOptions"
+              },
+              "example": {
+                "query_string": "*",
+                "datasets": [
+                  "default"
+                ],
+                "time_range_begin_millisecs": 0,
+                "time_range_end_millisecs": 17356896,
+                "ignore_case": true
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Server-Sent Events stream of the query. First comes a `job` event whose data is a `StreamingQueryJobEvent`. Then comes one unnamed event per result, whose data is a JSON object with the result's `archive_id`, `timestamp_millisecs` and `message` (without its trailing newline); results from different archives arrive in no particular order. Once the job has terminated, the stream ends with an `end` event whose data is a `StreamingQueryEndEvent`. If the query fails after its job was submitted (e.g., a result can't be encoded, or the job's status can't be read), the stream ends instead with an `error` event whose data is a `StreamingQueryErrorEvent`, and the job's cancellation is requested. While nothing else is sent, the stream periodically sends an SSE comment, so that the idle connection stays open.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "event: job\ndata: {\"query_job_id\":1}\n\ndata: {\"archive_id\":\"018e90e5-8b2a-4a61-a2fc-cac799936caf\",\"timestamp_millisecs\":1633036800000,\"message\":\"Example log message\"}\n\nevent: end\ndata: {\"status\":\"Succeeded\",\"num_results_emitted\":1,\"num_duplicates_dropped\":0}\n\n"
+              }
+            }
+          },
+          "400": {
+            "description": "The request body is not valid JSON or could not be read, query_string is empty, or time_range_begin_millisecs > time_range_end_millisecs.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The request body exceeds the configured size limit.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The Content-Type header is missing or is not a JSON media type.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The JSON body has missing or unknown fields (including the options of `POST /query`, such as `max_num_results`), or fields with invalid types or values.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The query's session couldn't be opened, or its job couldn't be submitted."
+          },
+          "501": {
+            "description": "The API server's query result listener isn't configured.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/query/{query_job_id}": {
       "delete": {
         "tags": [],
@@ -381,6 +473,11 @@
           }
         }
       },
+      "NoOutputOptions": {
+        "type": "object",
+        "description": "The options of an output that takes none: an empty object, which may be omitted.",
+        "additionalProperties": false
+      },
       "QueryConfig": {
         "type": "object",
         "description": "Defines the request configuration for submitting a search query.",
@@ -447,6 +544,73 @@
         },
         "additionalProperties": false
       },
+      "QueryJobStatus": {
+        "type": "string",
+        "enum": [
+          "Pending",
+          "Running",
+          "Succeeded",
+          "Failed",
+          "CancelRequested",
+          "Cancelling",
+          "Cancelled",
+          "Killed"
+        ]
+      },
+      "QueryRequest_NoOutputOptions": {
+        "type": "object",
+        "description": "Defines the request for submitting a search query whose results go to the output of the endpoint that receives it, along with that output's options.",
+        "required": [
+          "query_string"
+        ],
+        "properties": {
+          "datasets": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "The datasets to search within. If not provided, only `default` dataset will be searched."
+          },
+          "ignore_case": {
+            "type": "boolean",
+            "description": "Whether the string match should be case-insensitive."
+          },
+          "output": {
+            "oneOf": [
+              {
+                "type": "object",
+                "description": "The options of an output that takes none: an empty object, which may be omitted.",
+                "additionalProperties": false
+              }
+            ],
+            "description": "The options of the output that the query's results go to."
+          },
+          "query_string": {
+            "type": "string",
+            "description": "The search query as a KQL string."
+          },
+          "time_range_begin_millisecs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The beginning timestamp (in epoch milliseconds) for the search range (inclusive)."
+          },
+          "time_range_end_millisecs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The ending timestamp (in epoch milliseconds) for the search range (inclusive)."
+          }
+        },
+        "additionalProperties": false
+      },
       "QueryResultsUri": {
         "type": "object",
         "required": [
@@ -459,6 +623,61 @@
           }
         },
         "additionalProperties": false
+      },
+      "StreamingQueryEndEvent": {
+        "type": "object",
+        "description": "The data of a streaming query's `end` event.",
+        "required": [
+          "status",
+          "num_results_emitted",
+          "num_duplicates_dropped"
+        ],
+        "properties": {
+          "num_duplicates_dropped": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The number of results dropped because another attempt of their query task had already\nstreamed them.",
+            "minimum": 0
+          },
+          "num_results_emitted": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The number of results streamed.",
+            "minimum": 0
+          },
+          "status": {
+            "$ref": "#/components/schemas/QueryJobStatus",
+            "description": "The terminal status of the query's job: `Succeeded`, `Failed`, `Cancelled` or `Killed`."
+          }
+        }
+      },
+      "StreamingQueryErrorEvent": {
+        "type": "object",
+        "description": "The data of a streaming query's `error` event.",
+        "required": [
+          "message"
+        ],
+        "properties": {
+          "message": {
+            "type": "string",
+            "description": "A description of the error."
+          }
+        }
+      },
+      "StreamingQueryJobEvent": {
+        "type": "object",
+        "description": "The data of a streaming query's `job` event.",
+        "required": [
+          "query_job_id"
+        ],
+        "properties": {
+          "query_job_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The ID of the query's job.",
+            "minimum": 0
+          }
+        }
       }
     }
   }

@@ -232,17 +232,6 @@ impl TryFrom<QueryConfig> for QueryJobConfig {
     type Error = ClientError;
 
     fn try_from(value: QueryConfig) -> Result<Self, Self::Error> {
-        let query_string = NonEmptyString::new(value.query_string)
-            .map_err(|_| ClientError::InvalidInput("query_string must not be empty".to_owned()))?;
-        let time_range = TimeRange::new(
-            value.time_range_begin_millisecs,
-            value.time_range_end_millisecs,
-        )
-        .map_err(|_| {
-            ClientError::InvalidInput(
-                "time_range_begin_millisecs must be <= time_range_end_millisecs".to_owned(),
-            )
-        })?;
         let output = match value.count_by_time_bucket_size_millisecs {
             Some(bucket_size_millisecs) => {
                 // Aggregation results are always buffered in MongoDB.
@@ -261,17 +250,108 @@ impl TryFrom<QueryConfig> for QueryJobConfig {
             }
             None => QueryOutput::File {},
         };
-        Ok(Self {
-            datasets: value.datasets.unwrap_or_else(Self::default_datasets),
+        QueryRequest {
+            query_string: value.query_string,
+            datasets: value.datasets,
+            time_range_begin_millisecs: value.time_range_begin_millisecs,
+            time_range_end_millisecs: value.time_range_end_millisecs,
+            ignore_case: value.ignore_case,
+            output,
+        }
+        .into_query_job_config(std::convert::identity)
+    }
+}
+
+/// Defines the request for submitting a search query whose results go to the output of the endpoint
+/// that receives it, along with that output's options.
+///
+/// # Type Parameters
+///
+/// * `OutputOptionsType` - The options of the endpoint's output.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+// Keeps the "Type Parameters" section out of the OpenAPI document.
+#[schema(
+    description = "Defines the request for submitting a search query whose results go to the \
+                   output of the endpoint that receives it, along with that output's options."
+)]
+pub struct QueryRequest<OutputOptionsType> {
+    /// The search query as a KQL string.
+    pub query_string: String,
+
+    /// The datasets to search within. If not provided, only `default` dataset will be searched.
+    #[serde(default)]
+    #[schema(value_type = Option<Vec<String>>)]
+    pub datasets: Option<Vec<DatasetName>>,
+
+    /// The beginning timestamp (in epoch milliseconds) for the search range (inclusive).
+    #[serde(default)]
+    pub time_range_begin_millisecs: Option<i64>,
+
+    /// The ending timestamp (in epoch milliseconds) for the search range (inclusive).
+    #[serde(default)]
+    pub time_range_end_millisecs: Option<i64>,
+
+    /// Whether the string match should be case-insensitive.
+    #[serde(default)]
+    pub ignore_case: bool,
+
+    /// The options of the output that the query's results go to.
+    #[serde(default)]
+    // Keeps this field's description in the OpenAPI document, which utoipa otherwise replaces with
+    // the options type's, and keeps utoipa's expansion clear of `clippy::option_if_let_else`.
+    #[schema(inline)]
+    pub output: OutputOptionsType,
+}
+
+impl<OutputOptionsType> QueryRequest<OutputOptionsType> {
+    /// Converts the request into the config of a query job whose results go to the output that
+    /// `derive_output` derives from the request's output options.
+    ///
+    /// # Returns
+    ///
+    /// The query job config on success.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    ///
+    /// * [`ClientError::InvalidInput`] if:
+    ///   * `query_string` is empty.
+    ///   * `time_range_begin_millisecs` is greater than `time_range_end_millisecs`.
+    pub fn into_query_job_config(
+        self,
+        derive_output: impl FnOnce(OutputOptionsType) -> QueryOutput,
+    ) -> Result<QueryJobConfig, ClientError> {
+        let query_string = NonEmptyString::new(self.query_string)
+            .map_err(|_| ClientError::InvalidInput("query_string must not be empty".to_owned()))?;
+        let time_range = TimeRange::new(
+            self.time_range_begin_millisecs,
+            self.time_range_end_millisecs,
+        )
+        .map_err(|_| {
+            ClientError::InvalidInput(
+                "time_range_begin_millisecs must be <= time_range_end_millisecs".to_owned(),
+            )
+        })?;
+        Ok(QueryJobConfig {
+            datasets: self
+                .datasets
+                .unwrap_or_else(QueryJobConfig::default_datasets),
             query: SearchQuery {
                 query_string,
                 time_range,
-                ignore_case: value.ignore_case,
+                ignore_case: self.ignore_case,
             },
-            output,
+            output: derive_output(self.output),
         })
     }
 }
+
+/// The options of an output that takes none: an empty object, which may be omitted.
+#[derive(Debug, Default, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct NoOutputOptions {}
 
 #[derive(Clone)]
 pub struct Client {
@@ -302,9 +382,7 @@ impl Client {
         }
     }
 
-    /// Submits a search or aggregation query as a job. The job is a count-by-time aggregation
-    /// job if `count_by_time_bucket_size_millisecs` is set in the query config; otherwise it's a
-    /// plain search job.
+    /// Submits a query job with the given config.
     ///
     /// # Returns
     ///
@@ -314,11 +392,12 @@ impl Client {
     ///
     /// Returns an error if:
     ///
-    /// * Forwards [`QueryJobConfig::try_from`]'s return values on failure.
     /// * Forwards [`query_job::submit`]'s return values on failure.
-    pub async fn submit_query(&self, query_config: QueryConfig) -> Result<u64, ClientError> {
-        let query_job_config = QueryJobConfig::try_from(query_config)?;
-        Ok(query_job::submit(&self.sql_pool, &query_job_config).await?)
+    pub async fn submit_query(
+        &self,
+        query_job_config: &QueryJobConfig,
+    ) -> Result<u64, ClientError> {
+        Ok(query_job::submit(&self.sql_pool, query_job_config).await?)
     }
 
     /// Asynchronously fetches the results of a completed query job.
@@ -466,10 +545,6 @@ impl Client {
     /// # Returns
     ///
     /// The stream of the job's results.
-    #[expect(
-        dead_code,
-        reason = "the streaming query endpoint that streams query results comes in a later change"
-    )]
     pub(crate) fn stream_results<EncodingType: ResultEncoding>(
         &self,
         query_job_id: u64,
@@ -992,6 +1067,89 @@ mod tests {
                 ),
                 "unexpected error for {query_config:?}: {error:?}"
             );
+        }
+    }
+
+    #[test]
+    fn query_request_converts_to_a_query_job_config_with_the_derived_output() -> anyhow::Result<()>
+    {
+        use std::num::NonZeroU16;
+
+        use clp_rust_utils::job_config::NetworkOutput;
+        use query_result_listener::test_utils::SESSION_TOKEN;
+
+        let other_dataset: DatasetName = "other".parse()?;
+        let network_output = NetworkOutput {
+            host: NonEmptyString::new("127.0.0.1".to_owned()).expect("host is non-empty"),
+            port: NonZeroU16::new(4000).expect("4000 is nonzero"),
+            session_token: SESSION_TOKEN.parse()?,
+        };
+
+        let actual = QueryRequest {
+            datasets: Some(vec![other_dataset.clone()]),
+            ..base_query_request()
+        }
+        .into_query_job_config(|NoOutputOptions {}| QueryOutput::Network(network_output.clone()))?;
+
+        assert_eq!(
+            actual,
+            QueryJobConfig {
+                datasets: vec![other_dataset],
+                query: SearchQuery {
+                    query_string: NonEmptyString::new("level: ERROR".to_owned())
+                        .expect("query string is non-empty"),
+                    time_range: TimeRange::new(Some(1), Some(2)).expect("range is ordered"),
+                    ignore_case: true,
+                },
+                output: QueryOutput::Network(network_output),
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn query_request_with_invalid_query_fields_is_rejected_as_invalid_input() {
+        for (query_request, expected_message) in [
+            (
+                QueryRequest {
+                    query_string: String::new(),
+                    ..base_query_request()
+                },
+                "query_string must not be empty",
+            ),
+            (
+                QueryRequest {
+                    time_range_begin_millisecs: Some(3),
+                    ..base_query_request()
+                },
+                "time_range_begin_millisecs must be <= time_range_end_millisecs",
+            ),
+        ] {
+            let description = format!("{query_request:?}");
+            let error = query_request
+                .into_query_job_config(|NoOutputOptions {}| QueryOutput::File {})
+                .expect_err("query request should be rejected");
+            assert!(
+                matches!(
+                    &error,
+                    ClientError::InvalidInput(message) if message == expected_message
+                ),
+                "unexpected error for {description}: {error:?}"
+            );
+        }
+    }
+
+    /// # Returns
+    ///
+    /// A valid query request for an output without options.
+    fn base_query_request() -> QueryRequest<NoOutputOptions> {
+        QueryRequest {
+            query_string: "level: ERROR".to_owned(),
+            datasets: None,
+            time_range_begin_millisecs: Some(1),
+            time_range_end_millisecs: Some(2),
+            ignore_case: true,
+            output: NoOutputOptions {},
         }
     }
 
