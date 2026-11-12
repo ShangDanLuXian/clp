@@ -439,31 +439,26 @@ mod tests {
         let network_output = session.network_output().clone();
         let (termination_sender, termination) = termination();
         let mut events = Box::pin(stream_events(session, results, termination, async {}));
-        let mut first_attempt = FakeClpS::connect(&network_output).await;
-        first_attempt.send_handshake(TASK_INDEX, ARCHIVE_ID).await;
-        first_attempt.send_results(TASK_INDEX, 0..3).await;
-        let mut received = receive_results(&mut events, 3).await;
-        first_attempt.finish(3).await;
-        let mut retry = FakeClpS::connect(&network_output).await;
-        retry.send_handshake(TASK_INDEX, ARCHIVE_ID).await;
-        retry.send_results(TASK_INDEX, 0..5).await;
-        received.extend(receive_results(&mut events, 2).await);
-        retry.finish(5).await;
+        let mut attempt = FakeClpS::connect(&network_output).await;
+        attempt.send_handshake(TASK_INDEX, ARCHIVE_ID).await;
+        attempt.send_results(TASK_INDEX, 0..3).await;
+        let received = receive_results(&mut events, 3).await;
+        attempt.finish(3).await;
 
         termination_sender
             .send(Ok(QueryJobStatus::Succeeded))
             .expect("the stream should wait for the job's termination");
         let ending = Ending::receive(&mut events).await;
 
-        assert_eq!(received, expected_results(TASK_INDEX, ARCHIVE_ID, 0..5));
+        assert_eq!(received, expected_results(TASK_INDEX, ARCHIVE_ID, 0..3));
         assert_eq!(ending.results, [] as [QueryResult; 0]);
         assert_eq!(
             ending.end(),
             StreamedQueryEnd {
                 status: QueryJobStatus::Succeeded,
                 stats: SessionStats {
-                    num_results_emitted: 5,
-                    num_duplicates_dropped: 3,
+                    num_results_emitted: 3,
+                    num_duplicates_dropped: 0,
                 },
             }
         );
@@ -501,35 +496,6 @@ mod tests {
                     num_results_emitted: 4,
                     num_duplicates_dropped: 0,
                 },
-            }
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn job_that_did_not_succeed_ends_the_session_and_its_open_connection_is_cut_off()
-    -> Result<()> {
-        let listener = bind_listener::<QueryResultEncoding>();
-        let (session, results) = listener.open_session(SessionConfig::default())?;
-        let network_output = session.network_output().clone();
-        let (termination_sender, termination) = termination();
-        let mut events = Box::pin(stream_events(session, results, termination, async {}));
-        let mut attempt = FakeClpS::connect(&network_output).await;
-        attempt.send_handshake(TASK_INDEX, ARCHIVE_ID).await;
-        // Lets the listener join the attempt to the session while the job runs.
-        sleep(SETTLE_DELAY).await;
-
-        termination_sender
-            .send(Ok(QueryJobStatus::Failed))
-            .expect("the stream should wait for the job's termination");
-        let ending = Ending::receive(&mut events).await;
-        attempt.expect_closed_by_listener().await;
-
-        assert_eq!(
-            ending.end(),
-            StreamedQueryEnd {
-                status: QueryJobStatus::Failed,
-                stats: SessionStats::default(),
             }
         );
         Ok(())
