@@ -43,7 +43,7 @@ pub enum ClientError {
     #[error("query job {0}'s results were streamed to a network listener and aren't stored")]
     QueryResultsNotStored(u64),
 
-    #[error("the results of a streamed query can't be encoded: {0}")]
+    #[error("the results of a streaming query can't be encoded: {0}")]
     QueryResultEncoding(String),
 
     #[error(transparent)]

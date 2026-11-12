@@ -37,9 +37,9 @@ use utoipa::IntoParams;
 use utoipa::ToSchema;
 
 pub use crate::error::ClientError;
-use crate::streamed_query;
-use crate::streamed_query::StreamedQuery;
-use crate::streamed_query::StreamedQueryEvent;
+use crate::streaming_query;
+use crate::streaming_query::StreamingQuery;
+use crate::streaming_query::StreamingQueryEvent;
 
 /// Default job statuses to include when the caller does not specify `job_status`.
 /// Covers all terminal states that consumed compute resources (succeeded, failed).
@@ -246,23 +246,23 @@ impl QueryConfig {
     ///   results: `max_num_results`, `buffer_results_in_mongodb` or
     ///   `count_by_time_bucket_size_millisecs`.
     /// * Forwards [`QueryJobConfig::try_from`]'s return values on failure.
-    pub(crate) fn into_streamed_query_job_config(
+    pub(crate) fn into_streaming_query_job_config(
         self,
         network_output: NetworkOutput,
     ) -> Result<QueryJobConfig, ClientError> {
         if self.max_num_results.is_some() {
             return Err(ClientError::InvalidInput(
-                "max_num_results must be omitted from a streamed query".to_owned(),
+                "max_num_results must be omitted from a streaming query".to_owned(),
             ));
         }
         if self.buffer_results_in_mongodb {
             return Err(ClientError::InvalidInput(
-                "buffer_results_in_mongodb must be false for a streamed query".to_owned(),
+                "buffer_results_in_mongodb must be false for a streaming query".to_owned(),
             ));
         }
         if self.count_by_time_bucket_size_millisecs.is_some() {
             return Err(ClientError::InvalidInput(
-                "count_by_time_bucket_size_millisecs must be omitted from a streamed query"
+                "count_by_time_bucket_size_millisecs must be omitted from a streaming query"
                     .to_owned(),
             ));
         }
@@ -368,9 +368,9 @@ impl Client {
 
     /// Submits a query job whose tasks stream their results to a new session of `listener`.
     ///
-    /// The returned query's events are streamed as [`streamed_query::stream_events`] describes. The
-    /// stream finds the job terminated by reading its status at a fixed interval, and ends with an
-    /// error if the status can't be read or the job doesn't exist. It requests the job's
+    /// The returned query's events are streamed as [`streaming_query::stream_events`] describes.
+    /// The stream finds the job terminated by reading its status at a fixed interval, and ends with
+    /// an error if the status can't be read or the job doesn't exist. It requests the job's
     /// cancellation with [`Client::cancel_query_job`], and logs the request's outcome.
     ///
     /// # Type Parameters
@@ -386,19 +386,19 @@ impl Client {
     /// Returns an error if:
     ///
     /// * Forwards [`ResultListener::open_session`]'s return values on failure.
-    /// * Forwards [`QueryConfig::into_streamed_query_job_config`]'s return values on failure.
+    /// * Forwards [`QueryConfig::into_streaming_query_job_config`]'s return values on failure.
     /// * Forwards [`query_job::submit`]'s return values on failure.
     #[expect(
         dead_code,
-        reason = "the streamed query endpoint that submits its queries comes in a later change"
+        reason = "the streaming query endpoint that submits its queries comes in a later change"
     )]
-    pub(crate) async fn submit_streamed_query<EncodingType: ResultEncoding>(
+    pub(crate) async fn submit_streaming_query<EncodingType: ResultEncoding>(
         &self,
         listener: &ResultListener<EncodingType>,
         query_config: QueryConfig,
     ) -> Result<
-        StreamedQuery<
-            impl Stream<Item = StreamedQueryEvent<EncodingType::Batch>> + Send + use<EncodingType>,
+        StreamingQuery<
+            impl Stream<Item = StreamingQueryEvent<EncodingType::Batch>> + Send + use<EncodingType>,
         >,
         ClientError,
     > {
@@ -407,7 +407,7 @@ impl Client {
 
         let (session, results) = listener.open_session(SessionConfig::default())?;
         let query_job_config =
-            query_config.into_streamed_query_job_config(session.network_output().clone())?;
+            query_config.into_streaming_query_job_config(session.network_output().clone())?;
         let query_job_id = query_job::submit(&self.sql_pool, &query_job_config).await?;
         let termination = {
             let client = self.clone();
@@ -427,24 +427,24 @@ impl Client {
                 match client.cancel_query_job(query_job_id).await {
                     Ok(()) => tracing::info!(
                         query_job_id,
-                        "Requested the cancellation of a streamed query's job."
+                        "Requested the cancellation of a streaming query's job."
                     ),
                     Err(ClientError::QueryJobAlreadyTerminated(_)) => tracing::info!(
                         query_job_id,
-                        "Requested the cancellation of a streamed query's job, which had already \
+                        "Requested the cancellation of a streaming query's job, which had already \
                          terminated."
                     ),
                     Err(e) => tracing::warn!(
                         query_job_id,
                         error = % e,
-                        "Failed to request the cancellation of a streamed query's job."
+                        "Failed to request the cancellation of a streaming query's job."
                     ),
                 }
             }
         };
-        Ok(StreamedQuery {
+        Ok(StreamingQuery {
             query_job_id,
-            events: streamed_query::stream_events(session, results, termination, cancellation),
+            events: streaming_query::stream_events(session, results, termination, cancellation),
         })
     }
 
@@ -1058,7 +1058,7 @@ mod tests {
     }
 
     #[test]
-    fn streamed_query_job_config_keeps_the_query_and_streams_to_the_network_output()
+    fn streaming_query_job_config_keeps_the_query_and_streams_to_the_network_output()
     -> anyhow::Result<()> {
         let other_dataset: DatasetName = "other".parse()?;
         let network_output = network_output();
@@ -1067,7 +1067,7 @@ mod tests {
             max_num_results: None,
             ..base_query_config()
         }
-        .into_streamed_query_job_config(network_output.clone())?;
+        .into_streaming_query_job_config(network_output.clone())?;
 
         assert_eq!(
             actual,
@@ -1108,7 +1108,7 @@ mod tests {
         ] {
             let error = query_config
                 .clone()
-                .into_streamed_query_job_config(network_output())
+                .into_streaming_query_job_config(network_output())
                 .expect_err("query config should be rejected");
             assert!(
                 matches!(

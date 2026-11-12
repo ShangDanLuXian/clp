@@ -1,4 +1,4 @@
-//! Streamed queries, each of which forwards the results that its query job's tasks stream to the
+//! Streaming queries, each of which forwards the results that its query job's tasks stream to the
 //! API server while the job runs, and ends with the job's terminal status.
 
 use std::future::Future;
@@ -13,14 +13,14 @@ use query_result_listener::session::Session;
 use query_result_listener::session::SessionStats;
 use tokio_util::task::AbortOnDropHandle;
 
-use crate::client::ClientError;
+use crate::error::ClientError;
 
-/// A streamed query whose job has been submitted.
+/// A streaming query whose job has been submitted.
 ///
 /// # Type Parameters
 ///
 /// * `EventStreamType` - The type of the stream of the query's events.
-pub struct StreamedQuery<EventStreamType> {
+pub struct StreamingQuery<EventStreamType> {
     /// The ID of the query's job.
     pub query_job_id: u64,
 
@@ -28,27 +28,27 @@ pub struct StreamedQuery<EventStreamType> {
     pub events: EventStreamType,
 }
 
-/// An item of a streamed query's stream.
+/// An item of a streaming query's stream.
 ///
 /// # Type Parameters
 ///
 /// * `BatchType` - The type of a batch of encoded results.
 #[derive(Debug)]
-pub enum StreamedQueryEvent<BatchType> {
+pub enum StreamingQueryEvent<BatchType> {
     /// A batch of the query's results.
     Results(BatchType),
 
     /// The end of the query, once its job has terminated and its session's result stream has ended.
-    End(StreamedQueryEnd),
+    End(StreamingQueryEnd),
 
     /// The end of the query because its session failed or waiting for its job's termination failed.
     /// The job's cancellation has been requested.
     Error(ClientError),
 }
 
-/// The end of a streamed query whose job has terminated.
+/// The end of a streaming query whose job has terminated.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct StreamedQueryEnd {
+pub struct StreamingQueryEnd {
     /// The terminal status of the query's job.
     pub status: QueryJobStatus,
 
@@ -56,15 +56,15 @@ pub struct StreamedQueryEnd {
     pub stats: SessionStats,
 }
 
-/// Streams the events of a streamed query from `session`, which the tasks of the query's job stream
-/// their results to, and its `results`.
+/// Streams the events of a streaming query from `session`, which the tasks of the query's job
+/// stream their results to, and its `results`.
 ///
 /// The stream yields the batches of the query's results as they arrive, until `termination`
 /// resolves. Once `termination` resolves with the job's terminal status, the stream ends the
 /// session, yields the batches that the session's connections had already claimed until `results`
-/// ends, and then yields a [`StreamedQueryEvent::End`]. Instead, if the session fails, or
+/// ends, and then yields a [`StreamingQueryEvent::End`]. Instead, if the session fails, or
 /// `termination` resolves with an error or panics, the stream requests the job's cancellation and
-/// yields a [`StreamedQueryEvent::Error`].
+/// yields a [`StreamingQueryEvent::Error`].
 ///
 /// `termination` runs in a task of its own on the current Tokio runtime from when this function is
 /// called, so that it makes progress even while the stream isn't polled.
@@ -93,7 +93,7 @@ pub fn stream_events<EncodingType: ResultEncoding>(
     mut results: ResultStream<EncodingType::Batch>,
     termination: impl Future<Output = Result<QueryJobStatus, ClientError>> + Send + 'static,
     cancellation: impl Future<Output = ()> + Send + 'static,
-) -> impl Stream<Item = StreamedQueryEvent<EncodingType::Batch>> + Send {
+) -> impl Stream<Item = StreamingQueryEvent<EncodingType::Batch>> + Send {
     let mut cancellation = CancellationGuard::new(cancellation);
     let mut termination = AbortOnDropHandle::new(tokio::spawn(termination));
     stream! {
@@ -108,7 +108,7 @@ pub fn stream_events<EncodingType: ResultEncoding>(
                 status = &mut termination => {
                     break status.unwrap_or_else(|error| Err(ClientError::TaskJoin(error)));
                 }
-                batch = results.next() => yield StreamedQueryEvent::Results(batch.expect(
+                batch = results.next() => yield StreamingQueryEvent::Results(batch.expect(
                     "a session's result stream shouldn't end while the session is open",
                 )),
             }
@@ -118,9 +118,9 @@ pub fn stream_events<EncodingType: ResultEncoding>(
             Ok(status) => {
                 cancellation.disarm();
                 while let Some(batch) = results.next().await {
-                    yield StreamedQueryEvent::Results(batch);
+                    yield StreamingQueryEvent::Results(batch);
                 }
-                yield StreamedQueryEvent::End(StreamedQueryEnd {
+                yield StreamingQueryEvent::End(StreamingQueryEnd {
                     status,
                     stats: results.stats(),
                 });
@@ -128,13 +128,13 @@ pub fn stream_events<EncodingType: ResultEncoding>(
             Err(error) => {
                 drop(results);
                 cancellation.request();
-                yield StreamedQueryEvent::Error(error);
+                yield StreamingQueryEvent::Error(error);
             }
         }
     }
 }
 
-/// A guard that requests the cancellation of a streamed query's job if it's dropped before the
+/// A guard that requests the cancellation of a streaming query's job if it's dropped before the
 /// cancellation has been requested or the guard disarmed.
 ///
 /// # Type Parameters
@@ -169,7 +169,8 @@ impl<CancellationType: Future<Output = ()> + Send + 'static> CancellationGuard<C
         };
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
             tracing::warn!(
-                "Can't request the cancellation of a streamed query's job outside a Tokio runtime."
+                "Can't request the cancellation of a streaming query's job outside a Tokio \
+                 runtime."
             );
             return;
         };
@@ -211,10 +212,10 @@ mod tests {
     use tokio::time::sleep;
     use tokio::time::timeout;
 
-    use super::StreamedQueryEnd;
-    use super::StreamedQueryEvent;
+    use super::StreamingQueryEnd;
+    use super::StreamingQueryEvent;
     use super::stream_events;
-    use crate::client::ClientError;
+    use crate::error::ClientError;
 
     /// The index of the query task whose results the tests' attempts stream.
     const TASK_INDEX: usize = 0;
@@ -222,9 +223,9 @@ mod tests {
     /// How long a test waits for the listener to read what an attempt has sent.
     const SETTLE_DELAY: Duration = Duration::from_millis(100);
 
-    type TestEvent = StreamedQueryEvent<Vec<QueryResult>>;
+    type TestEvent = StreamingQueryEvent<Vec<QueryResult>>;
 
-    /// The items that a streamed query's stream yields from some point until its last item.
+    /// The items that a streaming query's stream yields from some point until its last item.
     struct Ending {
         results: Vec<QueryResult>,
         last_event: TestEvent,
@@ -248,7 +249,7 @@ mod tests {
                     .await
                     .expect("the query stream shouldn't end without an end or an error")
                 {
-                    StreamedQueryEvent::Results(batch) => results.extend(batch),
+                    StreamingQueryEvent::Results(batch) => results.extend(batch),
                     last_event => break last_event,
                 }
             };
@@ -265,8 +266,8 @@ mod tests {
         /// # Panics
         ///
         /// Panics if the stream's last item isn't an end.
-        fn end(&self) -> StreamedQueryEnd {
-            let StreamedQueryEvent::End(end) = &self.last_event else {
+        fn end(&self) -> StreamingQueryEnd {
+            let StreamingQueryEvent::End(end) = &self.last_event else {
                 panic!(
                     "the query stream should end with an end: {:?}",
                     self.last_event
@@ -283,7 +284,7 @@ mod tests {
         ///
         /// Panics if the stream's last item isn't an error.
         fn error(&self) -> &ClientError {
-            let StreamedQueryEvent::Error(error) = &self.last_event else {
+            let StreamingQueryEvent::Error(error) = &self.last_event else {
                 panic!(
                     "the query stream should end with an error: {:?}",
                     self.last_event
@@ -401,7 +402,7 @@ mod tests {
         let mut received = Vec::new();
         while received.len() < num_results {
             match next_event(events).await {
-                Some(StreamedQueryEvent::Results(batch)) => received.extend(batch),
+                Some(StreamingQueryEvent::Results(batch)) => received.extend(batch),
                 event => panic!("the query stream should yield a batch: {event:?}"),
             }
         }
@@ -455,7 +456,7 @@ mod tests {
         assert_eq!(ending.results, [] as [QueryResult; 0]);
         assert_eq!(
             ending.end(),
-            StreamedQueryEnd {
+            StreamingQueryEnd {
                 status: QueryJobStatus::Succeeded,
                 stats: SessionStats {
                     num_results_emitted: 3,
@@ -491,7 +492,7 @@ mod tests {
         );
         assert_eq!(
             ending.end(),
-            StreamedQueryEnd {
+            StreamingQueryEnd {
                 status: QueryJobStatus::Succeeded,
                 stats: SessionStats {
                     num_results_emitted: 4,
