@@ -30,16 +30,104 @@
         }
       }
     },
-    "/query": {
+    "/query/file": {
       "post": {
         "tags": [],
-        "description": "Submits a new query job.",
-        "operationId": "query",
+        "description": "Submits a new query job whose results are buffered in files in the stream output storage (the file system or S3).",
+        "operationId": "submit_query_to_file",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/QueryConfig"
+                "$ref": "#/components/schemas/QueryRequest_NoOutputOptions"
+              },
+              "example": {
+                "datasets": [
+                  "default"
+                ],
+                "query": {
+                  "query_string": "*",
+                  "time_range": {
+                    "begin_timestamp_millisecs": 0,
+                    "end_timestamp_millisecs": 17356896
+                  },
+                  "ignore_case": true
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The URI to fetch the results of the submitted query.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueryResultsUri"
+                },
+                "example": {
+                  "query_results_uri": "query_results/1"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request body is not valid JSON or could not be read.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The request body exceeds the configured size limit.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The Content-Type header is missing or is not a JSON media type.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The JSON body has missing or unknown fields, or fields with invalid types or values (e.g., an empty `datasets` or `query.query_string`, or a `query.time_range` whose begin timestamp exceeds its end timestamp).",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": ""
+          }
+        }
+      }
+    },
+    "/query/results_cache": {
+      "post": {
+        "tags": [],
+        "description": "Submits a new query job whose results are buffered in the results cache (`MongoDB`).",
+        "operationId": "submit_query_to_results_cache",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueryRequest_ResultsCacheOutput"
               },
               "example": {
                 "datasets": [
@@ -54,7 +142,6 @@
                   "ignore_case": true
                 },
                 "output": {
-                  "type": "results_cache",
                   "max_num_results": 100
                 }
               }
@@ -413,6 +500,11 @@
           }
         }
       },
+      "NoOutputOptions": {
+        "type": "object",
+        "description": "The options of an output that takes none.",
+        "additionalProperties": false
+      },
       "NonEmptyDatasetNames": {
         "type": "array",
         "items": {
@@ -420,13 +512,12 @@
         },
         "minItems": 1
       },
-      "QueryConfig": {
+      "QueryRequest_NoOutputOptions": {
         "type": "object",
-        "description": "Defines the request configuration for submitting a search query.",
+        "description": "Defines the request for submitting a search query whose results go to the output of the endpoint that receives it.",
         "required": [
           "datasets",
-          "query",
-          "output"
+          "query"
         ],
         "properties": {
           "datasets": {
@@ -434,8 +525,14 @@
             "description": "The datasets to search within."
           },
           "output": {
-            "$ref": "#/components/schemas/QueryOutputConfig",
-            "description": "Where to buffer the search results."
+            "oneOf": [
+              {
+                "type": "object",
+                "description": "The options of an output that takes none.",
+                "additionalProperties": false
+              }
+            ],
+            "description": "The options of the output. Omit to use the defaults."
           },
           "query": {
             "$ref": "#/components/schemas/SearchQuery",
@@ -444,60 +541,56 @@
         },
         "additionalProperties": false
       },
-      "QueryOutputConfig": {
-        "oneOf": [
-          {
-            "type": "object",
-            "description": "Buffers the results in `MongoDB`.",
-            "required": [
-              "type"
-            ],
-            "properties": {
-              "aggregation": {
-                "oneOf": [
-                  {
-                    "type": "null"
-                  },
-                  {
-                    "$ref": "#/components/schemas/Aggregation",
-                    "description": "The aggregation to compute over all matching results, regardless of `max_num_results`."
-                  }
-                ]
-              },
-              "max_num_results": {
-                "type": [
-                  "integer",
-                  "null"
-                ],
-                "format": "int32",
-                "description": "The maximum number of results to return. Omit for no limit.",
-                "minimum": 1
-              },
-              "type": {
-                "type": "string",
-                "enum": [
-                  "results_cache"
-                ]
-              }
-            }
-          },
-          {
-            "type": "object",
-            "description": "Buffers the results in files in the stream output storage (the file system or S3).",
-            "required": [
-              "type"
-            ],
-            "properties": {
-              "type": {
-                "type": "string",
-                "enum": [
-                  "file"
-                ]
-              }
-            }
-          }
+      "QueryRequest_ResultsCacheOutput": {
+        "type": "object",
+        "description": "Defines the request for submitting a search query whose results go to the output of the endpoint that receives it.",
+        "required": [
+          "datasets",
+          "query"
         ],
-        "description": "Defines where a submitted search query's results are buffered."
+        "properties": {
+          "datasets": {
+            "$ref": "#/components/schemas/NonEmptyDatasetNames",
+            "description": "The datasets to search within."
+          },
+          "output": {
+            "oneOf": [
+              {
+                "type": "object",
+                "description": "The results cache that a query job's results are buffered in.",
+                "properties": {
+                  "aggregation": {
+                    "oneOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "$ref": "#/components/schemas/Aggregation",
+                        "description": "The aggregation to compute over all matching results, regardless of `max_num_results`."
+                      }
+                    ]
+                  },
+                  "max_num_results": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "format": "int32",
+                    "description": "The maximum number of search results to keep. Omit for no limit.",
+                    "minimum": 1
+                  }
+                },
+                "additionalProperties": false
+              }
+            ],
+            "description": "The options of the output. Omit to use the defaults."
+          },
+          "query": {
+            "$ref": "#/components/schemas/SearchQuery",
+            "description": "The search to run."
+          }
+        },
+        "additionalProperties": false
       },
       "QueryResultsUri": {
         "type": "object",
@@ -508,6 +601,33 @@
           "query_results_uri": {
             "type": "string",
             "description": "The uri to get the query results."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ResultsCacheOutput": {
+        "type": "object",
+        "description": "The results cache that a query job's results are buffered in.",
+        "properties": {
+          "aggregation": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Aggregation",
+                "description": "The aggregation to compute over all matching results, regardless of `max_num_results`."
+              }
+            ]
+          },
+          "max_num_results": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The maximum number of search results to keep. Omit for no limit.",
+            "minimum": 1
           }
         },
         "additionalProperties": false

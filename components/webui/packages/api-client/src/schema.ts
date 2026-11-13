@@ -173,7 +173,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/query": {
+    "/query/file": {
         parameters: {
             query?: never;
             header?: never;
@@ -182,8 +182,25 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Submits a new query job. */
-        post: operations["query"];
+        /** @description Submits a new query job whose results are buffered in files in the stream output storage (the file system or S3). */
+        post: operations["submit_query_to_file"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/query/results_cache": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Submits a new query job whose results are buffered in the results cache (`MongoDB`). */
+        post: operations["submit_query_to_results_cache"];
         delete?: never;
         options?: never;
         head?: never;
@@ -492,29 +509,33 @@ export interface components {
              */
             num_messages: number;
         };
+        /** @description The options of an output that takes none. */
+        NoOutputOptions: Record<string, never>;
         NonEmptyDatasetNames: string[];
-        /** @description Defines the request configuration for submitting a search query. */
-        QueryConfig: {
+        /** @description Defines the request for submitting a search query whose results go to the output of the endpoint that receives it. */
+        QueryRequest_NoOutputOptions: {
             /** @description The datasets to search within. */
             datasets: components["schemas"]["NonEmptyDatasetNames"];
-            /** @description Where to buffer the search results. */
-            output: components["schemas"]["QueryOutputConfig"];
+            /** @description The options of the output. Omit to use the defaults. */
+            output?: Record<string, never>;
             /** @description The search to run. */
             query: components["schemas"]["SearchQuery"];
         };
-        /** @description Defines where a submitted search query's results are buffered. */
-        QueryOutputConfig: {
-            aggregation?: null | components["schemas"]["Aggregation"];
-            /**
-             * Format: int32
-             * @description The maximum number of results to return. Omit for no limit.
-             */
-            max_num_results?: number | null;
-            /** @enum {string} */
-            type: "results_cache";
-        } | {
-            /** @enum {string} */
-            type: "file";
+        /** @description Defines the request for submitting a search query whose results go to the output of the endpoint that receives it. */
+        QueryRequest_ResultsCacheOutput: {
+            /** @description The datasets to search within. */
+            datasets: components["schemas"]["NonEmptyDatasetNames"];
+            /** @description The options of the output. Omit to use the defaults. */
+            output?: {
+                aggregation?: null | components["schemas"]["Aggregation"];
+                /**
+                 * Format: int32
+                 * @description The maximum number of search results to keep. Omit for no limit.
+                 */
+                max_num_results?: number | null;
+            };
+            /** @description The search to run. */
+            query: components["schemas"]["SearchQuery"];
         };
         QueryResultsUri: {
             /** @description The uri to get the query results. */
@@ -532,6 +553,15 @@ export interface components {
              * @description Wall-clock duration the job ran, in seconds.
              */
             duration: number;
+        };
+        /** @description The results cache that a query job's results are buffered in. */
+        ResultsCacheOutput: {
+            aggregation?: null | components["schemas"]["Aggregation"];
+            /**
+             * Format: int32
+             * @description The maximum number of search results to keep. Omit for no limit.
+             */
+            max_num_results?: number | null;
         };
         /** @description The search a query job runs. */
         SearchQuery: {
@@ -984,7 +1014,93 @@ export interface operations {
             };
         };
     };
-    query: {
+    submit_query_to_file: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "datasets": [
+                 *         "default"
+                 *       ],
+                 *       "query": {
+                 *         "query_string": "*",
+                 *         "time_range": {
+                 *           "begin_timestamp_millisecs": 0,
+                 *           "end_timestamp_millisecs": 17356896
+                 *         },
+                 *         "ignore_case": true
+                 *       }
+                 *     }
+                 */
+                "application/json": components["schemas"]["QueryRequest_NoOutputOptions"];
+            };
+        };
+        responses: {
+            /** @description The URI to fetch the results of the submitted query. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "query_results_uri": "query_results/1"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["QueryResultsUri"];
+                };
+            };
+            /** @description The request body is not valid JSON or could not be read. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            /** @description The request body exceeds the configured size limit. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            /** @description The Content-Type header is missing or is not a JSON media type. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            /** @description The JSON body has missing or unknown fields, or fields with invalid types or values (e.g., an empty `datasets` or `query.query_string`, or a `query.time_range` whose begin timestamp exceeds its end timestamp). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    submit_query_to_results_cache: {
         parameters: {
             query?: never;
             header?: never;
@@ -1007,12 +1123,11 @@ export interface operations {
                  *         "ignore_case": true
                  *       },
                  *       "output": {
-                 *         "type": "results_cache",
                  *         "max_num_results": 100
                  *       }
                  *     }
                  */
-                "application/json": components["schemas"]["QueryConfig"];
+                "application/json": components["schemas"]["QueryRequest_ResultsCacheOutput"];
             };
         };
         responses: {

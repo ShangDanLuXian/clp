@@ -10,7 +10,6 @@ use clp_rust_utils::clp_config::package::config::Config;
 use clp_rust_utils::clp_config::package::config::StreamOutputStorage;
 use clp_rust_utils::database::mysql::query_job;
 use clp_rust_utils::dataset::NonEmptyDatasetNames;
-use clp_rust_utils::job_config::Aggregation;
 use clp_rust_utils::job_config::Cancellability;
 pub use clp_rust_utils::job_config::CompressionJobStatus;
 use clp_rust_utils::job_config::QUERY_JOBS_TABLE_NAME;
@@ -176,59 +175,57 @@ pub struct CompressionUsage {
     pub tasks_duration_secs: Option<f64>,
 }
 
-/// Defines the request configuration for submitting a search query.
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+/// Defines the request for submitting a search query whose results go to the output of the
+/// endpoint that receives it.
+///
+/// # Type Parameters
+///
+/// * `OutputOptionsType` - The type of the options that the client may give for that output.
+#[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
-pub struct QueryConfig {
+// Keeps the "Type Parameters" section out of the OpenAPI document.
+#[schema(
+    description = "Defines the request for submitting a search query whose results go to the \
+                   output of the endpoint that receives it."
+)]
+pub struct QueryRequest<OutputOptionsType> {
     /// The datasets to search within.
     pub datasets: NonEmptyDatasetNames,
 
     /// The search to run.
     pub query: SearchQuery,
 
-    /// Where to buffer the search results.
-    pub output: QueryOutputConfig,
+    /// The options of the output. Omit to use the defaults.
+    #[serde(default)]
+    // Keeps this field's description in the OpenAPI document, which utoipa otherwise replaces with
+    // the options type's, and keeps utoipa's expansion clear of `clippy::option_if_let_else`.
+    #[schema(inline)]
+    pub output: OutputOptionsType,
 }
 
-impl From<QueryConfig> for QueryJobConfig {
-    fn from(value: QueryConfig) -> Self {
-        let output = match value.output {
-            QueryOutputConfig::ResultsCache {
-                max_num_results,
-                aggregation,
-            } => QueryOutput::ResultsCache(ResultsCacheOutput {
-                max_num_results,
-                aggregation,
-            }),
-            QueryOutputConfig::File {} => QueryOutput::File {},
-        };
-        Self {
-            datasets: value.datasets.into(),
-            query: value.query,
-            output,
+impl<OutputOptionsType> QueryRequest<OutputOptionsType> {
+    /// Converts the request into the config of a query job whose results go to the output that
+    /// `to_output` builds from the request's output options.
+    ///
+    /// # Returns
+    ///
+    /// The query job config.
+    pub fn into_query_job_config(
+        self,
+        to_output: impl FnOnce(OutputOptionsType) -> QueryOutput,
+    ) -> QueryJobConfig {
+        QueryJobConfig {
+            datasets: self.datasets.into(),
+            query: self.query,
+            output: to_output(self.output),
         }
     }
 }
 
-/// Defines where a submitted search query's results are buffered.
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
-#[serde(deny_unknown_fields, tag = "type", rename_all = "snake_case")]
-pub enum QueryOutputConfig {
-    /// Buffers the results in `MongoDB`.
-    ResultsCache {
-        /// The maximum number of results to return. Omit for no limit.
-        #[serde(default)]
-        #[schema(value_type = Option<u32>, minimum = 1)]
-        max_num_results: Option<NonZeroU32>,
-
-        /// The aggregation to compute over all matching results, regardless of `max_num_results`.
-        #[serde(default)]
-        aggregation: Option<Aggregation>,
-    },
-
-    /// Buffers the results in files in the stream output storage (the file system or S3).
-    File {},
-}
+/// The options of an output that takes none.
+#[derive(Debug, Default, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct NoOutputOptions {}
 
 #[derive(Clone)]
 pub struct Client {
@@ -806,71 +803,35 @@ mod tests {
     }
 
     #[test]
-    fn query_config_converts_to_query_job_config_by_output() {
-        use clp_rust_utils::types::PositiveI64;
+    fn query_request_converts_to_a_query_job_config_with_the_output_built_from_its_options()
+    -> anyhow::Result<()> {
+        let datasets = vec!["logs".parse::<DatasetName>()?];
+        let query = SearchQuery {
+            query_string: NonEmptyString::new("level: ERROR".to_owned())
+                .expect("query string is non-empty"),
+            time_range: TimeRange::new(Some(1), Some(2))?,
+            ignore_case: true,
+        };
+        let options = ResultsCacheOutput {
+            max_num_results: NonZeroU32::new(7),
+            aggregation: None,
+        };
 
-        let max_num_results = NonZeroU32::new(7);
-        let aggregation = Some(Aggregation::CountByTime {
-            bucket_size_millisecs: PositiveI64::new(60_000).expect("60,000 is positive"),
-        });
-        for (output, expected_output) in [
-            (
-                QueryOutputConfig::ResultsCache {
-                    max_num_results,
-                    aggregation: None,
-                },
-                QueryOutput::ResultsCache(ResultsCacheOutput {
-                    max_num_results,
-                    aggregation: None,
-                }),
-            ),
-            (
-                QueryOutputConfig::ResultsCache {
-                    max_num_results,
-                    aggregation,
-                },
-                QueryOutput::ResultsCache(ResultsCacheOutput {
-                    max_num_results,
-                    aggregation,
-                }),
-            ),
-            (QueryOutputConfig::File {}, QueryOutput::File {}),
-        ] {
-            let query_config = QueryConfig {
-                output,
-                ..base_query_config()
-            };
-            let expected = QueryJobConfig {
-                datasets: base_query_config().datasets.into(),
-                query: base_query_config().query,
-                output: expected_output,
-            };
-            assert_eq!(
-                QueryJobConfig::from(query_config.clone()),
-                expected,
-                "query config: {query_config:?}"
-            );
+        let query_job_config = QueryRequest {
+            datasets: NonEmptyDatasetNames::try_from(datasets.clone())?,
+            query: query.clone(),
+            output: options.clone(),
         }
-    }
+        .into_query_job_config(QueryOutput::ResultsCache);
 
-    /// # Returns
-    ///
-    /// A valid query config whose results are buffered in files.
-    fn base_query_config() -> QueryConfig {
-        QueryConfig {
-            datasets: NonEmptyDatasetNames::try_from(vec![
-                "logs"
-                    .parse::<DatasetName>()
-                    .expect("name should be a valid dataset name"),
-            ])
-            .expect("dataset names are non-empty"),
-            query: SearchQuery {
-                query_string: NonEmptyString::new("level: ERROR".to_owned())
-                    .expect("query string is non-empty"),
-                time_range: TimeRange::new(Some(1), Some(2)).expect("range is ordered"),
-                ignore_case: true,
-            },
-            output: QueryOutputConfig::File {},
-        }
+        assert_eq!(
+            query_job_config,
+            QueryJobConfig {
+                datasets,
+                query,
+                output: QueryOutput::ResultsCache(options),
+            }
+        );
+        Ok(())
     }
 }

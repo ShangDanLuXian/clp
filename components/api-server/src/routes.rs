@@ -11,7 +11,8 @@ use axum::response::Sse;
 use axum::response::sse::Event;
 use axum::response::sse::KeepAlive;
 use axum::routing::get;
-use clp_rust_utils::job_config::QueryJobConfig;
+use clp_rust_utils::job_config::QueryOutput;
+use clp_rust_utils::job_config::ResultsCacheOutput;
 use clp_rust_utils::logs_input::LogsInputError;
 use futures::Stream;
 use futures::StreamExt;
@@ -30,7 +31,8 @@ use crate::client::Client;
 use crate::client::ClientError;
 use crate::client::CompressionUsage;
 use crate::client::CompressionUsageParams;
-use crate::client::QueryConfig;
+use crate::client::NoOutputOptions;
+use crate::client::QueryRequest;
 use crate::client::ValidatedCompressionUsageParams;
 use crate::webui_client::WebuiClient;
 
@@ -70,7 +72,8 @@ pub fn from_app_state(state: AppState) -> Result<axum::Router, serde_json::Error
     let (public_routes, api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
         .route("/", get(health))
         .routes(routes!(health))
-        .routes(routes!(query))
+        .routes(routes!(submit_query_to_results_cache))
+        .routes(routes!(submit_query_to_file))
         .routes(routes!(query_results))
         .routes(routes!(cancel_query))
         .routes(routes!(compression_usage))
@@ -94,8 +97,9 @@ mod api_doc {
     use super::__path_cancel_query;
     use super::__path_compression_usage;
     use super::__path_health;
-    use super::__path_query;
     use super::__path_query_results;
+    use super::__path_submit_query_to_file;
+    use super::__path_submit_query_to_results_cache;
     use super::CompressionUsage;
     use super::OpenApi;
     use super::OpenApiRouter;
@@ -109,7 +113,14 @@ mod api_doc {
             description = "API Server for CLP",
             contact(name = "YScope")
         ),
-        paths(health, query, query_results, cancel_query, compression_usage),
+        paths(
+            health,
+            submit_query_to_results_cache,
+            submit_query_to_file,
+            query_results,
+            cancel_query,
+            compression_usage
+        ),
         components(schemas(CompressionUsage, CompressionJobStatus))
     )]
     pub struct ApiDoc;
@@ -139,10 +150,11 @@ async fn health() -> String {
 
 #[utoipa::path(
     post,
-    path = "/query",
-    description = "Submits a new query job.",
+    path = "/query/results_cache",
+    description = "Submits a new query job whose results are buffered in the results cache \
+        (`MongoDB`).",
     request_body(
-        content= QueryConfig,
+        content = QueryRequest<ResultsCacheOutput>,
         example = json!({
             "datasets": ["default"],
             "query": {
@@ -153,7 +165,7 @@ async fn health() -> String {
                 },
                 "ignore_case": true
             },
-            "output": {"type": "results_cache", "max_num_results": 100}
+            "output": {"max_num_results": 100}
         })),
     responses(
         (
@@ -176,12 +188,84 @@ async fn health() -> String {
         (status = INTERNAL_SERVER_ERROR)
     )
 )]
-async fn query(
+async fn submit_query_to_results_cache(
     State(client): State<Client>,
-    Json(query_config): Json<QueryConfig>,
+    Json(query_request): Json<QueryRequest<ResultsCacheOutput>>,
 ) -> Result<Json<QueryResultsUri>, HandlerError> {
-    tracing::info!("Submitting query: {:?}", query_config);
-    let query_job_config = QueryJobConfig::from(query_config);
+    submit_query(client, query_request, QueryOutput::ResultsCache).await
+}
+
+#[utoipa::path(
+    post,
+    path = "/query/file",
+    description = "Submits a new query job whose results are buffered in files in the stream \
+        output storage (the file system or S3).",
+    request_body(
+        content = QueryRequest<NoOutputOptions>,
+        example = json!({
+            "datasets": ["default"],
+            "query": {
+                "query_string": "*",
+                "time_range": {
+                    "begin_timestamp_millisecs": 0,
+                    "end_timestamp_millisecs": 17_356_896
+                },
+                "ignore_case": true
+            }
+        })),
+    responses(
+        (
+            status = OK,
+            body = QueryResultsUri,
+            description = "The URI to fetch the results of the submitted query.",
+            example = json!({"query_results_uri":"query_results/1"})
+        ),
+        (status = BAD_REQUEST, body = String, content_type = "text/plain",
+            description = "The request body is not valid JSON or could not be read."),
+        (status = PAYLOAD_TOO_LARGE, body = String, content_type = "text/plain",
+            description = "The request body exceeds the configured size limit."),
+        (status = UNSUPPORTED_MEDIA_TYPE, body = String, content_type = "text/plain",
+            description = "The Content-Type header is missing or is not a JSON media type."),
+        (status = UNPROCESSABLE_ENTITY, body = String, content_type = "text/plain",
+            description = "The JSON body has missing or unknown fields, or fields with invalid \
+                types or values (e.g., an empty `datasets` or `query.query_string`, or a \
+                `query.time_range` whose begin timestamp exceeds its end timestamp)."),
+        (status = INTERNAL_SERVER_ERROR)
+    )
+)]
+async fn submit_query_to_file(
+    State(client): State<Client>,
+    Json(query_request): Json<QueryRequest<NoOutputOptions>>,
+) -> Result<Json<QueryResultsUri>, HandlerError> {
+    submit_query(client, query_request, |NoOutputOptions {}| {
+        QueryOutput::File {}
+    })
+    .await
+}
+
+/// Submits a query job for the given request, whose results go to the output that `to_output`
+/// builds from the request's output options.
+///
+/// # Type Parameters
+///
+/// * `OutputOptionsType` - The type of the request's output options.
+///
+/// # Returns
+///
+/// The URI to fetch the results of the submitted query job on success.
+///
+/// # Errors
+///
+/// Returns an error if:
+///
+/// * Forwards [`Client::submit_query`]'s return values on failure.
+async fn submit_query<OutputOptionsType: std::fmt::Debug>(
+    client: Client,
+    query_request: QueryRequest<OutputOptionsType>,
+    to_output: impl FnOnce(OutputOptionsType) -> QueryOutput,
+) -> Result<Json<QueryResultsUri>, HandlerError> {
+    tracing::info!("Submitting query: {:?}", query_request);
+    let query_job_config = query_request.into_query_job_config(to_output);
     let query_job_id = match client.submit_query(&query_job_config).await {
         Ok(id) => {
             tracing::info!("Submitted query job ID: {}", id);
@@ -460,41 +544,6 @@ mod tests {
     use tower::ServiceExt;
 
     use super::*;
-
-    #[tokio::test]
-    async fn query_rejects_a_network_output_with_unprocessable_entity() -> anyhow::Result<()> {
-        let app = clp_s_app_with_lazy_clients().await;
-        let body = serde_json::json!({
-            "datasets": ["default"],
-            "query": {"query_string": "*"},
-            "output": {
-                "type": "network",
-                "host": "localhost",
-                "port": 8080,
-                "session_token": "3f1c1a5e-5b6e-4a43-9d6b-0f2b2f5a8c11",
-            },
-        });
-
-        let response = app
-            .oneshot(
-                Request::post("/query")
-                    .header("content-type", "application/json")
-                    .body(Body::from(body.to_string()))?,
-            )
-            .await?;
-
-        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
-        assert_eq!(
-            response.headers()["content-type"],
-            "text/plain; charset=utf-8"
-        );
-        let response_body = get_body(response).await;
-        assert!(
-            response_body.contains("output.type: unknown variant `network`"),
-            "{response_body}"
-        );
-        Ok(())
-    }
 
     /// Builds a minimal Axum app that validates compression usage params via
     /// [`TryFrom<CompressionUsageParams>`] and returns the resolved

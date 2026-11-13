@@ -14,7 +14,7 @@ using [Swagger UI][swagger-ui].
 
 :::{note}
 `clp-text` doesn't support buffering search results in the file system or S3. When using `clp-text`,
-set `output` to `{"type": "results_cache"}` so that results are buffered in `MongoDB` instead.
+submit queries to `POST /query/results_cache` so that results are buffered in `MongoDB` instead.
 :::
 
 ## Example: Submitting search queries and receiving results
@@ -28,7 +28,7 @@ following commands to submit a query to clp-json and stream the results.
 1. Submit a search query:
 
    ```shell
-   curl -X POST http://localhost:3001/query \
+   curl -X POST http://localhost:3001/query/results_cache \
        -H "Content-Type: application/json" \
        -d '{
           "datasets": ["default"],
@@ -37,16 +37,16 @@ following commands to submit a query to clp-json and stream the results.
              "ignore_case": false
           },
           "output": {
-             "type": "results_cache",
              "max_num_results": 100
           }
        }'
    ```
 
-   `output` chooses where the results are buffered: `{"type": "results_cache"}` buffers them in
-   `MongoDB`, and `{"type": "file"}` buffers them in the file system or S3. Omit `max_num_results`
-   to return all matching results. When specified, the limit must be a positive integer; zero is
-   rejected. Only the `results_cache` output accepts a limit.
+   The endpoint chooses where the results are buffered: `POST /query/results_cache` buffers them in
+   `MongoDB`, and `POST /query/file` buffers them in the file system or S3. Both take `datasets` and
+   `query`; only `POST /query/results_cache` takes options, in the optional `output`. Omit
+   `max_num_results` to return all matching results. When specified, the limit must be a positive
+   integer; zero is rejected.
 
    On success, the server responds with:
 
