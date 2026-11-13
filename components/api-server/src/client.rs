@@ -12,6 +12,7 @@ use clp_rust_utils::database::mysql::query_job;
 use clp_rust_utils::dataset::NonEmptyDatasetNames;
 use clp_rust_utils::job_config::Cancellability;
 pub use clp_rust_utils::job_config::CompressionJobStatus;
+use clp_rust_utils::job_config::NetworkOutput;
 use clp_rust_utils::job_config::QUERY_JOBS_TABLE_NAME;
 use clp_rust_utils::job_config::QueryJobConfig;
 use clp_rust_utils::job_config::QueryJobStatus;
@@ -226,6 +227,19 @@ impl<OutputOptionsType> QueryRequest<OutputOptionsType> {
 #[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct NoOutputOptions {}
+
+impl QueryRequest<NoOutputOptions> {
+    /// Converts the request into the config of a query job whose results are streamed to
+    /// `network_output`.
+    ///
+    /// # Returns
+    ///
+    /// The query job config.
+    #[must_use]
+    pub fn into_streaming_query_job_config(self, network_output: NetworkOutput) -> QueryJobConfig {
+        self.into_query_job_config(|NoOutputOptions {}| QueryOutput::Network(network_output))
+    }
+}
 
 #[derive(Clone)]
 pub struct Client {
@@ -773,6 +787,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU16;
     use std::str::FromStr;
 
     use clp_rust_utils::dataset::DatasetName;
@@ -830,6 +845,40 @@ mod tests {
                 datasets,
                 query,
                 output: QueryOutput::ResultsCache(options),
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn streaming_query_request_converts_to_a_query_job_config_with_the_network_output()
+    -> anyhow::Result<()> {
+        let datasets = vec!["logs".parse::<DatasetName>()?];
+        let query = SearchQuery {
+            query_string: NonEmptyString::new("level: ERROR".to_owned())
+                .expect("query string is non-empty"),
+            time_range: TimeRange::new(Some(1), Some(2))?,
+            ignore_case: true,
+        };
+        let network_output = NetworkOutput {
+            host: NonEmptyString::new("10.0.0.5".to_owned()).expect("host is non-empty"),
+            port: NonZeroU16::new(3003).expect("3003 is nonzero"),
+            session_token: "3f1c1a5e-5b6e-4a43-9d6b-0f2b2f5a8c11".parse()?,
+        };
+
+        let query_job_config = QueryRequest {
+            datasets: NonEmptyDatasetNames::try_from(datasets.clone())?,
+            query: query.clone(),
+            output: NoOutputOptions {},
+        }
+        .into_streaming_query_job_config(network_output.clone());
+
+        assert_eq!(
+            query_job_config,
+            QueryJobConfig {
+                datasets,
+                query,
+                output: QueryOutput::Network(network_output),
             }
         );
         Ok(())

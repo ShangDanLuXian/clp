@@ -207,6 +207,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/query/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Submits a new query job whose results are streamed back to the client. Not available yet. */
+        post: operations["submit_query_to_stream"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/query/{query_job_id}": {
         parameters: {
             query?: never;
@@ -1186,6 +1203,81 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    submit_query_to_stream: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "datasets": [
+                 *         "default"
+                 *       ],
+                 *       "query": {
+                 *         "query_string": "*",
+                 *         "time_range": {
+                 *           "begin_timestamp_millisecs": 0,
+                 *           "end_timestamp_millisecs": 17356896
+                 *         },
+                 *         "ignore_case": true
+                 *       }
+                 *     }
+                 */
+                "application/json": components["schemas"]["QueryRequest_NoOutputOptions"];
+            };
+        };
+        responses: {
+            /** @description The request body is not valid JSON or could not be read. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            /** @description The request body exceeds the configured size limit. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            /** @description The Content-Type header is missing or is not a JSON media type. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            /** @description The JSON body has missing or unknown fields, or fields with invalid types or values (e.g., an empty `datasets` or `query.query_string`, or a `query.time_range` whose begin timestamp exceeds its end timestamp). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            /** @description Streaming queries are not available yet. */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
             };
         };
     };

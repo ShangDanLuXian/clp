@@ -74,6 +74,7 @@ pub fn from_app_state(state: AppState) -> Result<axum::Router, serde_json::Error
         .routes(routes!(health))
         .routes(routes!(submit_query_to_results_cache))
         .routes(routes!(submit_query_to_file))
+        .routes(routes!(submit_query_to_stream))
         .routes(routes!(query_results))
         .routes(routes!(cancel_query))
         .routes(routes!(compression_usage))
@@ -100,6 +101,7 @@ mod api_doc {
     use super::__path_query_results;
     use super::__path_submit_query_to_file;
     use super::__path_submit_query_to_results_cache;
+    use super::__path_submit_query_to_stream;
     use super::CompressionUsage;
     use super::OpenApi;
     use super::OpenApiRouter;
@@ -117,6 +119,7 @@ mod api_doc {
             health,
             submit_query_to_results_cache,
             submit_query_to_file,
+            submit_query_to_stream,
             query_results,
             cancel_query,
             compression_usage
@@ -241,6 +244,45 @@ async fn submit_query_to_file(
         QueryOutput::File {}
     })
     .await
+}
+
+#[utoipa::path(
+    post,
+    path = "/query/stream",
+    description = "Submits a new query job whose results are streamed back to the client. Not \
+        available yet.",
+    request_body(
+        content = QueryRequest<NoOutputOptions>,
+        example = json!({
+            "datasets": ["default"],
+            "query": {
+                "query_string": "*",
+                "time_range": {
+                    "begin_timestamp_millisecs": 0,
+                    "end_timestamp_millisecs": 17_356_896
+                },
+                "ignore_case": true
+            }
+        })),
+    responses(
+        (status = BAD_REQUEST, body = String, content_type = "text/plain",
+            description = "The request body is not valid JSON or could not be read."),
+        (status = PAYLOAD_TOO_LARGE, body = String, content_type = "text/plain",
+            description = "The request body exceeds the configured size limit."),
+        (status = UNSUPPORTED_MEDIA_TYPE, body = String, content_type = "text/plain",
+            description = "The Content-Type header is missing or is not a JSON media type."),
+        (status = UNPROCESSABLE_ENTITY, body = String, content_type = "text/plain",
+            description = "The JSON body has missing or unknown fields, or fields with invalid \
+                types or values (e.g., an empty `datasets` or `query.query_string`, or a \
+                `query.time_range` whose begin timestamp exceeds its end timestamp)."),
+        (status = NOT_IMPLEMENTED, body = String, content_type = "text/plain",
+            description = "Streaming queries are not available yet.")
+    )
+)]
+async fn submit_query_to_stream(
+    Json(_query_request): Json<QueryRequest<NoOutputOptions>>,
+) -> HandlerError {
+    HandlerError::NotImplemented("streaming queries are not available yet".to_owned())
 }
 
 /// Submits a query job for the given request, whose results go to the output that `to_output`
@@ -465,6 +507,8 @@ enum HandlerError {
     BadRequest(String),
     #[error("Gateway timeout: {0}")]
     GatewayTimeout(String),
+    #[error("Not implemented: {0}")]
+    NotImplemented(String),
 }
 
 impl From<axum::Error> for HandlerError {
@@ -518,6 +562,7 @@ impl IntoResponse for HandlerError {
             Self::InternalServer => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
             Self::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg).into_response(),
             Self::GatewayTimeout(msg) => (StatusCode::GATEWAY_TIMEOUT, msg).into_response(),
+            Self::NotImplemented(msg) => (StatusCode::NOT_IMPLEMENTED, msg).into_response(),
         }
     }
 }
@@ -544,6 +589,30 @@ mod tests {
     use tower::ServiceExt;
 
     use super::*;
+
+    #[tokio::test]
+    async fn streaming_query_is_parsed_and_answered_as_not_implemented() -> anyhow::Result<()> {
+        let app = clp_s_app_with_lazy_clients().await;
+        let body = serde_json::json!({
+            "datasets": ["default"],
+            "query": {"query_string": "*"},
+        });
+
+        let response = app
+            .oneshot(
+                Request::post("/query/stream")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))?,
+            )
+            .await?;
+
+        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(
+            get_body(response).await,
+            "streaming queries are not available yet"
+        );
+        Ok(())
+    }
 
     /// Builds a minimal Axum app that validates compression usage params via
     /// [`TryFrom<CompressionUsageParams>`] and returns the resolved

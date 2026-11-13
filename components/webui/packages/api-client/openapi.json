@@ -531,6 +531,88 @@
         }
       }
     },
+    "/query/stream": {
+      "post": {
+        "tags": [],
+        "description": "Submits a new query job whose results are streamed back to the client. Not available yet.",
+        "operationId": "submit_query_to_stream",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueryRequest_NoOutputOptions"
+              },
+              "example": {
+                "datasets": [
+                  "default"
+                ],
+                "query": {
+                  "query_string": "*",
+                  "time_range": {
+                    "begin_timestamp_millisecs": 0,
+                    "end_timestamp_millisecs": 17356896
+                  },
+                  "ignore_case": true
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "400": {
+            "description": "The request body is not valid JSON or could not be read.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The request body exceeds the configured size limit.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The Content-Type header is missing or is not a JSON media type.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The JSON body has missing or unknown fields, or fields with invalid types or values (e.g., an empty `datasets` or `query.query_string`, or a `query.time_range` whose begin timestamp exceeds its end timestamp).",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Streaming queries are not available yet.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/query/{query_job_id}": {
       "delete": {
         "tags": [],
