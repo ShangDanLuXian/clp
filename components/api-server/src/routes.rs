@@ -484,6 +484,38 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn query_rejects_an_empty_query_string_and_a_reversed_time_range_with_bad_request()
+    -> anyhow::Result<()> {
+        let app = clp_s_app_with_lazy_clients().await;
+        for (body, message) in [
+            (
+                serde_json::json!({"query_string": ""}),
+                "query_string must not be empty",
+            ),
+            (
+                serde_json::json!({
+                    "query_string": "*",
+                    "time_range_begin_millisecs": 2,
+                    "time_range_end_millisecs": 1,
+                }),
+                "time_range_begin_millisecs must be <= time_range_end_millisecs",
+            ),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::post("/query")
+                        .header("content-type", "application/json")
+                        .body(Body::from(body.to_string()))?,
+                )
+                .await?;
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{body}");
+            assert!(get_body(response).await.contains(message), "{body}");
+        }
+        Ok(())
+    }
+
     /// Builds a minimal Axum app that validates compression usage params via
     /// [`TryFrom<CompressionUsageParams>`] and returns the resolved
     /// status integer codes on success. No real database is needed.
