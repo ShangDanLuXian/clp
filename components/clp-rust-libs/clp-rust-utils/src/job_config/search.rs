@@ -143,11 +143,12 @@ pub enum QueryOutput {
 }
 
 /// The results cache that a query job's results are buffered in.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ResultsCacheOutput {
     /// The maximum number of search results to keep. Omit for no limit.
     #[serde(default)]
+    #[schema(value_type = Option<u32>, minimum = 1)]
     pub max_num_results: Option<NonZeroU32>,
 
     /// The aggregation to compute over all matching results, regardless of `max_num_results`.
