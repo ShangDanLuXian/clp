@@ -296,9 +296,7 @@ impl Client {
         }
     }
 
-    /// Submits a search or aggregation query as a job. The job is a count-by-time aggregation
-    /// job if `count_by_time_bucket_size_millisecs` is set in the query config; otherwise it's a
-    /// plain search job.
+    /// Submits a search or aggregation query as a job.
     ///
     /// # Returns
     ///
@@ -308,11 +306,12 @@ impl Client {
     ///
     /// Returns an error if:
     ///
-    /// * Forwards [`QueryJobConfig::try_from`]'s return values on failure.
     /// * Forwards [`query_job::submit`]'s return values on failure.
-    pub async fn submit_query(&self, query_config: QueryConfig) -> Result<u64, ClientError> {
-        let query_job_config = QueryJobConfig::try_from(query_config)?;
-        Ok(query_job::submit(&self.sql_pool, &query_job_config).await?)
+    pub async fn submit_query(
+        &self,
+        query_job_config: &QueryJobConfig,
+    ) -> Result<u64, ClientError> {
+        Ok(query_job::submit(&self.sql_pool, query_job_config).await?)
     }
 
     /// Asynchronously fetches the results of a completed query job.

@@ -11,6 +11,7 @@ use axum::response::Sse;
 use axum::response::sse::Event;
 use axum::response::sse::KeepAlive;
 use axum::routing::get;
+use clp_rust_utils::job_config::QueryJobConfig;
 use clp_rust_utils::logs_input::LogsInputError;
 use futures::Stream;
 use futures::StreamExt;
@@ -176,7 +177,11 @@ async fn query(
     Json(query_config): Json<QueryConfig>,
 ) -> Result<Json<QueryResultsUri>, HandlerError> {
     tracing::info!("Submitting query: {:?}", query_config);
-    let query_job_id = match client.submit_query(query_config).await {
+    let submission = match QueryJobConfig::try_from(query_config) {
+        Ok(query_job_config) => client.submit_query(&query_job_config).await,
+        Err(err) => Err(err),
+    };
+    let query_job_id = match submission {
         Ok(id) => {
             tracing::info!("Submitted query job ID: {}", id);
             id
