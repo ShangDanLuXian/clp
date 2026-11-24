@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 from clp_py_utils.clp_config import ArchiveOutput, StorageType
@@ -11,6 +12,8 @@ ARCHIVES_TABLE_SUFFIX = "archives"
 COLUMN_METADATA_TABLE_SUFFIX = "column_metadata"
 DATASETS_TABLE_SUFFIX = "datasets"
 FILES_TABLE_SUFFIX = "files"
+# Left out of `TABLE_SUFFIX_MAX_LEN`: it names only a shared table, never a per-dataset one.
+LONG_SPAN_ARCHIVES_TABLE_SUFFIX = "long_span_archives"
 
 TABLE_SUFFIX_MAX_LEN = max(
     len(ARCHIVES_TABLE_SUFFIX),
@@ -18,6 +21,36 @@ TABLE_SUFFIX_MAX_LEN = max(
     len(DATASETS_TABLE_SUFFIX),
     len(FILES_TABLE_SUFFIX),
 )
+
+
+# The span above which a clp-s archive also has a row in the long-span archives table (24 hours).
+_MAX_SPAN_MILLISECS = 24 * 60 * 60 * 1000
+
+# The maximum number of rows deleted by one statement. MariaDB converts a long `IN` list into a
+# subquery (see `in_predicate_conversion_threshold`, 1000 by default), and the deletion then scans
+# and locks the whole table.
+_MAX_DELETION_BATCH_SIZE = 1000
+
+
+@dataclass(frozen=True)
+class SharedArchiveKey:
+    """
+    The values, besides its dataset ID, that make up a clp-s archive's primary keys in the shared
+    archives table and the long-span archives table.
+    """
+
+    id: int
+    begin_timestamp_millisecs: int
+    end_timestamp_millisecs: int
+
+
+@dataclass(frozen=True)
+class LiveDataset:
+    """A clp-s dataset that isn't marked as deleted, as stored in the shared datasets table."""
+
+    id: int
+    name: str
+    archive_storage_path: str
 
 
 def _create_archives_table(db_cursor, archives_table_name: str) -> None:
@@ -70,6 +103,31 @@ def _create_column_metadata_table(db_cursor, table_prefix: str, dataset: str) ->
             PRIMARY KEY (`name`, `type`)
         )
         """
+    )
+
+
+def _delete_by_primary_keys(
+    db_cursor, table_name: str, key_columns: tuple[str, ...], keys: list[tuple[int, ...]]
+) -> None:
+    """
+    Deletes the rows with the given full primary keys from a table.
+
+    :param db_cursor:
+    :param table_name:
+    :param key_columns: The table's primary key columns, in the order of each key's values.
+    :param keys: Does nothing if empty.
+    """
+    if len(keys) == 0:
+        return
+
+    key_placeholders = f"({', '.join(['%s'] * len(key_columns))})"
+    keys_list_string = ", ".join([key_placeholders] * len(keys))
+    db_cursor.execute(
+        f"""
+        DELETE FROM `{table_name}`
+        WHERE ({", ".join(f"`{column}`" for column in key_columns)}) IN ({keys_list_string})
+        """,
+        [value for key in keys for value in key],
     )
 
 
@@ -128,14 +186,83 @@ def fetch_existing_datasets(
     table_prefix: str,
 ) -> set[str]:
     """
-    Gets the names of all existing datasets.
+    Gets the names of all datasets that aren't marked as deleted.
 
     :param db_cursor:
     :param table_prefix:
     """
-    db_cursor.execute(f"SELECT name FROM `{get_datasets_table_name(table_prefix)}`")
+    db_cursor.execute(
+        f"SELECT name FROM `{get_datasets_table_name(table_prefix)}` WHERE is_deleted = FALSE"
+    )
     rows = db_cursor.fetchall()
     return {row["name"] for row in rows}
+
+
+def fetch_live_datasets(db_cursor, table_prefix: str) -> list[LiveDataset]:
+    """
+    Gets every clp-s dataset that isn't marked as deleted from the shared datasets table.
+
+    :param db_cursor: A cursor created with `dictionary=True`.
+    :param table_prefix:
+    :return: The live datasets, ordered by ID.
+    """
+    db_cursor.execute(
+        f"""
+        SELECT id, name, archive_storage_path
+        FROM `{get_datasets_table_name(table_prefix)}`
+        WHERE is_deleted = FALSE
+        ORDER BY id
+        """
+    )
+    return [
+        LiveDataset(
+            id=row["id"],
+            name=row["name"],
+            archive_storage_path=row["archive_storage_path"],
+        )
+        for row in db_cursor.fetchall()
+    ]
+
+
+def delete_archives_from_shared_metadata_tables(
+    db_cursor, table_prefix: str, dataset_id: int, archives: list[SharedArchiveKey]
+) -> None:
+    """
+    Deletes clp-s archives of one dataset from the shared metadata tables, together with their
+    long-span references. The caller owns the transaction, so both deletions commit together.
+
+    Like the commit of new archives, each batch deletes the archives' rows first, then their
+    long-span rows. Each row is deleted by its full primary key, so the statements lock only the
+    deleted rows, not the gaps that a concurrent commit into the dataset inserts into.
+
+    :param db_cursor:
+    :param table_prefix:
+    :param dataset_id:
+    :param archives: The archives' primary key values, as read from the archives table.
+    """
+    archives_table = get_archives_table_name(table_prefix, None)
+    long_span_archives_table = get_long_span_archives_table_name(table_prefix)
+    for batch_begin in range(0, len(archives), _MAX_DELETION_BATCH_SIZE):
+        batch = archives[batch_begin : batch_begin + _MAX_DELETION_BATCH_SIZE]
+        _delete_by_primary_keys(
+            db_cursor,
+            archives_table,
+            ("dataset_id", "begin_timestamp_millisecs", "id"),
+            [(dataset_id, archive.begin_timestamp_millisecs, archive.id) for archive in batch],
+        )
+        # Only archives spanning more than `_MAX_SPAN_MILLISECS` have a long-span row. Deleting a
+        # key that doesn't exist would lock the gap around it.
+        _delete_by_primary_keys(
+            db_cursor,
+            long_span_archives_table,
+            ("dataset_id", "end_timestamp_millisecs", "archive_id"),
+            [
+                (dataset_id, archive.end_timestamp_millisecs, archive.id)
+                for archive in batch
+                if archive.end_timestamp_millisecs - archive.begin_timestamp_millisecs
+                > _MAX_SPAN_MILLISECS
+            ],
+        )
 
 
 def create_metadata_db_tables(db_cursor, table_prefix: str, dataset: str | None = None) -> None:
@@ -203,3 +330,7 @@ def get_datasets_table_name(table_prefix: str) -> str:
 
 def get_files_table_name(table_prefix: str, dataset: str | None) -> str:
     return _get_table_name(table_prefix, FILES_TABLE_SUFFIX, dataset)
+
+
+def get_long_span_archives_table_name(table_prefix: str) -> str:
+    return _get_table_name(table_prefix, LONG_SPAN_ARCHIVES_TABLE_SUFFIX, None)
