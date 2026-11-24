@@ -540,6 +540,7 @@ impl From<ClientError> for HandlerError {
             }
             ClientError::StreamExtractionTimeout(_) => Self::GatewayTimeout(format!("{err}")),
             ClientError::Sql(_)
+            | ClientError::MetadataDb(_)
             | ClientError::Mongo(_)
             | ClientError::QueryNotSucceeded
             | ClientError::Io(_)
@@ -558,6 +559,7 @@ impl From<ClientError> for HandlerError {
                 | LogsInputError::Unresolvable { .. },
             )
             | ClientError::CompressionJobIdOutOfRange(_)
+            | ClientError::ArchiveSizeOutOfRange(_)
             | ClientError::Telemetry(_) => Self::InternalServer,
         }
     }
