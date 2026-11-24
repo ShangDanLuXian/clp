@@ -24,7 +24,7 @@ use clp_rust_utils::job_config::QueryOutput;
 use clp_rust_utils::job_config::SearchQuery;
 use clp_rust_utils::s3::generate_s3_url;
 use clp_rust_utils::timeline;
-use clp_rust_utils::types::ArchiveId;
+use clp_rust_utils::types::ArchiveUuid;
 use non_empty_string::NonEmptyString;
 use spider_core::task::TaskIndex;
 use spider_core::types::id::TaskId;
@@ -45,8 +45,9 @@ use crate::task::utils::upload_file_to_s3;
 ///
 /// Returns an error if:
 ///
-/// * The configured storage engine is not [`StorageEngine::ClpS`].
-/// * `ctx.task_id` isn't a [`TaskId::Index`].
+/// * [`anyhow::Error`] if:
+///   * The configured storage engine is not [`StorageEngine::ClpS`].
+///   * `ctx.task_id` isn't a [`TaskId::Index`].
 /// * Forwards [`resolve_archive_input`]'s return values on failure.
 /// * Forwards [`ResultsFile::create`]'s return values on failure.
 /// * Forwards [`run_clp_s_search`]'s return values on failure.
@@ -56,7 +57,7 @@ pub(super) fn search(
     config: &SpiderTaskExecutorConfig,
     query_job_id: QueryJobId,
     query: &SearchQuery,
-    archive_id: ArchiveId,
+    archive_uuid: ArchiveUuid,
     dataset: &DatasetName,
     output: &QueryOutput,
 ) -> anyhow::Result<()> {
@@ -76,28 +77,28 @@ pub(super) fn search(
         task_instance_id = % ctx.task_instance_id,
         query_job_id = % query_job_id,
         dataset = % dataset,
-        archive_id = % archive_id,
+        archive_uuid = % archive_uuid,
         "clp-s query task started.",
     );
 
     let clp_home = clp_home();
     let runtime = runtime();
-    let (archive_descriptor, credential_env) = resolve_archive_input(
-        &runtime, clp_home, config, dataset, archive_id,
-    )
-    .inspect_err(|e| {
-        tracing::error!(
-            job_id = % ctx.job_id,
-            task_id = % ctx.task_id,
-            task_instance_id = % ctx.task_instance_id,
-            query_job_id = % query_job_id,
-            error = % e,
-            "Failed to resolve the archive input."
-        );
-    })?;
+    let (archive_descriptor, credential_env) =
+        resolve_archive_input(&runtime, clp_home, config, dataset, archive_uuid).inspect_err(
+            |e| {
+                tracing::error!(
+                    job_id = % ctx.job_id,
+                    task_id = % ctx.task_id,
+                    task_instance_id = % ctx.task_instance_id,
+                    query_job_id = % query_job_id,
+                    error = % e,
+                    "Failed to resolve the archive input."
+                );
+            },
+        )?;
     let results_file = match output {
         QueryOutput::File {} => Some(
-            ResultsFile::create(clp_home, config, query_job_id, archive_id).inspect_err(|e| {
+            ResultsFile::create(clp_home, config, query_job_id, archive_uuid).inspect_err(|e| {
                 tracing::error!(
                     job_id = % ctx.job_id,
                     task_id = % ctx.task_id,
@@ -153,7 +154,7 @@ enum ArchiveDescriptor {
     /// A local dataset archives directory plus the `--archive-id` selecting one archive in it.
     Directory {
         path: PathBuf,
-        archive_id: ArchiveId,
+        archive_uuid: ArchiveUuid,
     },
 
     /// The URL of an S3-hosted archive, read with `--auth s3`.
@@ -192,7 +193,7 @@ impl<'config> ResultsFile<'config> {
         clp_home: &Path,
         config: &'config SpiderTaskExecutorConfig,
         query_job_id: QueryJobId,
-        archive_id: ArchiveId,
+        archive_uuid: ArchiveUuid,
     ) -> anyhow::Result<Self> {
         const STAGING_DIRECTORY_NAME: &str = ".staging";
 
@@ -212,17 +213,17 @@ impl<'config> ResultsFile<'config> {
                 let query_job_directory = local_directory.join(query_job_id.to_string());
                 create_directory(&query_job_directory)?;
                 ResultsFileDestination::Fs {
-                    path: query_job_directory.join(archive_id.to_string()),
+                    path: query_job_directory.join(archive_uuid.to_string()),
                 }
             }
             StreamOutputStorage::S3 { s3_config, .. } => ResultsFileDestination::S3 {
                 s3_config,
-                object_key: format!("{}{query_job_id}/{archive_id}", s3_config.key_prefix),
+                object_key: format!("{}{query_job_id}/{archive_uuid}", s3_config.key_prefix),
             },
         };
         Ok(Self {
             staging_path: staging_directory.join(format!(
-                "{query_job_id}.{archive_id}.{}",
+                "{query_job_id}.{archive_uuid}.{}",
                 uuid::Uuid::new_v4()
             )),
             destination,
@@ -397,7 +398,7 @@ fn resolve_archive_input(
     clp_home: &Path,
     config: &SpiderTaskExecutorConfig,
     dataset: &DatasetName,
-    archive_id: ArchiveId,
+    archive_uuid: ArchiveUuid,
 ) -> anyhow::Result<(ArchiveDescriptor, Vec<(&'static str, String)>)> {
     let s3_config = match &config.archive_output.storage {
         ArchiveOutputStorage::Fs { .. } => {
@@ -406,7 +407,7 @@ fn resolve_archive_input(
                     path: config
                         .abs_archive_output_staging(clp_home)
                         .join(dataset.as_str()),
-                    archive_id,
+                    archive_uuid,
                 },
                 Vec::new(),
             ));
@@ -416,7 +417,7 @@ fn resolve_archive_input(
 
     let object_key = config
         .archive_output
-        .dataset_archive_object_key(dataset, &archive_id);
+        .dataset_archive_object_key(dataset, &archive_uuid);
     let url = generate_s3_url(
         s3_config.endpoint_url.as_ref().map(NonEmptyString::as_str),
         s3_config.region_code.as_ref().map(NonEmptyString::as_str),
@@ -504,10 +505,10 @@ fn build_clp_s_query_args(
 ) -> Vec<OsString> {
     let mut args = vec![OsString::from("s")];
     match archive_descriptor {
-        ArchiveDescriptor::Directory { path, archive_id } => {
+        ArchiveDescriptor::Directory { path, archive_uuid } => {
             args.push(path.as_os_str().to_os_string());
             args.push(OsString::from("--archive-id"));
-            args.push(OsString::from(archive_id.to_string()));
+            args.push(OsString::from(archive_uuid.to_string()));
         }
         ArchiveDescriptor::ObjectUrl(url) => {
             args.push(OsString::from(url));
@@ -627,7 +628,7 @@ mod tests {
     use clp_rust_utils::job_config::ResultsCacheOutput;
     use clp_rust_utils::job_config::SearchQuery;
     use clp_rust_utils::job_config::TimeRange;
-    use clp_rust_utils::types::ArchiveId;
+    use clp_rust_utils::types::ArchiveUuid;
     use clp_rust_utils::types::PositiveI64;
     use clp_rust_utils::types::SessionToken;
     use clp_rust_utils::types::non_empty_string::ExpectedNonEmpty;
@@ -647,7 +648,7 @@ mod tests {
     use super::resolve_archive_input;
     use super::search;
 
-    const ARCHIVE_ID: &str = "018e90e5-8b2a-4a61-a2fc-cac799936caf";
+    const ARCHIVE_UUID: &str = "018e90e5-8b2a-4a61-a2fc-cac799936caf";
     const SESSION_TOKEN: &str = "6f1d3b52-8a4e-4c1b-9f6e-2d7a5c0b9e13";
 
     /// # Returns
@@ -699,11 +700,13 @@ mod tests {
 
     /// # Returns
     ///
-    /// An [`ArchiveDescriptor`] addressing [`ARCHIVE_ID`] under `/archives/ds1`.
+    /// An [`ArchiveDescriptor`] addressing [`ARCHIVE_UUID`] under `/archives/ds1`.
     fn directory_descriptor() -> ArchiveDescriptor {
         ArchiveDescriptor::Directory {
             path: PathBuf::from("/archives/ds1"),
-            archive_id: ARCHIVE_ID.parse::<ArchiveId>().expect("valid archive UUID"),
+            archive_uuid: ARCHIVE_UUID
+                .parse::<ArchiveUuid>()
+                .expect("valid archive UUID"),
         }
     }
 
@@ -796,11 +799,12 @@ mod tests {
     ///
     /// # Returns
     ///
-    /// A [`ResultsFile`] for query job 42 and [`ARCHIVE_ID`], created under `clp_home`.
+    /// A [`ResultsFile`] for query job 42 and [`ARCHIVE_UUID`], created under `clp_home`.
     ///
     /// # Panics
     ///
-    /// Panics if [`ARCHIVE_ID`] isn't a valid UUID, or if [`ResultsFile::create`] returns an error.
+    /// Panics if [`ARCHIVE_UUID`] isn't a valid UUID, or if [`ResultsFile::create`] returns an
+    /// error.
     fn create_results_file<'config>(
         clp_home: &Path,
         config: &'config SpiderTaskExecutorConfig,
@@ -809,7 +813,9 @@ mod tests {
             clp_home,
             config,
             42,
-            ARCHIVE_ID.parse::<ArchiveId>().expect("valid archive UUID"),
+            ARCHIVE_UUID
+                .parse::<ArchiveUuid>()
+                .expect("valid archive UUID"),
         )
         .expect("failed to create the results file")
     }
@@ -829,7 +835,7 @@ mod tests {
                 OsString::from("s"),
                 OsString::from("/archives/ds1"),
                 OsString::from("--archive-id"),
-                OsString::from(ARCHIVE_ID),
+                OsString::from(ARCHIVE_UUID),
                 OsString::from("level: \"ERROR\""),
                 OsString::from("--tge"),
                 OsString::from("1310138944000"),
@@ -841,8 +847,8 @@ mod tests {
     }
 
     #[test]
-    fn build_clp_s_query_args_s3_uses_object_url_and_no_archive_id() {
-        let url = format!("https://bucket.s3.amazonaws.com/LIB1/ds1/{ARCHIVE_ID}");
+    fn build_clp_s_query_args_s3_uses_object_url_and_no_archive_uuid() {
+        let url = format!("https://bucket.s3.amazonaws.com/LIB1/ds1/{ARCHIVE_UUID}");
 
         assert_eq!(
             build_clp_s_query_args(
@@ -937,16 +943,20 @@ mod tests {
             Path::new("/clp"),
             &config,
             &"ds1".parse::<DatasetName>()?,
-            ARCHIVE_ID.parse::<ArchiveId>().expect("valid archive UUID"),
+            ARCHIVE_UUID
+                .parse::<ArchiveUuid>()
+                .expect("valid archive UUID"),
         )?;
 
-        let ArchiveDescriptor::Directory { path, archive_id } = descriptor else {
+        let ArchiveDescriptor::Directory { path, archive_uuid } = descriptor else {
             panic!("expected a directory descriptor");
         };
         assert_eq!(path, PathBuf::from("/clp/var/data/archives/ds1"));
         assert_eq!(
-            archive_id,
-            ARCHIVE_ID.parse::<ArchiveId>().expect("valid archive UUID")
+            archive_uuid,
+            ARCHIVE_UUID
+                .parse::<ArchiveUuid>()
+                .expect("valid archive UUID")
         );
         assert_eq!(credential_env, &[]);
 
@@ -963,7 +973,9 @@ mod tests {
             Path::new("/clp"),
             &config,
             &"ds1".parse::<DatasetName>()?,
-            ARCHIVE_ID.parse::<ArchiveId>().expect("valid archive UUID"),
+            ARCHIVE_UUID
+                .parse::<ArchiveUuid>()
+                .expect("valid archive UUID"),
         )?;
 
         let ArchiveDescriptor::ObjectUrl(url) = descriptor else {
@@ -971,7 +983,7 @@ mod tests {
         };
         assert_eq!(
             url,
-            format!("https://bucket.s3.amazonaws.com/LIB1/ds1/{ARCHIVE_ID}")
+            format!("https://bucket.s3.amazonaws.com/LIB1/ds1/{ARCHIVE_UUID}")
         );
         assert_eq!(
             credential_env,
@@ -996,7 +1008,9 @@ mod tests {
             Path::new("/clp"),
             &config,
             &"ds1".parse::<DatasetName>()?,
-            ARCHIVE_ID.parse::<ArchiveId>().expect("valid archive UUID"),
+            ARCHIVE_UUID
+                .parse::<ArchiveUuid>()
+                .expect("valid archive UUID"),
         )?;
         let args = build_clp_s_query_args(&descriptor, &unbounded_query());
 
@@ -1019,7 +1033,9 @@ mod tests {
             Path::new("/clp"),
             &config,
             &"ds1".parse::<DatasetName>()?,
-            ARCHIVE_ID.parse::<ArchiveId>().expect("valid archive UUID"),
+            ARCHIVE_UUID
+                .parse::<ArchiveUuid>()
+                .expect("valid archive UUID"),
         )?;
 
         let ArchiveDescriptor::ObjectUrl(url) = descriptor else {
@@ -1027,7 +1043,7 @@ mod tests {
         };
         assert_eq!(
             url,
-            format!("http://minio:9000/bucket/LIB1/ds1/{ARCHIVE_ID}")
+            format!("http://minio:9000/bucket/LIB1/ds1/{ARCHIVE_UUID}")
         );
 
         Ok(())
@@ -1051,7 +1067,7 @@ mod tests {
                 OsString::from("s"),
                 OsString::from("/archives/ds1"),
                 OsString::from("--archive-id"),
-                OsString::from(ARCHIVE_ID),
+                OsString::from(ARCHIVE_UUID),
                 OsString::from("level: \"ERROR\""),
                 OsString::from("file"),
                 OsString::from("--path"),
@@ -1081,7 +1097,7 @@ mod tests {
             .expect("the staging path should have a file name")
             .to_string_lossy();
         assert!(
-            staging_file_name.starts_with(&format!("42.{ARCHIVE_ID}.")),
+            staging_file_name.starts_with(&format!("42.{ARCHIVE_UUID}.")),
             "unexpected staging file name: {staging_file_name}"
         );
         assert_ne!(results_file.staging_path, other_results_file.staging_path);
@@ -1101,7 +1117,7 @@ mod tests {
         let ResultsFileDestination::S3 { object_key, .. } = &results_file.destination else {
             panic!("expected an S3 destination");
         };
-        assert_eq!(object_key, &format!("streams/42/{ARCHIVE_ID}"));
+        assert_eq!(object_key, &format!("streams/42/{ARCHIVE_UUID}"));
         assert!(
             !config
                 .abs_stream_output_staging(clp_home.path())
@@ -1139,7 +1155,7 @@ mod tests {
 
         let path = config
             .abs_stream_output_staging(clp_home.path())
-            .join(format!("42/{ARCHIVE_ID}"));
+            .join(format!("42/{ARCHIVE_UUID}"));
         assert_eq!(std::fs::read(path)?, b"results");
         assert!(!staging_path.exists());
         Ok(())
@@ -1153,7 +1169,7 @@ mod tests {
         let runtime = tokio::runtime::Runtime::new().expect("failed to create Tokio runtime");
         let path = config
             .abs_stream_output_staging(clp_home.path())
-            .join(format!("42/{ARCHIVE_ID}"));
+            .join(format!("42/{ARCHIVE_UUID}"));
 
         let results_file = create_results_file(clp_home.path(), &config);
         let staging_path = results_file.staging_path.clone();
@@ -1193,7 +1209,7 @@ mod tests {
         let not_a_directory = clp_home.path().join("not-a-directory");
         std::fs::write(&not_a_directory, b"")?;
         let mut results_file = create_results_file(clp_home.path(), &config);
-        results_file.staging_path = not_a_directory.join(format!("42.{ARCHIVE_ID}"));
+        results_file.staging_path = not_a_directory.join(format!("42.{ARCHIVE_UUID}"));
 
         let error = results_file
             .publish(runtime.handle())
@@ -1249,7 +1265,9 @@ mod tests {
             &config,
             42,
             &unbounded_query(),
-            ARCHIVE_ID.parse::<ArchiveId>().expect("valid archive UUID"),
+            ARCHIVE_UUID
+                .parse::<ArchiveUuid>()
+                .expect("valid archive UUID"),
             &DatasetName::default(),
             &QueryOutput::Network(network_output()),
         )
@@ -1272,7 +1290,9 @@ mod tests {
             &config,
             42,
             &unbounded_query(),
-            ARCHIVE_ID.parse::<ArchiveId>().expect("valid archive UUID"),
+            ARCHIVE_UUID
+                .parse::<ArchiveUuid>()
+                .expect("valid archive UUID"),
             &DatasetName::default(),
             &QueryOutput::ResultsCache(ResultsCacheOutput {
                 max_num_results: None,
@@ -1313,7 +1333,7 @@ mod tests {
                 "s",
                 "/archives/ds1",
                 "--archive-id",
-                ARCHIVE_ID,
+                ARCHIVE_UUID,
                 "level: \"ERROR\"",
                 "--tge",
                 "-1",
@@ -1337,7 +1357,7 @@ mod tests {
                 "s",
                 "/archives/ds1",
                 "--archive-id",
-                ARCHIVE_ID,
+                ARCHIVE_UUID,
                 "level: \"ERROR\"",
                 "--tge",
                 "-1",
