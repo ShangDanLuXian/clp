@@ -4,6 +4,7 @@ exclude = [
 ]
 members = [
     "components/api-server",
+    "components/clp-package-cli",
     "components/clp-rust-libs/clp-metadata-db",
     "components/clp-rust-libs/clp-rust-utils",
     "components/clp-rust-libs/query-result-listener",

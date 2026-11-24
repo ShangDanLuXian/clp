@@ -969,6 +969,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "clp-package-cli"
+version = "0.13.1-dev"
+dependencies = [
+ "anyhow",
+ "aws-sdk-s3",
+ "clap",
+ "clp-metadata-db",
+ "clp-rust-utils",
+ "non-empty-string",
+ "secrecy",
+ "sqlx",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "clp-rust-utils"
 version = "0.13.1-dev"
 dependencies = [
