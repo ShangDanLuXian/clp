@@ -19,6 +19,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use clp_metadata_db::ClpDbClient;
+use clp_rust_utils::clp_config::package::config::ArchiveOutput;
 use clp_rust_utils::clp_config::package::config::CompressionCoordinator as CoordinatorConfig;
 use clp_rust_utils::clp_config::package::config::Database as DatabaseConfig;
 use clp_rust_utils::clp_config::package::config::Spider as SpiderConfig;
@@ -76,7 +78,7 @@ impl Coordinator {
     ///
     /// * [`Error::InvalidConfiguration`] if the compression coordinator configuration is invalid.
     /// * [`Error::InvalidEndpoint`] if the Spider host and port do not form a valid endpoint.
-    /// * Forwards [`SpiderClient::builder`]'s connection return values on failure.
+    /// * Forwards [`spider_client::SpiderClientBuilder::connect`]'s return values on failure.
     /// * Forwards [`ExternalResourceGroupCredentials::from_env`]'s return values on failure.
     /// * Forwards [`SpiderClient::add_or_verify_resource_group`]'s return values on failure.
     /// * Forwards [`Self::fetch_submitted_running_jobs`]'s return values on failure.
@@ -84,7 +86,8 @@ impl Coordinator {
         coordinator_config: &CoordinatorConfig,
         spider_config: &SpiderConfig,
         db_pool: sqlx::MySqlPool,
-        db_config: DatabaseConfig,
+        db_config: &DatabaseConfig,
+        archive_output: ArchiveOutput,
     ) -> Result<(Self, CancellationToken), Error> {
         let max_concurrent_jobs = coordinator_config.max_concurrent_jobs.get();
         if max_concurrent_jobs > Semaphore::MAX_PERMITS {
@@ -145,8 +148,9 @@ impl Coordinator {
             resource_group_id,
             spider_client,
             context: Arc::new(CompressionJobHandleContext {
+                metadata_db_client: ClpDbClient::new(db_pool.clone(), db_config),
                 db_pool,
-                db_config,
+                archive_output,
                 spider_option,
             }),
             is_first_fetch: true,

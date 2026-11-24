@@ -5,6 +5,7 @@ use clp_rust_utils::task_io::compression::ClpSCompressionOption;
 use clp_rust_utils::task_io::compression::CompressionTaskOutput;
 use clp_rust_utils::task_io::compression::FsInputSource;
 use clp_rust_utils::task_io::compression::S3InputSource;
+use clp_rust_utils::types::DatasetId;
 use spider_tdl::TaskContext;
 use spider_tdl::TdlError;
 use spider_tdl::task;
@@ -17,6 +18,7 @@ pub(crate) fn s3_compress_task(
     ctx: TaskContext,
     clp_s_option: ClpSCompressionOption,
     dataset: DatasetName,
+    dataset_id: DatasetId,
     input_source: S3InputSource,
 ) -> Result<CompressionTaskOutput, TdlError> {
     compress::compress(
@@ -24,6 +26,7 @@ pub(crate) fn s3_compress_task(
         crate::common::spider_task_executor_config(),
         &clp_s_option,
         dataset,
+        dataset_id,
         input_source,
     )
     .inspect_err(|e| {
@@ -43,6 +46,7 @@ pub(crate) fn fs_compress_task(
     ctx: TaskContext,
     clp_s_option: ClpSCompressionOption,
     dataset: DatasetName,
+    dataset_id: DatasetId,
     input_source: FsInputSource,
 ) -> Result<CompressionTaskOutput, TdlError> {
     compress::compress(
@@ -50,6 +54,7 @@ pub(crate) fn fs_compress_task(
         crate::common::spider_task_executor_config(),
         &clp_s_option,
         dataset,
+        dataset_id,
         input_source,
     )
     .inspect_err(|e| {
@@ -78,7 +83,10 @@ pub(crate) fn commit_task(ctx: TaskContext) -> Result<(), TdlError> {
     let output =
         commit::combine_outputs(outputs).map_err(|e| TdlError::ExecutionError(format!("{e:#}")))?;
     crate::common::runtime()
-        .block_on(commit::commit(ctx.job_id, &output.dataset, output.archives))
+        .block_on(async {
+            let client = commit::clp_db_client().await?;
+            commit::commit(client, ctx.job_id, output.dataset_id, output.archives).await
+        })
         .inspect_err(|e| {
             tracing::error!(spider_job_id = % ctx.job_id, error = ? e, "CLP commit task failed.");
         })

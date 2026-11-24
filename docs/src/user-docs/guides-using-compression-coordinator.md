@@ -21,7 +21,7 @@ the `compression-coordinator`-based architecture (which uses Spider) provides th
 user-experience, reliability, and performance improvements:
 
 * **Improved all-or-nothing semantics**: Compression jobs coordinated by `compression-coordinator`
-  publish all archive metadata to the `clp_<dataset>_archives` table in a single commit operation.
+  publish all archive metadata to the shared `clp_archives` table in a single commit operation.
   The commit operation is both transactional and idempotent, so:
   * a job-level failure doesn't result in partial updates.
   * internal task retries don't result in duplicate updates.
