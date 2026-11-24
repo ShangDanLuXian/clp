@@ -11,7 +11,7 @@ use serde::Deserialize;
 use crate::clp_config::AwsAuthentication;
 use crate::clp_config::S3Config;
 use crate::dataset::DatasetName;
-use crate::types::ArchiveId;
+use crate::types::ArchiveUuid;
 use crate::types::non_empty_string::ExpectedNonEmpty;
 
 /// Mirror of `clp_py_utils.clp_config.CLP_METADATA_TABLE_PREFIX`. Must be kept in sync.
@@ -209,48 +209,18 @@ pub struct Database {
     pub table_prefix: String,
 }
 
-impl Default for Database {
-    fn default() -> Self {
-        Self {
-            host: "localhost".to_owned(),
-            port: 3306,
-            names: ClpDbNames::default(),
-            table_prefix: CLP_METADATA_TABLE_PREFIX.to_owned(),
-        }
-    }
-}
-
 impl Database {
     /// # Returns
     ///
-    /// The archives table name (`<prefix><dataset>_archives`).
+    /// The names of the shared clp-s metadata tables, using this config's table prefix.
     #[must_use]
-    pub fn archives_table_name(&self, dataset: &DatasetName) -> String {
-        format!("{}{dataset}_archives", self.table_prefix)
-    }
-
-    /// # Returns
-    ///
-    /// The column-metadata table name (`<prefix><dataset>_column_metadata`).
-    #[must_use]
-    pub fn column_metadata_table_name(&self, dataset: &DatasetName) -> String {
-        format!("{}{dataset}_column_metadata", self.table_prefix)
-    }
-
-    /// # Returns
-    ///
-    /// The datasets table name `<prefix>datasets`.
-    #[must_use]
-    pub fn datasets_table_name(&self) -> String {
-        format!("{}datasets", self.table_prefix)
-    }
-
-    /// # Returns
-    ///
-    /// The files table name (`<prefix><dataset>_files`).
-    #[must_use]
-    pub fn files_table_name(&self, dataset: &DatasetName) -> String {
-        format!("{}{dataset}_files", self.table_prefix)
+    pub fn metadata_tables(&self) -> MetadataTables {
+        MetadataTables {
+            datasets: format!("{}datasets", self.table_prefix),
+            archives: format!("{}archives", self.table_prefix),
+            long_span_archives: format!("{}long_span_archives", self.table_prefix),
+            column_metadata: format!("{}column_metadata", self.table_prefix),
+        }
     }
 
     /// # Returns
@@ -268,6 +238,60 @@ impl Database {
     #[must_use]
     pub fn unscoped_files_table_name(&self) -> String {
         format!("{}files", self.table_prefix)
+    }
+}
+
+impl Default for Database {
+    fn default() -> Self {
+        Self {
+            host: "localhost".to_owned(),
+            port: 3306,
+            names: ClpDbNames::default(),
+            table_prefix: CLP_METADATA_TABLE_PREFIX.to_owned(),
+        }
+    }
+}
+
+/// The clp-s metadata tables that every dataset shares, identified by their names.
+#[derive(Clone, Debug)]
+pub struct MetadataTables {
+    datasets: String,
+    archives: String,
+    long_span_archives: String,
+    column_metadata: String,
+}
+
+impl MetadataTables {
+    /// # Returns
+    ///
+    /// The name of the datasets table (`<prefix>datasets`).
+    #[must_use]
+    pub const fn datasets(&self) -> &str {
+        self.datasets.as_str()
+    }
+
+    /// # Returns
+    ///
+    /// The name of the archives table (`<prefix>archives`).
+    #[must_use]
+    pub const fn archives(&self) -> &str {
+        self.archives.as_str()
+    }
+
+    /// # Returns
+    ///
+    /// The name of the long-span archives table (`<prefix>long_span_archives`).
+    #[must_use]
+    pub const fn long_span_archives(&self) -> &str {
+        self.long_span_archives.as_str()
+    }
+
+    /// # Returns
+    ///
+    /// The name of the column-metadata table (`<prefix>column_metadata`).
+    #[must_use]
+    pub const fn column_metadata(&self) -> &str {
+        self.column_metadata.as_str()
     }
 }
 
@@ -520,15 +544,15 @@ impl ArchiveOutput {
     ///
     /// # Returns
     ///
-    /// The dataset's archive storage directory joined with `archive_id`.
+    /// The dataset's archive storage directory joined with `archive_uuid`.
     #[must_use]
     pub fn dataset_archive_object_key(
         &self,
         dataset: &DatasetName,
-        archive_id: &ArchiveId,
+        archive_uuid: &ArchiveUuid,
     ) -> NonEmptyString {
         NonEmptyString::from_string(format!(
-            "{}/{archive_id}",
+            "{}/{archive_uuid}",
             self.dataset_archive_storage_directory(dataset)
         ))
     }
@@ -901,12 +925,14 @@ mod tests {
 
         use crate::clp_config::AwsAuthentication;
         use crate::clp_config::S3Config;
-        use crate::types::ArchiveId;
+        use crate::types::ArchiveUuid;
         use crate::types::non_empty_string::ExpectedNonEmpty;
 
-        const ARCHIVE_ID: &str = "018e90e5-8b2a-4a61-a2fc-cac799936caf";
+        const ARCHIVE_UUID: &str = "018e90e5-8b2a-4a61-a2fc-cac799936caf";
 
-        let archive_id = ARCHIVE_ID.parse::<ArchiveId>().expect("valid archive UUID");
+        let archive_uuid = ARCHIVE_UUID
+            .parse::<ArchiveUuid>()
+            .expect("valid archive UUID");
         let archive_output = ArchiveOutput {
             storage: ArchiveOutputStorage::S3 {
                 staging_directory: "var/data/staged-archives".to_owned(),
@@ -926,15 +952,15 @@ mod tests {
 
         assert_eq!(
             archive_output
-                .dataset_archive_object_key(&DatasetName::default(), &archive_id)
+                .dataset_archive_object_key(&DatasetName::default(), &archive_uuid)
                 .as_str(),
-            format!("LIB1/default/{ARCHIVE_ID}")
+            format!("LIB1/default/{ARCHIVE_UUID}")
         );
         assert_eq!(
             archive_output
-                .dataset_archive_object_key(&dataset, &archive_id)
+                .dataset_archive_object_key(&dataset, &archive_uuid)
                 .as_str(),
-            format!("LIB1/mydataset/{ARCHIVE_ID}")
+            format!("LIB1/mydataset/{ARCHIVE_UUID}")
         );
     }
 
