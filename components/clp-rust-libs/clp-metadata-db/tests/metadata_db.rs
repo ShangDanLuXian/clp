@@ -39,6 +39,8 @@ use sqlx::MySqlPool;
 use sqlx::mysql::MySqlDatabaseError;
 use sqlx::mysql::MySqlPoolOptions;
 use tokio::sync::Barrier;
+use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 use tokio::task::JoinSet;
 
 const BASE_ARCHIVE: ArchiveDescriptor = ArchiveDescriptor {
@@ -51,6 +53,8 @@ const BASE_ARCHIVE: ArchiveDescriptor = ArchiveDescriptor {
 const COMPRESSION_JOB_ID: CompressionJobId = 7;
 
 const DAY_MILLISECS: i64 = 24 * 60 * 60 * 1000;
+
+const DELETION_STEP_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// A freshly created database with the shared metadata tables, and a client of it.
 struct TestDb {
@@ -232,6 +236,128 @@ impl TestDb {
         .fetch_one(&self.pool)
         .await
         .expect("the archives rows should be counted")
+    }
+}
+
+/// A `delete_archives` call running in its own transaction on a spawned task, which commits only
+/// once told to.
+struct Deletion {
+    connection_id: Option<oneshot::Receiver<u64>>,
+    deleted: oneshot::Receiver<()>,
+    commit: oneshot::Sender<()>,
+    task: JoinHandle<anyhow::Result<Vec<ArchiveId>>>,
+}
+
+impl Deletion {
+    /// Spawns a task that begins a transaction, deletes the archives `ids` in it, then commits it
+    /// once [`Self::commit`] is called.
+    ///
+    /// # Returns
+    ///
+    /// The running deletion.
+    fn spawn(client: Arc<ClpDbClient>, ids: Vec<ArchiveId>) -> Self {
+        let (connection_id_sender, connection_id) = oneshot::channel();
+        let (deleted_sender, deleted) = oneshot::channel();
+        let (commit, commit_receiver) = oneshot::channel();
+        let task = tokio::spawn(async move {
+            let mut transaction = client.begin().await?;
+            let id: u64 = sqlx::query_scalar("SELECT CONNECTION_ID()")
+                .fetch_one(&mut **transaction.sqlx_transaction())
+                .await?;
+            connection_id_sender
+                .send(id)
+                .expect("the test should wait for the connection ID");
+            let missing_ids = transaction.delete_archives(&ids).await?;
+            deleted_sender
+                .send(())
+                .expect("the test should wait for the deletion");
+            tokio::time::timeout(DELETION_STEP_TIMEOUT, commit_receiver)
+                .await
+                .expect("the test should let the deletion commit")
+                .expect("the test should let the deletion commit");
+            transaction.commit().await?;
+            Ok(missing_ids)
+        });
+        Self {
+            connection_id: Some(connection_id),
+            deleted,
+            commit,
+            task,
+        }
+    }
+
+    /// Waits until `delete_archives` either returns or waits on a lock.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    ///
+    /// * Forwards [`sqlx::query_scalar::QueryScalar::fetch_one`]'s return values on failure.
+    ///
+    /// # Panics
+    ///
+    /// Panics if:
+    ///
+    /// * The deletion doesn't report its connection ID in time.
+    /// * The deletion neither returns nor waits on a lock after polling for a while.
+    /// * It's called twice.
+    async fn wait_until_returned_or_waiting(&mut self, pool: &MySqlPool) -> anyhow::Result<()> {
+        const POLL_INTERVAL: Duration = Duration::from_millis(10);
+        const MAX_NUM_POLLS: usize = 1000;
+
+        let connection_id = tokio::time::timeout(
+            DELETION_STEP_TIMEOUT,
+            self.connection_id
+                .take()
+                .expect("the wait should run only once"),
+        )
+        .await
+        .expect("the deletion should report its connection ID in time")
+        .expect("the deletion should report its connection ID");
+        for _ in 0..MAX_NUM_POLLS {
+            if self.deleted.try_recv().is_ok() {
+                return Ok(());
+            }
+            let is_waiting: bool = sqlx::query_scalar(
+                "SELECT COUNT(*) > 0 FROM information_schema.INNODB_TRX WHERE \
+                 `trx_mysql_thread_id` = ? AND `trx_state` = 'LOCK WAIT'",
+            )
+            .bind(connection_id)
+            .fetch_one(pool)
+            .await?;
+            if is_waiting {
+                return Ok(());
+            }
+            tokio::time::sleep(POLL_INTERVAL).await;
+        }
+        panic!("the deletion should either return or wait on a lock");
+    }
+
+    /// Lets the deletion commit and waits for it to finish.
+    ///
+    /// # Returns
+    ///
+    /// The IDs that `delete_archives` reported as missing on success.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    ///
+    /// * [`tokio::task::JoinError`] if the deletion task panics.
+    /// * Forwards [`ClpDbClient::begin`]'s return values on failure.
+    /// * Forwards [`sqlx::query_scalar::QueryScalar::fetch_one`]'s return values on failure.
+    /// * Forwards [`ArchiveManagement::delete_archives`]'s return values on failure.
+    /// * Forwards [`clp_metadata_db::ClpDbTransaction::commit`]'s return values on failure.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the deletion doesn't finish in time.
+    async fn commit(self) -> anyhow::Result<Vec<ArchiveId>> {
+        // The send fails only if the task has already failed, which joining it reports.
+        let _ = self.commit.send(());
+        tokio::time::timeout(DELETION_STEP_TIMEOUT, self.task)
+            .await
+            .expect("the deletion should finish")?
     }
 }
 
@@ -1222,8 +1348,7 @@ async fn find_archive_ids_by_uuids_aligns_the_results_and_rejects_ambiguous_uuid
 
 #[tokio::test]
 #[ignore = "requires MariaDB"]
-async fn delete_archives_removes_the_rows_and_reports_missing_ids_across_batches()
--> anyhow::Result<()> {
+async fn delete_archives_removes_the_rows_and_reports_missing_ids() -> anyhow::Result<()> {
     const NUM_ARCHIVES: u64 = 1500;
 
     let test_db = TestDb::create("delete_archives").await;
@@ -1281,6 +1406,83 @@ async fn delete_archives_removes_the_rows_and_reports_missing_ids_across_batches
 
     let mut transaction = test_db.client.begin().await?;
     assert_eq!(transaction.delete_archives(&[]).await?, []);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires MariaDB"]
+async fn delete_archives_does_not_deadlock_with_a_concurrent_insert_archives() -> anyhow::Result<()>
+{
+    const NUM_ITERATIONS: u64 = 3;
+    const NUM_ARCHIVES: u64 = 10;
+    const NUM_DELETED_ARCHIVES: usize = 8;
+
+    let test_db = TestDb::create("delete_archives_concurrent_insert").await;
+    let client = Arc::new(ClpDbClient::new(test_db.pool.clone(), &Database::default()));
+    for iteration in 0..NUM_ITERATIONS {
+        let dataset_id = test_db
+            .create_dataset(&dataset_descriptor(&format!("logs_{iteration}")))
+            .await;
+        let archives: Vec<ArchiveDescriptor> = (1..=NUM_ARCHIVES)
+            .map(|index| {
+                let begin = i64::try_from(index * 100).expect("the begin should fit in `i64`");
+                ArchiveDescriptor {
+                    uuid: archive_uuid(iteration * 100 + index),
+                    timestamp_range: timestamp_range(begin, begin + 1),
+                    ..BASE_ARCHIVE
+                }
+            })
+            .collect();
+        let ids = test_db.insert_archives(dataset_id, &archives).await;
+
+        // The archive inserted before the deletion sorts after every existing archive in the
+        // archives table's primary key order, and the one inserted after it sorts before them.
+        let late_archive = ArchiveDescriptor {
+            uuid: archive_uuid(iteration * 100 + NUM_ARCHIVES + 1),
+            timestamp_range: timestamp_range(5000, 5001),
+            ..BASE_ARCHIVE
+        };
+        let early_archive = ArchiveDescriptor {
+            uuid: archive_uuid(iteration * 100 + NUM_ARCHIVES + 2),
+            timestamp_range: timestamp_range(1, 2),
+            ..BASE_ARCHIVE
+        };
+        let mut inserting = client.begin().await?;
+        inserting
+            .insert_archives(
+                dataset_id,
+                COMPRESSION_JOB_ID,
+                std::slice::from_ref(&late_archive),
+            )
+            .await?;
+
+        let mut deletion =
+            Deletion::spawn(Arc::clone(&client), ids[..NUM_DELETED_ARCHIVES].to_vec());
+        deletion
+            .wait_until_returned_or_waiting(&test_db.pool)
+            .await?;
+
+        tokio::time::timeout(
+            DELETION_STEP_TIMEOUT,
+            inserting.insert_archives(
+                dataset_id,
+                COMPRESSION_JOB_ID,
+                std::slice::from_ref(&early_archive),
+            ),
+        )
+        .await
+        .expect("the second insertion should finish")?;
+        tokio::time::timeout(DELETION_STEP_TIMEOUT, inserting.commit())
+            .await
+            .expect("the insertion should commit")?;
+        assert_eq!(deletion.commit().await?, [], "iteration {iteration}");
+
+        assert_eq!(
+            test_db.num_archives(dataset_id).await,
+            i64::try_from(ids.len() - NUM_DELETED_ARCHIVES + 2)?,
+            "iteration {iteration}"
+        );
+    }
     Ok(())
 }
 
