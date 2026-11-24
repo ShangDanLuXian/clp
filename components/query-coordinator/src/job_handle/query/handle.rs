@@ -192,19 +192,17 @@ impl<SubmitterType: QueryJobSubmitter> QueryJobHandle<SubmitterType> {
     ///
     /// Returns an error if:
     ///
+    /// * Forwards [`clp_metadata_db::ClpDbClient::acquire`]'s return values on failure.
     /// * Forwards [`ArchiveSelector::select`]'s return values on failure.
     async fn plan(&self) -> Result<Vec<(ArchiveMetadata, ExecutionPolicy)>, Error> {
-        ArchiveSelector::new(
-            &self.context.db_pool,
-            &self.context.db_config,
-            &self.context.archive_selection_options,
-        )
-        .select(
-            &self.query_job_config.query,
-            self.job_creation_timestamp_millisecs,
-            self.context.spider_option.query_task_max_retry,
-        )
-        .await
+        let mut metadata_db = self.context.metadata_db_client.acquire().await?;
+        ArchiveSelector::new(&mut metadata_db, &self.context.archive_selection_options)
+            .select(
+                &self.query_job_config.query,
+                self.job_creation_timestamp_millisecs,
+                self.context.spider_option.query_task_max_retry,
+            )
+            .await
     }
 
     /// Persists the Spider job ID and marks the query job as running.
