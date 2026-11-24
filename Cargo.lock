@@ -955,6 +955,34 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
+name = "clp-metadata-db"
+version = "0.13.1-dev"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "clp-rust-utils",
+ "sqlx",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
+name = "clp-package-cli"
+version = "0.13.1-dev"
+dependencies = [
+ "anyhow",
+ "clap",
+ "clp-metadata-db",
+ "clp-rust-utils",
+ "secrecy",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "clp-rust-utils"
 version = "0.13.1-dev"
 dependencies = [

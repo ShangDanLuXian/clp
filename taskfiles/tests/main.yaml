@@ -14,6 +14,13 @@ tasks:
         sh: "uuidgen | tr '[:upper:]' '[:lower:]' | sed 's/^/clp-localstack-rust-/'"
       LOCALSTACK_PORT:
         sh: "tools/scripts/localstack/get-free-port.py"
+      METADATA_DB_CONTAINER_NAME:
+        sh: "uuidgen | tr '[:upper:]' '[:lower:]' | sed 's/^/clp-metadata-db-rust-/'"
+      METADATA_DB_PASSWORD: "clp-rust-test"
+      METADATA_DB_PORT:
+        sh: "tools/scripts/localstack/get-free-port.py"
+      METADATA_DB_SERVER_URL: >-
+        mysql://root:{{.METADATA_DB_PASSWORD}}@127.0.0.1:{{.METADATA_DB_PORT}}
     dir: "{{.ROOT_DIR}}"
     deps: [":toolchains:rust"]
     cmds:
@@ -30,8 +37,28 @@ tasks:
         --queue "{{.LOG_INGESTOR_QUEUE}}" \
         --port "{{.LOCALSTACK_PORT}}"
       - |-
+        docker run --rm --detach \
+          --name "{{.METADATA_DB_CONTAINER_NAME}}" \
+          --publish "127.0.0.1:{{.METADATA_DB_PORT}}:3306" \
+          --env "MARIADB_ROOT_PASSWORD={{.METADATA_DB_PASSWORD}}" \
+          "mariadb:10.11.16"
+      - defer: |-
+          docker stop "{{.METADATA_DB_CONTAINER_NAME}}"
+      - |-
+        for _ in $(seq 60); do
+          if docker exec "{{.METADATA_DB_CONTAINER_NAME}}" \
+              mariadb --protocol=tcp --host=127.0.0.1 --user=root \
+              --password="{{.METADATA_DB_PASSWORD}}" --execute="SELECT 1" >/dev/null 2>&1; then
+            exit 0
+          fi
+          sleep 1
+        done
+        echo "The metadata database container didn't become ready." >&2
+        exit 1
+      - |-
         . "{{.G_RUST_TOOLCHAIN_ENV_FILE}}"
         AWS_ENDPOINT_URL="http://localhost:{{.LOCALSTACK_PORT}}" \
+        CLP_METADATA_DB_TEST_SERVER_URL="{{.METADATA_DB_SERVER_URL}}" \
         CLP_LOG_INGESTOR_S3_BUCKET="{{.LOG_INGESTOR_BUCKET}}" \
         CLP_LOG_INGESTOR_SQS_QUEUE="{{.LOG_INGESTOR_QUEUE}}" \
         cargo nextest run --all --all-features --run-ignored all --release --no-fail-fast

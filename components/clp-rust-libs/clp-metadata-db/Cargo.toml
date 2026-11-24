@@ -1,0 +1,18 @@
+[package]
+name = "clp-metadata-db"
+version = { workspace = true }
+edition = { workspace = true }
+
+[lib]
+name = "clp_metadata_db"
+path = "src/lib.rs"
+
+[dependencies]
+async-trait = { workspace = true }
+clp-rust-utils = { workspace = true }
+sqlx = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+anyhow = { workspace = true }
+tokio = { workspace = true, features = ["macros", "sync"] }

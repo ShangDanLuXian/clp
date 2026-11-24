@@ -87,26 +87,6 @@ def _get_table_name(prefix: str, suffix: str, dataset: str | None) -> str:
     return table_name
 
 
-def create_datasets_table(db_cursor, table_prefix: str) -> None:
-    """
-    Creates the datasets information table.
-
-    :param db_cursor: The database cursor to execute the table creation.
-    :param table_prefix: A string to prepend to the table name.
-    """
-    # For a description of the table, see
-    # `../../../docs/src/dev-docs/design-metadata-db.md`
-    db_cursor.execute(
-        f"""
-        CREATE TABLE IF NOT EXISTS `{get_datasets_table_name(table_prefix)}` (
-            `name` VARCHAR(255) NOT NULL,
-            `archive_storage_directory` VARCHAR(4096) NOT NULL,
-            PRIMARY KEY (`name`)
-        )
-        """
-    )
-
-
 def add_dataset(
     db_conn,
     db_cursor,

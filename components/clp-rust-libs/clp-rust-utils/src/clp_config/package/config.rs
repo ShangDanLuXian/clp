@@ -209,18 +209,20 @@ pub struct Database {
     pub table_prefix: String,
 }
 
-impl Default for Database {
-    fn default() -> Self {
-        Self {
-            host: "localhost".to_owned(),
-            port: 3306,
-            names: ClpDbNames::default(),
-            table_prefix: CLP_METADATA_TABLE_PREFIX.to_owned(),
+impl Database {
+    /// # Returns
+    ///
+    /// The names of the shared clp-s metadata tables, using this config's table prefix.
+    #[must_use]
+    pub fn metadata_tables(&self) -> MetadataTables {
+        MetadataTables {
+            datasets: format!("{}datasets", self.table_prefix),
+            archives: format!("{}archives", self.table_prefix),
+            long_span_archives: format!("{}long_span_archives", self.table_prefix),
+            column_metadata: format!("{}column_metadata", self.table_prefix),
         }
     }
-}
 
-impl Database {
     /// # Returns
     ///
     /// The archives table name (`<prefix><dataset>_archives`).
@@ -268,6 +270,60 @@ impl Database {
     #[must_use]
     pub fn unscoped_files_table_name(&self) -> String {
         format!("{}files", self.table_prefix)
+    }
+}
+
+impl Default for Database {
+    fn default() -> Self {
+        Self {
+            host: "localhost".to_owned(),
+            port: 3306,
+            names: ClpDbNames::default(),
+            table_prefix: CLP_METADATA_TABLE_PREFIX.to_owned(),
+        }
+    }
+}
+
+/// The clp-s metadata tables that every dataset shares, identified by their names.
+#[derive(Clone, Debug)]
+pub struct MetadataTables {
+    datasets: String,
+    archives: String,
+    long_span_archives: String,
+    column_metadata: String,
+}
+
+impl MetadataTables {
+    /// # Returns
+    ///
+    /// The name of the datasets table (`<prefix>datasets`).
+    #[must_use]
+    pub const fn datasets(&self) -> &str {
+        self.datasets.as_str()
+    }
+
+    /// # Returns
+    ///
+    /// The name of the archives table (`<prefix>archives`).
+    #[must_use]
+    pub const fn archives(&self) -> &str {
+        self.archives.as_str()
+    }
+
+    /// # Returns
+    ///
+    /// The name of the long-span archives table (`<prefix>long_span_archives`).
+    #[must_use]
+    pub const fn long_span_archives(&self) -> &str {
+        self.long_span_archives.as_str()
+    }
+
+    /// # Returns
+    ///
+    /// The name of the column-metadata table (`<prefix>column_metadata`).
+    #[must_use]
+    pub const fn column_metadata(&self) -> &str {
+        self.column_metadata.as_str()
     }
 }
 
