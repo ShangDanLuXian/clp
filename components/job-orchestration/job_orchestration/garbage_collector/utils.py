@@ -78,8 +78,9 @@ def execute_deletion_by_storage_paths(
 
     :param output_config:
     :param storage_paths:
-    :raises ValueError: If the storage type is unsupported, or if a filesystem path isn't absolute.
+    :raises ValueError: If the storage type is unsupported.
     :raises: Propagates `s3_delete_objects`'s exceptions.
+    :raises: Propagates `validate_storage_path`'s exceptions.
     :raises: Propagates `_delete_fs_path`'s exceptions.
     """
     storage_config = output_config.storage

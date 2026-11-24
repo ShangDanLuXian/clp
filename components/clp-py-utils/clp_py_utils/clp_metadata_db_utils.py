@@ -24,12 +24,9 @@ TABLE_SUFFIX_MAX_LEN = max(
 
 
 # The span above which a clp-s archive also has a row in the long-span archives table (24 hours).
+# Mirror of `MAX_SPAN_MILLISECS` in `clp-rust-libs/clp-metadata-db/src/operations/archive.rs`; the
+# two must be kept in sync.
 _MAX_SPAN_MILLISECS = 24 * 60 * 60 * 1000
-
-# The maximum number of rows deleted by one statement. MariaDB converts a long `IN` list into a
-# subquery (see `in_predicate_conversion_threshold`, 1000 by default), and the deletion then scans
-# and locks the whole table.
-_MAX_DELETION_BATCH_SIZE = 1000
 
 
 @dataclass(frozen=True)
@@ -110,25 +107,20 @@ def _delete_by_primary_keys(
     db_cursor, table_name: str, key_columns: tuple[str, ...], keys: list[tuple[int, ...]]
 ) -> None:
     """
-    Deletes the rows with the given full primary keys from a table.
+    Deletes the rows with the given full primary keys from a table. The function performs no action
+    if `keys` is empty.
 
     :param db_cursor:
     :param table_name:
     :param key_columns: The table's primary key columns, in the order of each key's values.
-    :param keys: Does nothing if empty.
+    :param keys:
     """
-    if len(keys) == 0:
-        return
-
-    key_placeholders = f"({', '.join(['%s'] * len(key_columns))})"
-    keys_list_string = ", ".join([key_placeholders] * len(keys))
-    db_cursor.execute(
-        f"""
-        DELETE FROM `{table_name}`
-        WHERE ({", ".join(f"`{column}`" for column in key_columns)}) IN ({keys_list_string})
-        """,
-        [value for key in keys for value in key],
-    )
+    query = f"""
+        DELETE `{table_name}` FROM `{table_name}` FORCE INDEX (PRIMARY)
+        WHERE {" AND ".join(f"`{column}` = %s" for column in key_columns)}
+        """
+    for key in keys:
+        db_cursor.execute(query, key)
 
 
 def _get_table_name(prefix: str, suffix: str, dataset: str | None) -> str:
@@ -231,38 +223,34 @@ def delete_archives_from_shared_metadata_tables(
     Deletes clp-s archives of one dataset from the shared metadata tables, together with their
     long-span references. The caller owns the transaction, so both deletions commit together.
 
-    Like the commit of new archives, each batch deletes the archives' rows first, then their
-    long-span rows. Each row is deleted by its full primary key, so the statements lock only the
-    deleted rows, not the gaps that a concurrent commit into the dataset inserts into.
+    Like the commit of new archives, it deletes the archives' rows first, then their long-span rows.
+    Each row is deleted by its own statement, by its full primary key, so the statements lock only
+    the deleted rows, not the gaps that a concurrent commit into the dataset inserts into.
 
     :param db_cursor:
     :param table_prefix:
     :param dataset_id:
     :param archives: The archives' primary key values, as read from the archives table.
     """
-    archives_table = get_archives_table_name(table_prefix, None)
-    long_span_archives_table = get_long_span_archives_table_name(table_prefix)
-    for batch_begin in range(0, len(archives), _MAX_DELETION_BATCH_SIZE):
-        batch = archives[batch_begin : batch_begin + _MAX_DELETION_BATCH_SIZE]
-        _delete_by_primary_keys(
-            db_cursor,
-            archives_table,
-            ("dataset_id", "begin_timestamp_millisecs", "id"),
-            [(dataset_id, archive.begin_timestamp_millisecs, archive.id) for archive in batch],
-        )
-        # Only archives spanning more than `_MAX_SPAN_MILLISECS` have a long-span row. Deleting a
-        # key that doesn't exist would lock the gap around it.
-        _delete_by_primary_keys(
-            db_cursor,
-            long_span_archives_table,
-            ("dataset_id", "end_timestamp_millisecs", "archive_id"),
-            [
-                (dataset_id, archive.end_timestamp_millisecs, archive.id)
-                for archive in batch
-                if archive.end_timestamp_millisecs - archive.begin_timestamp_millisecs
-                > _MAX_SPAN_MILLISECS
-            ],
-        )
+    _delete_by_primary_keys(
+        db_cursor,
+        get_archives_table_name(table_prefix, None),
+        ("dataset_id", "begin_timestamp_millisecs", "id"),
+        [(dataset_id, archive.begin_timestamp_millisecs, archive.id) for archive in archives],
+    )
+    # Only archives spanning more than `_MAX_SPAN_MILLISECS` have a long-span row. Deleting a key
+    # that doesn't exist would lock the gap around it.
+    _delete_by_primary_keys(
+        db_cursor,
+        get_long_span_archives_table_name(table_prefix),
+        ("dataset_id", "end_timestamp_millisecs", "archive_id"),
+        [
+            (dataset_id, archive.end_timestamp_millisecs, archive.id)
+            for archive in archives
+            if archive.end_timestamp_millisecs - archive.begin_timestamp_millisecs
+            > _MAX_SPAN_MILLISECS
+        ],
+    )
 
 
 def create_metadata_db_tables(db_cursor, table_prefix: str, dataset: str | None = None) -> None:

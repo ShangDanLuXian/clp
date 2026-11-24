@@ -274,62 +274,62 @@ impl ArchiveManagement for ClpDbTransaction<'_> {
     async fn delete_archives(&mut self, ids: &[ArchiveId]) -> Result<Vec<ArchiveId>, Error> {
         let HandleParts { tables, connection } = self.parts();
 
+        // The exclusive locks keep the rows from changing until they're deleted below, and the read
+        // gives the full primary keys of both tables' rows.
+        let lock_query = format!(
+            "SELECT `id`, `dataset_id`, `begin_timestamp_millisecs`, `end_timestamp_millisecs` \
+             FROM `{}` FORCE INDEX (`auto_inc`) WHERE `id` = ? FOR UPDATE",
+            tables.archives()
+        );
         let mut found_ids = HashSet::new();
-        for batch in ids.chunks(MAX_BATCH_SIZE) {
-            // The exclusive locks keep the rows from changing until they're deleted below, and the
-            // read gives the full primary keys of both tables' rows.
-            let mut select_builder = QueryBuilder::<MySql>::new(format!(
-                "SELECT `id`, `dataset_id`, `begin_timestamp_millisecs`, \
-                 `end_timestamp_millisecs` FROM `{}` WHERE `id` IN (",
-                tables.archives()
-            ));
-            let mut separated_ids = select_builder.separated(", ");
-            for id in batch {
-                separated_ids.push_bind(id);
-            }
-            select_builder.push(") FOR UPDATE");
-            let archives = select_builder
-                .build_query_as::<ArchiveKeyRow>()
-                .fetch_all(&mut *connection)
-                .await?
-                .into_iter()
-                .map(ArchiveKey::try_from)
-                .collect::<Result<Vec<_>, _>>()?;
-            if archives.is_empty() {
+        let mut archives = Vec::new();
+        for id in ids {
+            if found_ids.contains(id) {
                 continue;
             }
-
-            let long_span_archives: Vec<&ArchiveKey> = archives
-                .iter()
-                .filter(|archive| archive.timestamp_range.span_millisecs() > MAX_SPAN_MILLISECS)
-                .collect();
-            if !long_span_archives.is_empty() {
-                let mut long_span_builder = QueryBuilder::<MySql>::new(format!(
-                    "DELETE FROM `{}` WHERE (`dataset_id`, `end_timestamp_millisecs`, \
-                     `archive_id`) IN ",
-                    tables.long_span_archives()
-                ));
-                long_span_builder.push_tuples(long_span_archives, |mut key, archive| {
-                    key.push_bind(archive.dataset_id)
-                        .push_bind(archive.timestamp_range.end_timestamp_millisecs())
-                        .push_bind(archive.id);
-                });
-                long_span_builder.build().execute(&mut *connection).await?;
-            }
-
-            let mut archives_builder = QueryBuilder::<MySql>::new(format!(
-                "DELETE FROM `{}` WHERE (`dataset_id`, `begin_timestamp_millisecs`, `id`) IN ",
-                tables.archives()
-            ));
-            archives_builder.push_tuples(&archives, |mut key, archive| {
-                key.push_bind(archive.dataset_id)
-                    .push_bind(archive.timestamp_range.begin_timestamp_millisecs())
-                    .push_bind(archive.id);
-            });
-            archives_builder.build().execute(&mut *connection).await?;
-
-            found_ids.extend(archives.iter().map(|archive| archive.id));
+            let Some(row) = sqlx::query_as::<_, ArchiveKeyRow>(&lock_query)
+                .bind(id)
+                .fetch_optional(&mut *connection)
+                .await?
+            else {
+                continue;
+            };
+            let archive = ArchiveKey::try_from(row)?;
+            found_ids.insert(archive.id);
+            archives.push(archive);
         }
+
+        let long_span_query = format!(
+            "DELETE `{0}` FROM `{0}` FORCE INDEX (PRIMARY) WHERE `dataset_id` = ? AND \
+             `end_timestamp_millisecs` = ? AND `archive_id` = ?",
+            tables.long_span_archives()
+        );
+        for archive in archives
+            .iter()
+            .filter(|archive| archive.timestamp_range.span_millisecs() > MAX_SPAN_MILLISECS)
+        {
+            sqlx::query(&long_span_query)
+                .bind(archive.dataset_id)
+                .bind(archive.timestamp_range.end_timestamp_millisecs())
+                .bind(archive.id)
+                .execute(&mut *connection)
+                .await?;
+        }
+
+        let archives_query = format!(
+            "DELETE `{0}` FROM `{0}` FORCE INDEX (PRIMARY) WHERE `dataset_id` = ? AND \
+             `begin_timestamp_millisecs` = ? AND `id` = ?",
+            tables.archives()
+        );
+        for archive in &archives {
+            sqlx::query(&archives_query)
+                .bind(archive.dataset_id)
+                .bind(archive.timestamp_range.begin_timestamp_millisecs())
+                .bind(archive.id)
+                .execute(&mut *connection)
+                .await?;
+        }
+
         Ok(ids
             .iter()
             .copied()

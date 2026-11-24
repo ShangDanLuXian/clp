@@ -109,8 +109,7 @@ def _delete_expired_clp_s_archives(
     :param candidates_buffer:
     :param archive_output_config:
     :param dataset:
-    :raises ValueError: If the dataset's archive storage path can't be deleted from, before any
-        metadata is deleted.
+    :raises: Propagates `validate_storage_path`'s exceptions.
     :raises: Propagates `delete_archives_from_shared_metadata_tables`'s exceptions.
     :raises: Propagates `execute_deletion_by_storage_paths`'s exceptions.
     """
@@ -187,9 +186,9 @@ def _delete_recovered_clp_s_archives(
     :param candidates_buffer:
     :param archive_output_config:
     :param recovery_file: The file `candidates_buffer` was read from.
-    :raises ValueError: If a candidate isn't a valid full storage path, e.g., if the recovery file
-        was written by a release before v0.15.0, which wrote paths relative to the configured
-        archive directory.
+    :raises ValueError: If the storage type is FS and a candidate isn't an absolute path, e.g., if
+        the recovery file was written by a release before v0.15.0, which wrote paths relative to the
+        configured archive directory.
     :raises: Propagates `execute_deletion_by_storage_paths`'s exceptions.
     """
     candidates_to_delete = candidates_buffer.get_candidates()
@@ -328,7 +327,9 @@ async def archive_garbage_collector(clp_config: ClpConfig) -> None:
     sweep_interval_secs = clp_config.garbage_collector.sweep_interval.archive * MIN_TO_SECONDS
     # With clp-s, the recovery file holds full storage paths. Before v0.15.0 it held paths relative
     # to the configured archive directory or key prefix (`<dataset>/<archive-id>`), which this
-    # release would misread: a leftover file from an earlier release must be removed on upgrade.
+    # release would misread. Such a file is detected only with FS storage, so with S3 its entries
+    # would be deleted as full keys: a leftover file from an earlier release must be removed on
+    # upgrade.
     recovery_file = clp_config.tmp_directory / f"{ARCHIVE_GARBAGE_COLLECTOR_NAME}.tmp"
 
     logger.info(f"{ARCHIVE_GARBAGE_COLLECTOR_NAME} started.")
