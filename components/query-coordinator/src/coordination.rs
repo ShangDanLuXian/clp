@@ -19,10 +19,10 @@
 //! * `CANCEL_REQUESTED` is non-terminal and is reachable from both `PENDING` and `RUNNING`.
 //! * `CANCELLING` is non-terminal and is reachable only from `CANCEL_REQUESTED`.
 
-use std::num::NonZeroU64;
 use std::sync::Arc;
 use std::time::Duration;
 
+use clp_metadata_db::ClpDbClient;
 use clp_rust_utils::clp_config::package::config::ArchiveOutput as ArchiveOutputConfig;
 use clp_rust_utils::clp_config::package::config::Database as DatabaseConfig;
 use clp_rust_utils::clp_config::package::config::QueryCoordinator as CoordinatorConfig;
@@ -84,7 +84,8 @@ impl Coordinator {
     ///
     /// * [`Error::InvalidConfiguration`] if the query coordinator configuration is invalid.
     /// * [`Error::InvalidEndpoint`] if the Spider host and port do not form a valid endpoint.
-    /// * Forwards [`SpiderClient::builder`]'s connection return values on failure.
+    /// * Forwards [`ArchiveSelectionOptions::from_config`]'s return values on failure.
+    /// * Forwards [`spider_client::SpiderClientBuilder::connect`]'s return values on failure.
     /// * Forwards [`ExternalResourceGroupCredentials::from_env`]'s return values on failure.
     /// * Forwards [`SpiderClient::add_or_verify_resource_group`]'s return values on failure.
     /// * Forwards [`CancellationMonitor::sweep_unsubmitted_jobs`]'s return values on failure.
@@ -94,7 +95,7 @@ impl Coordinator {
         spider_config: &SpiderConfig,
         archive_output_config: &ArchiveOutputConfig,
         db_pool: sqlx::MySqlPool,
-        db_config: DatabaseConfig,
+        db_config: &DatabaseConfig,
     ) -> Result<(Self, CancellationToken), Error> {
         let max_concurrent_jobs = coordinator_config.max_concurrent_jobs.get();
         if max_concurrent_jobs > Semaphore::MAX_PERMITS {
@@ -103,6 +104,9 @@ impl Coordinator {
                 Semaphore::MAX_PERMITS,
             )));
         }
+
+        let archive_selection_options =
+            ArchiveSelectionOptions::from_config(coordinator_config, archive_output_config)?;
 
         let spider_host = spider_config.host.as_str();
         let spider_port = spider_config.port;
@@ -127,13 +131,8 @@ impl Coordinator {
 
         let job_handle_context = Arc::new(QueryJobHandleContext {
             db_pool: db_pool.clone(),
-            db_config,
-            archive_selection_options: ArchiveSelectionOptions {
-                archive_retention_period_millisecs: archive_output_config
-                    .retention_period
-                    .map(|period| period.saturating_mul(MILLISECS_PER_MINUTE)),
-                max_datasets_per_query: coordinator_config.max_datasets_per_query,
-            },
+            metadata_db_client: ClpDbClient::new(db_pool.clone(), db_config),
+            archive_selection_options,
             spider_option: SpiderOption {
                 poll_interval: Duration::from_millis(
                     coordinator_config.result_polling_interval_millisecs.get(),
@@ -533,9 +532,6 @@ impl Coordinator {
         Ok(recovery_context)
     }
 }
-
-const MILLISECS_PER_MINUTE: NonZeroU64 =
-    NonZeroU64::new(60_000).expect("constant should not be zero");
 
 /// A query job that was submitted to Spider by a previous coordinator instance.
 struct SubmittedJob {

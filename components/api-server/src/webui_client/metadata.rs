@@ -1,7 +1,5 @@
 //! Read-only metadata about the CLP package's datasets, archives, and jobs.
 
-use std::collections::HashSet;
-
 use chrono::DateTime;
 use chrono::Utc;
 use clp_metadata_db::ArchiveTimestampRange;
@@ -203,7 +201,7 @@ pub struct CompressionMetadataDisplayOutput {
 }
 
 impl WebuiClient {
-    /// Fetches all dataset names from the datasets table.
+    /// Fetches the names of all live datasets.
     ///
     /// The CLP storage engine has no datasets table, so no dataset names are returned for it.
     ///
@@ -215,22 +213,22 @@ impl WebuiClient {
     ///
     /// Returns an error if:
     ///
-    /// * Forwards [`sqlx::query::QueryScalar::fetch_all`]'s return values on failure.
+    /// * Forwards [`clp_metadata_db::ClpDbClient::acquire`]'s return values on failure.
+    /// * Forwards [`ClpSMetadataReader::get_dataset_names`]'s return values on failure.
     pub async fn get_dataset_names(&self) -> Result<Vec<DatasetName>, ClientError> {
         if self.config.package.storage_engine == StorageEngine::Clp {
             return Ok(Vec::new());
         }
-        let table = self.config.database.datasets_table_name();
-        let names = sqlx::query_scalar(&format!("SELECT name FROM `{table}` ORDER BY name"))
-            .fetch_all(&self.sql_pool)
-            .await?;
-        Ok(names)
+        let mut connection = self.metadata_db_client.acquire().await?;
+        ClpSMetadataReader::new(&mut connection)
+            .get_dataset_names()
+            .await
     }
 
     /// Fetches the earliest and latest log entry timestamps across the given datasets.
     ///
     /// For the CLP storage engine, `datasets` is ignored and the single archives table is queried.
-    /// For CLP-S, the union of the per-dataset archives tables is queried.
+    /// For CLP-S, the archives of the given datasets are covered.
     ///
     /// # Returns
     ///
@@ -241,11 +239,9 @@ impl WebuiClient {
     ///
     /// Returns an error if:
     ///
-    /// * [`ClientError::DatasetNotFound`] if, for CLP-S, any of `datasets` doesn't exist. The first
-    ///   missing dataset in `datasets` is reported.
-    /// * Forwards [`sqlx::query::QueryAs::fetch_one`]'s return values on any other failure.
-    /// * Forwards [`sqlx::query::QueryScalar::fetch_all`]'s return values if looking up the missing
-    ///   dataset fails.
+    /// * Forwards [`clp_metadata_db::ClpDbClient::acquire`]'s return values on failure.
+    /// * Forwards [`ClpSMetadataReader::get_time_range`]'s return values on failure.
+    /// * Forwards [`sqlx::query::QueryAs::fetch_one`]'s return values on failure.
     pub async fn get_time_range(
         &self,
         datasets: &[DatasetName],
@@ -261,26 +257,15 @@ impl WebuiClient {
                 if datasets.is_empty() {
                     return Ok(None);
                 }
-                let union = Self::union_all(datasets.iter().map(|dataset| {
-                    format!(
-                        "SELECT MIN(begin_timestamp) AS begin_timestamp, MAX(end_timestamp) AS \
-                         end_timestamp FROM `{}`",
-                        database.archives_table_name(dataset)
-                    )
-                }));
-                format!(
-                    "SELECT MIN(begin_timestamp) AS begin_timestamp, MAX(end_timestamp) AS \
-                     end_timestamp FROM ({union}) AS combined"
-                )
+                let mut connection = self.metadata_db_client.acquire().await?;
+                return ClpSMetadataReader::new(&mut connection)
+                    .get_time_range(datasets)
+                    .await;
             }
         };
-        let row = match sqlx::query_as::<_, TimeRangeRowProjection>(&sql)
+        let row = sqlx::query_as::<_, TimeRangeRowProjection>(&sql)
             .fetch_one(&self.sql_pool)
-            .await
-        {
-            Ok(row) => row,
-            Err(err) => return Err(self.resolve_dataset_query_error(datasets, err).await),
-        };
+            .await?;
         Ok(row.into())
     }
 
@@ -295,9 +280,9 @@ impl WebuiClient {
     ///
     /// Returns an error if:
     ///
-    /// * Forwards [`Self::get_dataset_names`]'s return values on failure.
-    /// * Forwards [`sqlx::query::QueryAs::fetch_one`]'s return values on failure, including when
-    ///   the tables of a dataset that's being deleted no longer exist.
+    /// * Forwards [`clp_metadata_db::ClpDbClient::acquire`]'s return values on failure.
+    /// * Forwards [`ClpSMetadataReader::get_space_savings`]'s return values on failure.
+    /// * Forwards [`sqlx::query::QueryAs::fetch_one`]'s return values on failure.
     pub async fn get_space_savings(&self) -> Result<SpaceSavings, ClientError> {
         let database = &self.config.database;
         let sql = match self.config.package.storage_engine {
@@ -308,25 +293,10 @@ impl WebuiClient {
                 database.unscoped_archives_table_name()
             ),
             StorageEngine::ClpS => {
-                let datasets = self.get_dataset_names().await?;
-                if datasets.is_empty() {
-                    return Ok(SpaceSavings {
-                        total_uncompressed_size: 0,
-                        total_compressed_size: 0,
-                    });
-                }
-                let union = Self::union_all(datasets.iter().map(|dataset| {
-                    format!(
-                        "SELECT SUM(uncompressed_size) AS uncompressed_size, SUM(size) AS size \
-                         FROM `{}`",
-                        database.archives_table_name(dataset)
-                    )
-                }));
-                format!(
-                    "SELECT CAST(COALESCE(SUM(uncompressed_size), 0) AS SIGNED) AS \
-                     total_uncompressed_size, CAST(COALESCE(SUM(size), 0) AS SIGNED) AS \
-                     total_compressed_size FROM ({union}) AS archives_combined"
-                )
+                let mut connection = self.metadata_db_client.acquire().await?;
+                return ClpSMetadataReader::new(&mut connection)
+                    .get_space_savings()
+                    .await;
             }
         };
         let space_savings = sqlx::query_as::<_, SpaceSavings>(&sql)
@@ -345,9 +315,9 @@ impl WebuiClient {
     ///
     /// Returns an error if:
     ///
-    /// * Forwards [`Self::get_dataset_names`]'s return values on failure.
-    /// * Forwards [`sqlx::query::QueryAs::fetch_one`]'s return values on failure, including when
-    ///   the tables of a dataset that's being deleted no longer exist.
+    /// * Forwards [`clp_metadata_db::ClpDbClient::acquire`]'s return values on failure.
+    /// * Forwards [`ClpSMetadataReader::get_ingestion_details`]'s return values on failure.
+    /// * Forwards [`sqlx::query::QueryAs::fetch_one`]'s return values on failure.
     pub async fn get_ingestion_details(&self) -> Result<Option<IngestionDetails>, ClientError> {
         let database = &self.config.database;
         let sql = match self.config.package.storage_engine {
@@ -363,31 +333,10 @@ impl WebuiClient {
                 )
             }
             StorageEngine::ClpS => {
-                let datasets = self.get_dataset_names().await?;
-                if datasets.is_empty() {
-                    return Ok(None);
-                }
-                let archives_union = Self::union_all(datasets.iter().map(|dataset| {
-                    format!(
-                        "SELECT MIN(begin_timestamp) AS begin_timestamp, MAX(end_timestamp) AS \
-                         end_timestamp FROM `{}`",
-                        database.archives_table_name(dataset)
-                    )
-                }));
-                let files_union = Self::union_all(datasets.iter().map(|dataset| {
-                    format!(
-                        "SELECT COUNT(DISTINCT orig_file_id) AS num_files, \
-                         CAST(COALESCE(SUM(num_messages), 0) AS SIGNED) AS num_messages FROM `{}`",
-                        database.files_table_name(dataset)
-                    )
-                }));
-                format!(
-                    "SELECT a.begin_timestamp, a.end_timestamp, f.num_files, f.num_messages FROM \
-                     (SELECT MIN(begin_timestamp) AS begin_timestamp, MAX(end_timestamp) AS \
-                     end_timestamp FROM ({archives_union}) AS archives_combined) AS a, (SELECT \
-                     CAST(SUM(num_files) AS SIGNED) AS num_files, CAST(SUM(num_messages) AS \
-                     SIGNED) AS num_messages FROM ({files_union}) AS files_combined) AS f"
-                )
+                let mut connection = self.metadata_db_client.acquire().await?;
+                return ClpSMetadataReader::new(&mut connection)
+                    .get_ingestion_details()
+                    .await;
             }
         };
         let row = sqlx::query_as::<_, IngestionDetailsRowProjection>(&sql)
@@ -399,14 +348,17 @@ impl WebuiClient {
     /// Fetches the query speed (total uncompressed bytes scanned and job duration) for a query job
     /// across the given datasets.
     ///
-    /// For the CLP storage engine, `datasets` is ignored.
+    /// For the CLP storage engine, `datasets` is ignored. For CLP-S, `datasets` is only checked to
+    /// exist: only the Celery query scheduler records the query tasks whose archives' bytes are
+    /// summed, and CLP-S query jobs run on Spider, so a CLP-S job never has any.
     ///
     /// # Returns
     ///
     /// The query-speed statistics on success, or `None` when:
     ///
     /// * the job doesn't exist;
-    /// * the job has no tasks over the archives of the given datasets;
+    /// * the job has no tasks over the archives of the given datasets, which is always the case for
+    ///   CLP-S;
     /// * the job hasn't finished yet (its duration is `NULL`);
     /// * for CLP-S, `datasets` is empty.
     ///
@@ -414,11 +366,9 @@ impl WebuiClient {
     ///
     /// Returns an error if:
     ///
-    /// * [`ClientError::DatasetNotFound`] if, for CLP-S, any of `datasets` doesn't exist. The first
-    ///   missing dataset in `datasets` is reported.
-    /// * Forwards [`sqlx::query::QueryAs::fetch_optional`]'s return values on any other failure.
-    /// * Forwards [`sqlx::query::QueryScalar::fetch_all`]'s return values if looking up the missing
-    ///   dataset fails.
+    /// * Forwards [`clp_metadata_db::ClpDbClient::acquire`]'s return values on failure.
+    /// * Forwards [`ClpSMetadataReader::get_dataset_ids`]'s return values on failure.
+    /// * Forwards [`sqlx::query::QueryAs::fetch_optional`]'s return values on failure.
     pub async fn get_query_speed(
         &self,
         datasets: &[DatasetName],
@@ -434,12 +384,11 @@ impl WebuiClient {
                 if datasets.is_empty() {
                     return Ok(None);
                 }
-                Self::union_all(datasets.iter().map(|dataset| {
-                    format!(
-                        "SELECT id, uncompressed_size FROM `{}`",
-                        database.archives_table_name(dataset)
-                    )
-                }))
+                let mut connection = self.metadata_db_client.acquire().await?;
+                ClpSMetadataReader::new(&mut connection)
+                    .get_dataset_ids(datasets)
+                    .await?;
+                return Ok(None);
             }
         };
         let sql = format!(
@@ -448,14 +397,10 @@ impl WebuiClient {
              qj.id JOIN ({archives_subquery}) ca ON qt.archive_id = ca.id WHERE qj.id = ? GROUP \
              BY qj.id, qj.duration"
         );
-        let row = match sqlx::query_as::<_, QuerySpeedRowProjection>(&sql)
+        let row = sqlx::query_as::<_, QuerySpeedRowProjection>(&sql)
             .bind(query_job_id)
             .fetch_optional(&self.sql_pool)
-            .await
-        {
-            Ok(row) => row,
-            Err(err) => return Err(self.resolve_dataset_query_error(datasets, err).await),
-        };
+            .await?;
         Ok(row.and_then(Into::into))
     }
 
@@ -469,32 +414,22 @@ impl WebuiClient {
     ///
     /// Returns an error if:
     ///
-    /// * [`ClientError::DatasetNotFound`] if the dataset's column metadata table doesn't exist.
-    /// * Forwards [`sqlx::query::QueryScalar::fetch_all`]'s return values on failure.
+    /// * [`ClientError::DatasetNotFound`] for the CLP storage engine, which has no datasets.
+    /// * Forwards [`clp_metadata_db::ClpDbClient::acquire`]'s return values on failure.
+    /// * Forwards [`ClpSMetadataReader::get_timestamp_column_names`]'s return values on failure.
     pub async fn get_timestamp_column_names(
         &self,
         dataset: &DatasetName,
     ) -> Result<Vec<String>, ClientError> {
-        // Must be kept in sync with `NodeType::Timestamp` and `NodeType::DeprecatedDateString` in
-        // `components/core/src/clp_s/SchemaTree.hpp`.
-        const TIMESTAMP_NODE_TYPE: i8 = 14;
-        const DEPRECATED_DATE_STRING_NODE_TYPE: i8 = 8;
-
-        let table_name = self.config.database.column_metadata_table_name(dataset);
-        let names: Vec<String> = sqlx::query_scalar(&format!(
-            "SELECT DISTINCT name FROM `{table_name}` WHERE type IN (?, ?) ORDER BY name"
-        ))
-        .bind(TIMESTAMP_NODE_TYPE)
-        .bind(DEPRECATED_DATE_STRING_NODE_TYPE)
-        .fetch_all(&self.sql_pool)
-        .await
-        .map_err(|err| {
-            if Self::is_table_not_found(&err) {
-                return ClientError::DatasetNotFound(dataset.clone());
+        match self.config.package.storage_engine {
+            StorageEngine::Clp => Err(ClientError::DatasetNotFound(dataset.clone())),
+            StorageEngine::ClpS => {
+                let mut connection = self.metadata_db_client.acquire().await?;
+                ClpSMetadataReader::new(&mut connection)
+                    .get_timestamp_column_names(dataset)
+                    .await
             }
-            err.into()
-        })?;
-        Ok(names)
+        }
     }
 
     /// Fetches the metadata of the most recent compression jobs, with the display fields of each
@@ -530,69 +465,6 @@ impl WebuiClient {
                 .collect()
         })
         .await?
-    }
-
-    /// Converts the failure of a query over the given datasets' tables into a [`ClientError`].
-    ///
-    /// # Returns
-    ///
-    /// * [`ClientError::DatasetNotFound`] for the first of `datasets` that isn't in the datasets
-    ///   table, if `error` is a "table doesn't exist" error and the storage engine is CLP-S.
-    /// * The lookup's error, if looking up `datasets` in the datasets table fails.
-    /// * `error` otherwise, including when every one of `datasets` is in the datasets table.
-    async fn resolve_dataset_query_error(
-        &self,
-        datasets: &[DatasetName],
-        error: sqlx::Error,
-    ) -> ClientError {
-        if self.config.package.storage_engine != StorageEngine::ClpS
-            || datasets.is_empty()
-            || !Self::is_table_not_found(&error)
-        {
-            return error.into();
-        }
-        let table = self.config.database.datasets_table_name();
-        let placeholders = vec!["?"; datasets.len()].join(", ");
-        let sql = format!("SELECT name FROM `{table}` WHERE name IN ({placeholders})");
-        let mut query = sqlx::query_scalar::<_, DatasetName>(&sql);
-        for dataset in datasets {
-            query = query.bind(dataset);
-        }
-        let existing: HashSet<DatasetName> = match query.fetch_all(&self.sql_pool).await {
-            Ok(names) => names.into_iter().collect(),
-            Err(lookup_error) => return lookup_error.into(),
-        };
-        datasets
-            .iter()
-            .find(|dataset| !existing.contains(*dataset))
-            .map_or_else(
-                || error.into(),
-                |dataset| ClientError::DatasetNotFound(dataset.clone()),
-            )
-    }
-
-    /// Combines `SELECT` statements with `UNION ALL`.
-    ///
-    /// # Returns
-    ///
-    /// The combined statement.
-    fn union_all(selects: impl Iterator<Item = String>) -> String {
-        selects.collect::<Vec<_>>().join("\nUNION ALL\n")
-    }
-
-    /// # Returns
-    ///
-    /// Whether `error` is a `MySQL` "table doesn't exist" error.
-    fn is_table_not_found(error: &sqlx::Error) -> bool {
-        // MySQL error number for "Table doesn't exist".
-        const MYSQL_TABLE_NOT_FOUND: u16 = 1146;
-
-        if let sqlx::Error::Database(db_err) = error
-            && let Some(mysql_err) = db_err.try_downcast_ref::<sqlx::mysql::MySqlDatabaseError>()
-        {
-            return mysql_err.number() == MYSQL_TABLE_NOT_FOUND;
-        }
-        false
     }
 }
 
@@ -1397,6 +1269,28 @@ mod tests {
             panic!("unexpected error: {error:?}");
         };
         assert_eq!(missing_dataset, "missing".parse::<DatasetName>()?);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn clp_timestamp_column_names_are_not_found() -> anyhow::Result<()> {
+        let client = WebuiClient::new_lazy(Config {
+            package: Package {
+                storage_engine: StorageEngine::Clp,
+            },
+            ..Config::default()
+        })
+        .await;
+
+        let error = client
+            .get_timestamp_column_names(&"logs".parse()?)
+            .await
+            .expect_err("the CLP storage engine has no datasets");
+
+        let ClientError::DatasetNotFound(missing_dataset) = error else {
+            panic!("unexpected error: {error:?}");
+        };
+        assert_eq!(missing_dataset, "logs".parse::<DatasetName>()?);
         Ok(())
     }
 

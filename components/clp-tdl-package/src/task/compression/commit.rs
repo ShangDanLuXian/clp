@@ -6,7 +6,6 @@ use clp_metadata_db::ArchiveManagement;
 use clp_metadata_db::ArchiveTimestampRange;
 use clp_metadata_db::ClpDbClient;
 use clp_rust_utils::database::mysql::create_clp_db_mysql_pool;
-use clp_rust_utils::dataset::DatasetName;
 use clp_rust_utils::job_config::COMPRESSION_JOBS_TABLE_NAME;
 use clp_rust_utils::job_config::CompressionJobId;
 use clp_rust_utils::job_config::CompressionJobStatus;
@@ -17,7 +16,6 @@ use const_format::formatcp;
 use spider_core::types::id::JobId;
 use tokio::sync::OnceCell;
 
-use crate::common::clp_home;
 use crate::common::spider_task_executor_config;
 use crate::task::utils::db_credentials_from_env;
 
@@ -71,7 +69,7 @@ pub(super) async fn clp_db_client() -> anyhow::Result<&'static ClpDbClient> {
 /// * Forwards [`ArchiveManagement::insert_archives`]'s return values on failure.
 /// * Forwards [`mark_job_succeeded`]'s return values on failure.
 /// * Forwards [`clp_metadata_db::ClpDbTransaction::commit`]'s return values on failure.
-pub(super) async fn commit_into_shared_tables(
+pub(super) async fn commit(
     client: &ClpDbClient,
     spider_job_id: JobId,
     dataset_id: DatasetId,
@@ -133,93 +131,6 @@ pub(super) async fn commit_into_shared_tables(
     Ok(())
 }
 
-/// Publishes a compression job's archives and marks it succeeded.
-///
-/// Registers the dataset and archives together with the job's final sizes, completed task count,
-/// and duration in one transaction. A no-op if the job is already
-/// [`CompressionJobStatus::Succeeded`].
-///
-/// # Errors
-///
-/// Returns an error if:
-///
-/// * [`anyhow::Error`] if no CLP compression job exists for `spider_job_id`, or its status is
-///   neither [`CompressionJobStatus::Running`] nor [`CompressionJobStatus::Succeeded`].
-/// * Forwards [`db_credentials_from_env`]'s return values on failure.
-/// * Forwards [`create_clp_db_mysql_pool`]'s return values on failure.
-/// * Forwards [`sqlx::Pool::begin`]'s return values on failure.
-/// * Forwards [`sqlx::query::QueryAs::fetch_optional`]'s return values on failure.
-/// * Forwards [`register_dataset`]'s return values on failure.
-/// * Forwards [`insert_archives`]'s return values on failure.
-/// * Forwards [`mark_job_succeeded`]'s return values on failure.
-/// * Forwards [`sqlx::Transaction::commit`]'s return values on failure.
-pub(super) async fn commit(
-    spider_job_id: JobId,
-    dataset: &DatasetName,
-    archives: Vec<ArchiveMetadata>,
-) -> anyhow::Result<()> {
-    const QUERY: &str = formatcp!(
-        "SELECT id, status FROM {COMPRESSION_JOBS_TABLE_NAME} WHERE spider_id = ? FOR UPDATE"
-    );
-
-    tracing::info!(
-        spider_job_id = spider_job_id.get(),
-        "CLP compression commit task started."
-    );
-    let total_uncompressed_size: i64 = archives.iter().map(|a| a.uncompressed_size).sum();
-    let total_compressed_size: i64 = archives.iter().map(|a| a.size).sum();
-
-    let config = spider_task_executor_config();
-    // The dataset is interpolated into the table name (it cannot be bound). This is safe from SQL
-    // injection because a `DatasetName` only contains underscores, letters, and numbers.
-    let archives_table = config.database.archives_table_name(dataset);
-
-    let pool = create_clp_db_mysql_pool(&config.database, &db_credentials_from_env()?, 1)
-        .await
-        .context("failed to create the CLP DB connection pool")?;
-    let mut tx = pool
-        .begin()
-        .await
-        .context("failed to begin the commit transaction")?;
-
-    let job: Option<(CompressionJobId, CompressionJobStatus)> = sqlx::query_as(QUERY)
-        .bind(spider_job_id.get())
-        .fetch_optional(&mut *tx)
-        .await
-        .context("failed to look up the CLP compression job")?;
-    let Some((id, status)) = job else {
-        anyhow::bail!(
-            "no CLP compression job found for spider job {}",
-            spider_job_id.get()
-        );
-    };
-    if status == CompressionJobStatus::Succeeded {
-        tracing::info!(
-            job_id = id,
-            spider_job_id = spider_job_id.get(),
-            "CLP compression job already committed; nothing to do."
-        );
-        return Ok(());
-    }
-    if status != CompressionJobStatus::Running {
-        anyhow::bail!("CLP compression job {id} is no longer running; refusing to commit");
-    }
-
-    register_dataset(&mut tx, config, dataset).await?;
-    insert_archives(&mut tx, &archives_table, &archives).await?;
-    mark_job_succeeded(&mut tx, id, total_uncompressed_size, total_compressed_size).await?;
-
-    tx.commit()
-        .await
-        .context("failed to commit the transaction")?;
-    tracing::info!(
-        job_id = id,
-        num_archives = archives.len(),
-        "CLP compression commit task completed successfully."
-    );
-    Ok(())
-}
-
 /// Combines compression outputs belonging to one dataset.
 ///
 /// # Returns
@@ -239,7 +150,7 @@ pub(super) fn combine_outputs(
         .next()
         .ok_or_else(|| anyhow::anyhow!("commit received no compression task outputs"))?;
     for output in outputs {
-        if output.dataset != combined.dataset {
+        if output.dataset_id != combined.dataset_id {
             anyhow::bail!("compression task outputs belong to more than one dataset");
         }
         combined.archives.extend(output.archives);
@@ -323,69 +234,6 @@ async fn lock_compression_job(
         })
 }
 
-/// Idempotently registers `dataset` in the `datasets` table, recording its archive storage
-/// directory.
-///
-/// # Errors
-///
-/// Returns an error if:
-///
-/// * Forwards [`sqlx::query::Query::execute`]'s return values on failure.
-async fn register_dataset(
-    tx: &mut sqlx::Transaction<'_, sqlx::MySql>,
-    config: &clp_rust_utils::clp_config::package::config::SpiderTaskExecutorConfig,
-    dataset: &DatasetName,
-) -> anyhow::Result<()> {
-    let datasets_table = config.database.datasets_table_name();
-    let archive_storage_directory = config.dataset_archive_storage_directory(clp_home(), dataset);
-    sqlx::query(&format!(
-        "INSERT INTO `{datasets_table}` (name, archive_storage_directory) VALUES (?, ?) ON \
-         DUPLICATE KEY UPDATE archive_storage_directory = VALUES(archive_storage_directory)"
-    ))
-    .bind(dataset)
-    .bind(&archive_storage_directory)
-    .execute(&mut **tx)
-    .await
-    .with_context(|| format!("failed to register dataset in `{datasets_table}`"))?;
-    Ok(())
-}
-
-/// Inserts every archive's metadata into `archives_table`.
-///
-/// # Errors
-///
-/// Returns an error if:
-///
-/// * Forwards [`sqlx::query::Query::execute`]'s return values on failure.
-async fn insert_archives(
-    tx: &mut sqlx::Transaction<'_, sqlx::MySql>,
-    archives_table: &str,
-    archives: &[ArchiveMetadata],
-) -> anyhow::Result<()> {
-    for archives in archives.chunks(1000) {
-        let mut builder = sqlx::QueryBuilder::<sqlx::MySql>::new(format!(
-            "INSERT INTO `{archives_table}` (id, begin_timestamp, end_timestamp, \
-             uncompressed_size, size, creator_id, creation_ix) "
-        ));
-        builder.push_values(archives, |mut row, archive| {
-            // NOTE: clp-s does not set `creator_id` or `creation_ix`.
-            row.push_bind(archive.uuid)
-                .push_bind(archive.begin_timestamp)
-                .push_bind(archive.end_timestamp)
-                .push_bind(archive.uncompressed_size)
-                .push_bind(archive.size)
-                .push_bind("")
-                .push_bind(0_i32);
-        });
-        builder
-            .build()
-            .execute(&mut **tx)
-            .await
-            .with_context(|| format!("failed to insert archives into `{archives_table}`"))?;
-    }
-    Ok(())
-}
-
 /// Marks a running compression job succeeded with its final sizes, completed task count, and
 /// duration.
 ///
@@ -465,7 +313,7 @@ mod tests {
 
     use super::archive_descriptor;
     use super::combine_outputs;
-    use super::commit_into_shared_tables;
+    use super::commit;
 
     const BASE_ARCHIVE: ArchiveMetadata = ArchiveMetadata {
         uuid: ArchiveUuid::from_bytes([1; 16]),
@@ -641,26 +489,14 @@ mod tests {
 
     #[test]
     fn combine_outputs_rejects_mixed_datasets() {
-        use clp_rust_utils::task_io::compression::ArchiveMetadata;
-
-        let archive = ArchiveMetadata {
-            uuid: "00000000-0000-0000-0000-000000000001"
-                .parse()
-                .expect("test archive ID should be valid"),
-            begin_timestamp: 1,
-            end_timestamp: 2,
-            size: 10,
-            uncompressed_size: 100,
-        };
         let error = combine_outputs(vec![
             CompressionTaskOutput {
-                dataset: DatasetName::default(),
-                archives: vec![archive.clone()],
+                dataset_id: DatasetId::from(1),
+                archives: vec![BASE_ARCHIVE],
             },
             CompressionTaskOutput {
-                dataset: DatasetName::try_from("other".to_owned())
-                    .expect("test dataset name should be valid"),
-                archives: vec![archive],
+                dataset_id: DatasetId::from(2),
+                archives: vec![BASE_ARCHIVE],
             },
         ])
         .expect_err("task outputs from different datasets must not be committed together");
@@ -724,7 +560,7 @@ mod tests {
             uncompressed_size: 200,
         };
 
-        commit_into_shared_tables(
+        commit(
             &client,
             spider_job_id,
             dataset_id,
@@ -742,7 +578,7 @@ mod tests {
         );
 
         // A retried commit of a committed job changes nothing.
-        commit_into_shared_tables(&client, spider_job_id, dataset_id, vec![BASE_ARCHIVE]).await?;
+        commit(&client, spider_job_id, dataset_id, vec![BASE_ARCHIVE]).await?;
         assert_eq!(
             archive_uuids(&client, dataset_id).await,
             vec![BASE_ARCHIVE.uuid, other_archive.uuid]
@@ -764,10 +600,9 @@ mod tests {
         let spider_job_id = JobId::from(1);
         let job_id = insert_job(&pool, spider_job_id, CompressionJobStatus::Running).await;
 
-        let error =
-            commit_into_shared_tables(&client, spider_job_id, dataset_id, vec![BASE_ARCHIVE])
-                .await
-                .expect_err("a commit into a deleted dataset must fail");
+        let error = commit(&client, spider_job_id, dataset_id, vec![BASE_ARCHIVE])
+            .await
+            .expect_err("a commit into a deleted dataset must fail");
         assert!(matches!(
             error.downcast_ref::<Error>(),
             Some(Error::DatasetDeleted)
@@ -788,7 +623,7 @@ mod tests {
         let failed_job_id =
             insert_job(&pool, failed_spider_job_id, CompressionJobStatus::Failed).await;
 
-        let error = commit_into_shared_tables(
+        let error = commit(
             &client,
             failed_spider_job_id,
             dataset_id,
@@ -805,10 +640,9 @@ mod tests {
             (CompressionJobStatus::Failed, 0, 0, 0)
         );
 
-        let error =
-            commit_into_shared_tables(&client, JobId::from(2), dataset_id, vec![BASE_ARCHIVE])
-                .await
-                .expect_err("a commit without a compression job must fail");
+        let error = commit(&client, JobId::from(2), dataset_id, vec![BASE_ARCHIVE])
+            .await
+            .expect_err("a commit without a compression job must fail");
         assert_eq!(
             error.to_string(),
             "no CLP compression job found for spider job 2"

@@ -10,8 +10,8 @@ from clp_py_utils.clp_config import (
     CLP_DB_PASS_ENV_VAR_NAME,
     CLP_DB_USER_ENV_VAR_NAME,
     CLP_DEFAULT_CONFIG_FILE_RELATIVE_PATH,
-    CLP_DEFAULT_DATASET_NAME,
     ClpDbUserType,
+    CONTAINER_CLP_HOME,
     StorageEngine,
     StorageType,
 )
@@ -20,6 +20,7 @@ from clp_py_utils.core import resolve_host_path_in_container
 from clp_package_utils.general import (
     ClpConfig,
     DockerMount,
+    DockerMountType,
     dump_container_config,
     generate_container_config,
     generate_container_name,
@@ -28,7 +29,6 @@ from clp_package_utils.general import (
     get_container_config_filename,
     load_config_file,
     validate_and_load_db_credentials_file,
-    validate_dataset_name,
 )
 
 # Command/Argument Constants
@@ -39,6 +39,7 @@ DEL_BY_FILTER_SUBCOMMAND: Final[str] = "by-filter"
 BEGIN_TS_ARG: Final[str] = "--begin-ts"
 END_TS_ARG: Final[str] = "--end-ts"
 DRY_RUN_ARG: Final[str] = "--dry-run"
+UUID_ARG: Final[str] = "--uuid"
 
 logger: logging.Logger = logging.getLogger(__file__)
 
@@ -80,7 +81,9 @@ def main(argv: list[str]) -> int:
         "--dataset",
         type=str,
         default=None,
-        help="The dataset that the archives belong to.",
+        help="The dataset that the archives belong to (clp-json only). Defaults to `default`. Not"
+        " allowed when deleting by archive ID, since an archive ID identifies an archive across"
+        " datasets.",
     )
 
     # Top-level commands
@@ -90,11 +93,11 @@ def main(argv: list[str]) -> int:
     )
     find_parser: argparse.ArgumentParser = subparsers.add_parser(
         FIND_COMMAND,
-        help="Lists IDs of compressed archives.",
+        help="Lists compressed archives (IDs, and for clp-json also UUIDs).",
     )
     del_parser: argparse.ArgumentParser = subparsers.add_parser(
         DEL_COMMAND,
-        help="Deletes compressed archives from the database and file system.",
+        help="Deletes compressed archives from the database and storage.",
     )
 
     # Options for find subcommand
@@ -133,6 +136,12 @@ def main(argv: list[str]) -> int:
     )
 
     # Delete by ID arguments
+    del_id_parser.add_argument(
+        UUID_ARG,
+        dest="uuid",
+        action="store_true",
+        help="Take the IDs as UUIDs of archives in `--dataset` (clp-json only).",
+    )
     del_id_parser.add_argument(
         "ids",
         nargs="+",
@@ -182,23 +191,24 @@ def main(argv: list[str]) -> int:
         return -1
 
     storage_type = StorageType(clp_config.archive_output.storage.type)
-    if StorageType.FS != storage_type:
-        logger.error(f"Archive manager is not supported for storage type: {storage_type}.")
-        return -1
-
     storage_engine = StorageEngine(clp_config.package.storage_engine)
     dataset = parsed_args.dataset
-    if StorageEngine.CLP_S == storage_engine:
-        dataset = CLP_DEFAULT_DATASET_NAME if dataset is None else dataset
-        try:
-            clp_db_connection_params = clp_config.database.get_clp_connection_params_and_type(True)
-            validate_dataset_name(clp_db_connection_params["table_prefix"], dataset)
-        except Exception as e:
-            logger.error(e)
+    if StorageEngine.CLP_S != storage_engine:
+        if StorageType.FS != storage_type:
+            logger.error(f"Archive manager is not supported for storage type: {storage_type}.")
             return -1
-    elif dataset is not None:
-        logger.error(f"Dataset selection is not supported for storage engine: {storage_engine}.")
-        return -1
+        if dataset is not None:
+            logger.error(
+                f"Dataset selection is not supported for storage engine: {storage_engine}."
+            )
+            return -1
+        if (
+            DEL_COMMAND == subcommand
+            and DEL_BY_IDS_SUBCOMMAND == parsed_args.del_subcommand
+            and parsed_args.uuid
+        ):
+            logger.error("`%s` is not supported for storage engine: %s.", UUID_ARG, storage_engine)
+            return -1
 
     # Validate input depending on subcommands
     if (DEL_COMMAND == subcommand and DEL_BY_FILTER_SUBCOMMAND == parsed_args.del_subcommand) or (
@@ -219,10 +229,24 @@ def main(argv: list[str]) -> int:
         container_clp_config, clp_config, get_container_config_filename(container_name)
     )
 
-    necessary_mounts: list[DockerMount | None] = [
-        mounts.logs_dir,
-        mounts.archives_output_dir,
-    ]
+    necessary_mounts: list[DockerMount | None] = [mounts.logs_dir]
+    if StorageEngine.CLP_S == storage_engine:
+        if StorageType.FS == storage_type:
+            container_archive_output_config = container_clp_config.archive_output.model_copy(
+                deep=True
+            )
+            container_archive_output_config.storage.transform_for_container()
+            necessary_mounts.append(
+                DockerMount(
+                    DockerMountType.BIND,
+                    clp_config.archive_output.get_directory(),
+                    container_archive_output_config.get_directory(),
+                )
+            )
+        necessary_mounts.append(mounts.aws_config_dir)
+    else:
+        necessary_mounts.append(mounts.archives_output_dir)
+
     credentials = clp_config.database.credentials
     extra_env_vars = {
         CLP_DB_PASS_ENV_VAR_NAME: credentials[ClpDbUserType.CLP].password,
@@ -232,13 +256,21 @@ def main(argv: list[str]) -> int:
         container_name, necessary_mounts, clp_config.container_image_ref, extra_env_vars
     )
 
-    # fmt: off
-    archive_manager_cmd: list[str] = [
-        "python3",
-        "-m", "clp_package_utils.scripts.native.archive_manager",
-        "--config", str(generated_config_path_on_container),
-    ]
-    # fmt : on
+    archive_manager_cmd: list[str]
+    if StorageEngine.CLP_S == storage_engine:
+        archive_manager_cmd = [
+            str(CONTAINER_CLP_HOME / "bin" / "archive-manager"),
+            "--config",
+            str(generated_config_path_on_container),
+        ]
+    else:
+        # fmt: off
+        archive_manager_cmd = [
+            "python3",
+            "-m", "clp_package_utils.scripts.native.archive_manager",
+            "--config", str(generated_config_path_on_container),
+        ]
+        # fmt: on
     if parsed_args.verbose:
         archive_manager_cmd.append("--verbose")
     if dataset is not None:
@@ -253,13 +285,13 @@ def main(argv: list[str]) -> int:
             archive_manager_cmd.append(DRY_RUN_ARG)
         if DEL_BY_IDS_SUBCOMMAND == parsed_args.del_subcommand:
             archive_manager_cmd.append(DEL_BY_IDS_SUBCOMMAND)
+            if parsed_args.uuid:
+                archive_manager_cmd.append(UUID_ARG)
             archive_manager_cmd.extend(parsed_args.ids)
         elif DEL_BY_FILTER_SUBCOMMAND == parsed_args.del_subcommand:
-            archive_manager_cmd.extend([
-                DEL_BY_FILTER_SUBCOMMAND,
-                str(begin_timestamp),
-                str(end_timestamp)
-            ])
+            archive_manager_cmd.extend(
+                [DEL_BY_FILTER_SUBCOMMAND, str(begin_timestamp), str(end_timestamp)]
+            )
         else:
             logger.error(f"Unsupported subcommand: `{parsed_args.del_subcommand}`.")
             return -1

@@ -592,11 +592,10 @@ Alternatively, use the Web UI ([clp-json][webui-clp-json] or [clp-text][webui-cl
 logs and search interactively, or the [API server][api-server] to submit queries and view results
 programmatically.
 
-The [admin tools][admin-tools] (`sbin/admin-tools/archive-manager.sh` and
-`sbin/admin-tools/dataset-manager.sh`) are **not supported** in Kubernetes deployments with
-filesystem storage (`archive_output.storage.type: "fs"`). Those scripts require direct filesystem
-access to the archive directory via Docker bind mounts, which is not possible when archives are
-backed by PVCs inside the cluster.
+The [admin tool][admin-tools] `sbin/admin-tools/archive-manager.sh` is **not supported** in
+Kubernetes deployments with filesystem storage (`archive_output.storage.type: "fs"`). The script
+requires direct filesystem access to the archive directory via Docker bind mounts, which is not
+possible when archives are backed by PVCs inside the cluster.
 :::
 
 ---

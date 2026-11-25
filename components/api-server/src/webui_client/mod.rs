@@ -2,10 +2,12 @@
 
 mod compression;
 mod logs_input;
-#[expect(dead_code, reason = "wired up by the shared metadata tables switch")]
 mod metadata;
 mod stream_files;
 
+use std::sync::Arc;
+
+use clp_metadata_db::ClpDbClient;
 use clp_rust_utils::clp_config::package::config::Config;
 pub use compression::*;
 pub use logs_input::*;
@@ -16,6 +18,7 @@ pub use stream_files::*;
 #[derive(Clone)]
 pub struct WebuiClient {
     sql_pool: sqlx::Pool<sqlx::MySql>,
+    metadata_db_client: Arc<ClpDbClient>,
     mongodb_client: mongodb::Client,
     stream_file_storage: StreamFileStorage,
     config: Config,
@@ -38,6 +41,7 @@ impl WebuiClient {
         let stream_file_storage =
             StreamFileStorage::from_config(&config.stream_output.storage).await;
         Self {
+            metadata_db_client: Arc::new(ClpDbClient::new(sql_pool.clone(), &config.database)),
             sql_pool,
             mongodb_client,
             stream_file_storage,

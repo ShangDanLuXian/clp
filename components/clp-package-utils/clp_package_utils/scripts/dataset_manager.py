@@ -7,20 +7,16 @@ from pathlib import Path
 from typing import Final
 
 from clp_py_utils.clp_config import (
-    ARCHIVE_MANAGER_ACTION_NAME,
     CLP_DB_PASS_ENV_VAR_NAME,
     CLP_DB_USER_ENV_VAR_NAME,
     CLP_DEFAULT_CONFIG_FILE_RELATIVE_PATH,
     ClpDbUserType,
+    CONTAINER_CLP_HOME,
     StorageEngine,
-    StorageType,
 )
 from clp_py_utils.core import resolve_host_path_in_container
-from clp_py_utils.s3_utils import generate_container_auth_options
 
 from clp_package_utils.general import (
-    DockerMount,
-    DockerMountType,
     dump_container_config,
     generate_container_config,
     generate_container_name,
@@ -29,7 +25,6 @@ from clp_package_utils.general import (
     get_container_config_filename,
     load_config_file,
     validate_and_load_db_credentials_file,
-    validate_dataset_name,
 )
 
 # Command/Argument Constants
@@ -71,7 +66,8 @@ def main(argv: list[str]) -> int:
     # Options for delete subcommand
     del_parser = subparsers.add_parser(
         DEL_COMMAND,
-        help="Delete datasets from the database and file storage.",
+        help="Delete datasets. A deleted dataset's archives and storage are kept, and its name"
+        " can't be used again.",
     )
     del_parser.add_argument(
         "datasets",
@@ -119,15 +115,6 @@ def main(argv: list[str]) -> int:
         if del_all_flag and len(datasets) != 0:
             args_parser.error("The -a/--all flag cannot be used together with a dataset name.")
 
-        try:
-            clp_db_connection_params = clp_config.database.get_clp_connection_params_and_type(True)
-            table_prefix = clp_db_connection_params["table_prefix"]
-            for dataset in datasets:
-                validate_dataset_name(table_prefix, dataset)
-        except:
-            logger.exception("Invalid dataset name.")
-            return -1
-
     container_name = generate_container_name("dataset-manager")
 
     container_clp_config, mounts = generate_container_config(clp_config, clp_home)
@@ -136,22 +123,6 @@ def main(argv: list[str]) -> int:
     )
 
     necessary_mounts = [mounts.logs_dir]
-    if clp_config.archive_output.storage.type == StorageType.FS:
-        container_archive_output_config = container_clp_config.archive_output.model_copy(deep=True)
-        container_archive_output_config.storage.transform_for_container()
-        archives_output_dir_mount = DockerMount(
-            DockerMountType.BIND,
-            clp_config.archive_output.get_directory(),
-            container_archive_output_config.get_directory(),
-        )
-        necessary_mounts.append(archives_output_dir_mount)
-
-    aws_mount, aws_env_vars = generate_container_auth_options(
-        clp_config, ARCHIVE_MANAGER_ACTION_NAME
-    )
-    if aws_mount:
-        necessary_mounts.append(mounts.aws_config_dir)
-
     credentials = clp_config.database.credentials
     extra_env_vars = {
         CLP_DB_PASS_ENV_VAR_NAME: credentials[ClpDbUserType.CLP].password,
@@ -161,17 +132,11 @@ def main(argv: list[str]) -> int:
         container_name, necessary_mounts, clp_config.container_image_ref, extra_env_vars
     )
 
-    if len(aws_env_vars) != 0:
-        for aws_env_var in aws_env_vars:
-            container_start_cmd.extend(["-e", aws_env_var])
-
-    # fmt: off
     dataset_manager_cmd = [
-        "python3",
-        "-m", "clp_package_utils.scripts.native.dataset_manager",
-        "--config", str(generated_config_path_on_container),
+        str(CONTAINER_CLP_HOME / "bin" / "dataset-manager"),
+        "--config",
+        str(generated_config_path_on_container),
     ]
-    # fmt: on
     if parsed_args.verbose:
         dataset_manager_cmd.append("--verbose")
 

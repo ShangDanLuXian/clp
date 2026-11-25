@@ -37,14 +37,7 @@ def execute_fs_deletion(fs_storage_config: FsStorage, candidate: str) -> None:
     :param fs_storage_config:
     :param candidate: Relative path of the file or directory to delete.
     """
-    path_to_delete = fs_storage_config.directory / candidate
-    if not path_to_delete.exists():
-        return
-
-    if path_to_delete.is_dir():
-        shutil.rmtree(path_to_delete)
-    else:
-        os.remove(path_to_delete)
+    _delete_fs_path(fs_storage_config.directory / candidate)
 
 
 def execute_deletion(output_config: ArchiveOutput, deletion_candidates: set[str]) -> None:

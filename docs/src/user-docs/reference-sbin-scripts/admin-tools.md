@@ -32,9 +32,13 @@ sbin/admin-tools/archive-manager.sh --help
 
 :::{note}
 `clp-json` groups archives into different datasets, whereas `clp-text` currently does not. When
-using `archive-manager.sh` with `clp-json`, you should specify a specific dataset using
-`--dataset <dataset>`. Otherwise, `archive-manager.sh` will only operate on archives in the dataset
-named `default`.
+using `archive-manager.sh` with `clp-json`:
+
+* `find` and `del by-filter` operate on the archives of the dataset specified using
+  `--dataset <dataset>`, or of the dataset named `default` if no dataset is specified.
+* `find` lists each archive's ID and UUID.
+* `del by-ids` takes archive IDs, which identify archives across datasets, so `--dataset` can't be
+  used with it. To delete the archives of a dataset by UUID instead, use `del by-ids --uuid`.
 :::
 
 ### Examples
@@ -66,7 +70,19 @@ named `default`.
 
     * Replace `<archive_id_0>`, `<archive_id_1>`, etc. with the IDs of the archives to delete.
 
-4. Delete archives whose log events fall entirely within a specified time range:
+4. Delete archives of a dataset by UUID (`clp-json` only):
+
+    ```bash
+    sbin/admin-tools/archive-manager.sh --dataset <dataset> del by-ids --uuid \
+      <archive_uuid_0> <archive_uuid_1>
+    ```
+
+    * Replace `<dataset>` with the name of the dataset that the archives belong to. If
+      `--dataset <dataset>` is omitted, the archives are taken to belong to the dataset named
+      `default`.
+    * Replace `<archive_uuid_0>`, `<archive_uuid_1>`, etc. with the UUIDs of the archives to delete.
+
+5. Delete archives whose log events fall entirely within a specified time range:
 
     :::{note}
     Only archives whose log events fall entirely within the specified time range will be deleted.
@@ -92,7 +108,8 @@ named `default`.
   directory into a Docker container, which is not possible when archives are backed by
   PersistentVolumeClaims inside the cluster.
 
-* `archive-manager.sh` doesn't support managing archives stored on object storage.
+* With `clp-text`, `archive-manager.sh` doesn't support managing archives stored on object
+  storage.
 
 * `archive-manager.sh` assumes that archive timestamps and the timestamps specified by the user
   are in the **UTC** time zone. (This is because CLP currently doesn't support parsing time zone
@@ -120,16 +137,10 @@ sbin/admin-tools/dataset-manager.sh --help
 Currently, `dataset-manager.sh` is only supported for `clp-json` (not `clp-text`).
 :::
 
-When deleting a dataset, the script removes the dataset's archives and metadata entirely. If you
-only want to delete some archives from the dataset, use [archive-manager.sh](#archive-managersh)
-instead.
-
-:::{warning}
-When deleting a dataset, `dataset-manager.sh` removes all files under the dataset's storage
-directory (`key_prefix` in object storage). Therefore, any non-archive files in this storage
-directory will also be deleted. Users should avoid storing non-archive files in the archive storage
-directory.
-:::
+When deleting a dataset, the script marks the dataset as deleted: it's no longer listed or
+searchable, and logs can no longer be compressed into it. The dataset's archives and their storage
+are kept, and the dataset's name can't be used for a new dataset. If you only want to delete some
+archives from the dataset, use [archive-manager.sh](#archive-managersh) instead.
 
 ### Examples
 
@@ -146,10 +157,3 @@ directory.
     ```
 
     * Replace `<dataset_0>`, `<dataset_1>`, etc. with the names of the datasets to delete.
-
-### Limitations
-
-* `dataset-manager.sh` is not supported for Kubernetes (Helm) deployments when using filesystem
-  storage (`archive_output.storage.type: "fs"`). The script relies on bind-mounting the archive
-  directory into a Docker container, which is not possible when archives are backed by
-  PersistentVolumeClaims inside the cluster.

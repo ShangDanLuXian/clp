@@ -16,7 +16,7 @@ from clp_py_utils.clp_logging import configure_logging, get_logger
 from clp_py_utils.clp_metadata_db_utils import (
     delete_archives_from_metadata_db,
     delete_archives_from_shared_metadata_tables,
-    fetch_existing_datasets,
+    fetch_live_datasets,
     get_archives_table_name,
     LiveDataset,
     SharedArchiveKey,
@@ -40,16 +40,15 @@ from job_orchestration.scheduler.constants import QueryJobStatus
 logger = get_logger(ARCHIVE_GARBAGE_COLLECTOR_NAME)
 
 
-def _delete_expired_archives(
+def _delete_expired_clp_archives(
     db_conn,
     db_cursor,
     table_prefix: str,
     archive_expiry_epoch_secs: int,
     candidates_buffer: DeletionCandidatesBuffer,
     archive_output_config: ArchiveOutput,
-    dataset: str | None,
 ) -> None:
-    archives_table = get_archives_table_name(table_prefix, dataset)
+    archives_table = get_archives_table_name(table_prefix, None)
     archive_end_ts_upper_bound = archive_expiry_epoch_secs * SECOND_TO_MILLISECOND
 
     db_cursor.execute(
@@ -64,11 +63,9 @@ def _delete_expired_archives(
     results = db_cursor.fetchall()
     archive_ids = [result["id"] for result in results]
     if len(archive_ids) != 0:
-        delete_archives_from_metadata_db(db_cursor, archive_ids, table_prefix, dataset)
+        delete_archives_from_metadata_db(db_cursor, archive_ids, table_prefix, None)
 
         for candidate in archive_ids:
-            if dataset is not None:
-                candidate = f"{dataset}/{candidate}"
             candidates_buffer.add_candidate(candidate)
 
         candidates_buffer.persist_new_candidates()
@@ -84,22 +81,9 @@ def _delete_expired_archives(
 
     execute_deletion(archive_output_config, candidates_to_delete)
 
-    # Prepare the log message
-    dataset_msg: str
-    deleted_candidates: list[str]
-    if dataset is not None:
-        dataset_log_msg = f" from dataset `{dataset}`"
-        # Note: If dataset is not None, candidates are expected to be in the format
-        # `<dataset>/<archive_id>`
-        deleted_candidates = [candidate.split("/")[1] for candidate in candidates_to_delete]
-    else:
-        dataset_log_msg = ""
-        deleted_candidates = list(candidates_to_delete)
-
+    deleted_candidates = list(candidates_to_delete)
     candidates_buffer.clear()
-    logger.info(
-        f"Deleted {num_candidates_to_delete} archive(s){dataset_log_msg}: {deleted_candidates}"
-    )
+    logger.info(f"Deleted {num_candidates_to_delete} archive(s): {deleted_candidates}")
 
 
 def _delete_expired_clp_s_archives(
@@ -302,10 +286,16 @@ def _collect_and_sweep_expired_archives(
             archive_output_config.retention_period,
         )
         if StorageEngine.CLP_S == storage_engine:
-            datasets = fetch_existing_datasets(db_cursor, table_prefix)
+            _delete_recovered_clp_s_archives(
+                candidates_buffer, archive_output_config, recovery_file
+            )
+
+            # Every dataset uses the package-wide retention period, as the query coordinator does,
+            # since `retention_period_minutes` in the datasets table is always NULL in this release.
+            datasets = fetch_live_datasets(db_cursor, table_prefix)
             for dataset in datasets:
-                logger.debug(f"Running garbage collection on dataset `{dataset}`")
-                _delete_expired_archives(
+                logger.debug(f"Running garbage collection on dataset `{dataset.name}`")
+                _delete_expired_clp_s_archives(
                     db_conn,
                     db_cursor,
                     table_prefix,
@@ -315,14 +305,13 @@ def _collect_and_sweep_expired_archives(
                     dataset,
                 )
         elif StorageEngine.CLP == storage_engine:
-            _delete_expired_archives(
+            _delete_expired_clp_archives(
                 db_conn,
                 db_cursor,
                 table_prefix,
                 archive_expiry_epoch,
                 candidates_buffer,
                 archive_output_config,
-                None,
             )
         else:
             raise ValueError(f"Unsupported Storage engine: {storage_engine}.")
@@ -336,6 +325,11 @@ async def archive_garbage_collector(clp_config: ClpConfig) -> None:
     validate_storage_type(archive_output_config, storage_engine)
 
     sweep_interval_secs = clp_config.garbage_collector.sweep_interval.archive * MIN_TO_SECONDS
+    # With clp-s, the recovery file holds full storage paths. Before v0.15.0 it held paths relative
+    # to the configured archive directory or key prefix (`<dataset>/<archive-id>`), which this
+    # release would misread. Such a file is detected only with FS storage, so with S3 its entries
+    # would be deleted as full keys: a leftover file from an earlier release must be removed on
+    # upgrade.
     recovery_file = clp_config.tmp_directory / f"{ARCHIVE_GARBAGE_COLLECTOR_NAME}.tmp"
 
     logger.info(f"{ARCHIVE_GARBAGE_COLLECTOR_NAME} started.")

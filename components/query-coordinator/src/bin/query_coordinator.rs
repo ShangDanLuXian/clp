@@ -54,7 +54,7 @@ async fn main() -> anyhow::Result<()> {
         &spider_config,
         &config.archive_output,
         db_pool,
-        config.database,
+        &config.database,
     )
     .await
     .inspect_err(|e| tracing::error!(error = % e, "Failed to create the query coordinator."))?;

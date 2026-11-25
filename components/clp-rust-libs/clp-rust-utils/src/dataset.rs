@@ -14,13 +14,11 @@ use sqlx::error::BoxDynError;
 use sqlx::mysql::MySqlTypeInfo;
 use sqlx::mysql::MySqlValueRef;
 
-use crate::clp_config::package::config::CLP_METADATA_TABLE_PREFIX;
-
 /// A validated dataset name.
 ///
 /// A dataset name is non-empty, only contains `_` or Unicode letters and numbers (general
-/// categories L and N) in the Basic Multilingual Plane, and is short enough for its longest
-/// metadata table name to fit MySQL's 64-character table-name limit.
+/// categories L and N) in the Basic Multilingual Plane, and has at most 44 characters. In
+/// particular, it can't contain spaces or any other whitespace.
 ///
 /// A dataset name serializes as a plain string. It deserializes from a string, validated by the
 /// same rules as its [`FromStr`] implementation, or from a `null` or missing value, which gives the
@@ -80,7 +78,9 @@ impl TryFrom<String> for DatasetName {
     type Error = ParseDatasetNameError;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
-        // MySQL identifiers can only contain characters in the Basic Multilingual Plane.
+        // The pattern excludes whitespace, so `utf8mb4_bin`'s `PAD SPACE` comparison can't make two
+        // dataset names collide. The BMP restriction is kept from when dataset names were part of
+        // MySQL table names, so that the set of valid names doesn't change.
         const VALID_CHARACTERS_PATTERN: &str = r"\A[\p{L}\p{N}_&&\x{0000}-\x{FFFF}]+\z";
 
         static VALID_CHARACTERS_REGEX: LazyLock<Regex> =
@@ -209,17 +209,10 @@ const CLP_DEFAULT_DATASET_NAME: &str = "default";
 
 /// The maximum number of characters in a dataset name.
 ///
-/// The bound ensures that the longest metadata table name, `<table prefix><dataset>_<longest
-/// suffix>` with the table prefix [`CLP_METADATA_TABLE_PREFIX`], fits MySQL's 64-character
-/// table-name limit.
-const DATASET_NAME_MAX_LEN: usize =
-    MYSQL_TABLE_NAME_MAX_LEN - CLP_METADATA_TABLE_PREFIX.len() - 1 - TABLE_SUFFIX_MAX_LEN;
-
-/// The maximum number of characters in a MySQL table name.
-const MYSQL_TABLE_NAME_MAX_LEN: usize = 64;
-
-/// The length of the longest metadata table name suffix.
-const TABLE_SUFFIX_MAX_LEN: usize = "column_metadata".len();
+/// The bound is kept from when `<table prefix><dataset>_column_metadata` had to fit MySQL's
+/// 64-character table-name limit, so that the set of valid names doesn't change.
+/// `clp_datasets.name` (`VARCHAR(255)`) has room to widen it.
+const DATASET_NAME_MAX_LEN: usize = 44;
 
 #[cfg(test)]
 mod tests {

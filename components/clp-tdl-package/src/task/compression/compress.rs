@@ -27,6 +27,7 @@ use clp_rust_utils::task_io::compression::CompressionTaskOutput;
 use clp_rust_utils::task_io::compression::FsInputSource;
 use clp_rust_utils::task_io::compression::S3InputSource;
 use clp_rust_utils::types::ArchiveUuid;
+use clp_rust_utils::types::DatasetId;
 use clp_rust_utils::types::non_empty_string::ExpectedNonEmpty;
 use non_empty_string::NonEmptyString;
 
@@ -134,6 +135,7 @@ pub(super) fn compress<SourceType: Source>(
     config: &SpiderTaskExecutorConfig,
     clp_s_option: &ClpSCompressionOption,
     dataset: DatasetName,
+    dataset_id: DatasetId,
     input_source: SourceType,
 ) -> anyhow::Result<CompressionTaskOutput> {
     if StorageEngine::ClpS != config.package.storage_engine {
@@ -212,7 +214,7 @@ pub(super) fn compress<SourceType: Source>(
             destination,
             indexer_bin,
             database: config.database.clone(),
-            dataset: dataset.clone(),
+            dataset,
         },
     )?;
 
@@ -222,7 +224,10 @@ pub(super) fn compress<SourceType: Source>(
         task_instance_id = % ctx.task_instance_id,
         "CLP compression task completed successfully.",
     );
-    Ok(CompressionTaskOutput { dataset, archives })
+    Ok(CompressionTaskOutput {
+        dataset_id,
+        archives,
+    })
 }
 
 /// How the original input list's entries are authenticated.
@@ -943,6 +948,9 @@ fn build_indexer_args(
         OsString::from(&database.names.clp),
         OsString::from("--db-table-prefix"),
         OsString::from(&database.table_prefix),
+        // NOTE: The indexer still writes the per-dataset column-metadata table, which no other
+        // component creates anymore.
+        OsString::from("--create-table"),
         OsString::from(dataset.as_str()),
         archive_path.as_os_str().to_os_string(),
     ]
@@ -1004,6 +1012,7 @@ mod tests {
     use clp_rust_utils::task_io::compression::ClpSCompressionOption;
     use clp_rust_utils::task_io::compression::FsInputSource;
     use clp_rust_utils::task_io::compression::S3InputSource;
+    use clp_rust_utils::types::DatasetId;
     use clp_rust_utils::types::non_empty_string::ExpectedNonEmpty;
     use non_empty_string::NonEmptyString;
     use spider_core::types::id::JobId;
@@ -1118,6 +1127,7 @@ mod tests {
             &FsFixture::config(),
             &BASE_OPTION,
             DatasetName::default(),
+            DatasetId::from(1),
             source,
         )
         .expect_err("empty input must fail before runtime or output setup");
@@ -1369,6 +1379,7 @@ mod tests {
             &FsFixture::config(),
             &BASE_OPTION,
             DatasetName::default(),
+            DatasetId::from(1),
             source,
         )
         .expect_err("empty input must fail before mount or output setup");
@@ -1473,6 +1484,7 @@ mod tests {
             &config,
             &BASE_OPTION,
             DatasetName::default(),
+            DatasetId::from(1),
             FsInputSource { file_paths: vec![] },
         )
         .expect_err("unsupported engine must be rejected before input processing");
@@ -1615,6 +1627,7 @@ mod tests {
                 OsString::from("clp-db"),
                 OsString::from("--db-table-prefix"),
                 OsString::from("clp_"),
+                OsString::from("--create-table"),
                 OsString::from("default"),
                 OsString::from("/archives/abc"),
             ]
