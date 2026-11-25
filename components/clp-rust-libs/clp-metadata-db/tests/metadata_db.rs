@@ -16,13 +16,16 @@ use clp_metadata_db::ArchiveLookup;
 use clp_metadata_db::ArchiveManagement;
 use clp_metadata_db::ArchiveTimestampRange;
 use clp_metadata_db::ClpDbClient;
+use clp_metadata_db::ColumnType;
 use clp_metadata_db::Dataset;
 use clp_metadata_db::DatasetConfig;
 use clp_metadata_db::DatasetDescriptor;
 use clp_metadata_db::DatasetLookup;
 use clp_metadata_db::DatasetManagement;
 use clp_metadata_db::Error;
+use clp_metadata_db::MetadataStatistics;
 use clp_metadata_db::QueryArchive;
+use clp_metadata_db::SpaceSavings;
 use clp_rust_utils::clp_config::package::config::Database;
 use clp_rust_utils::clp_config::package::config::MetadataTables;
 use clp_rust_utils::dataset::DatasetName;
@@ -527,6 +530,14 @@ async fn lookups_and_statistics_skip_deleted_datasets() -> anyhow::Result<()> {
     test_db
         .insert_archives(deleted_id, std::slice::from_ref(&deleted_archive))
         .await;
+    sqlx::query(&format!(
+        "INSERT INTO `{}` (`dataset_id`, `name`, `type`) VALUES (?, 'ts', ?)",
+        test_db.tables.column_metadata()
+    ))
+    .bind(deleted_id)
+    .bind(ColumnType::Timestamp)
+    .execute(&test_db.pool)
+    .await?;
     test_db.mark_dataset_deleted(&deleted.name).await;
 
     let mut connection = test_db.client.acquire().await?;
@@ -551,6 +562,25 @@ async fn lookups_and_statistics_skip_deleted_datasets() -> anyhow::Result<()> {
             .find_archives_for_query(deleted_id, &TimeRange::default(), None, 0)
             .await?,
         []
+    );
+    assert_eq!(
+        connection
+            .get_timestamp_bounds(&[live_id, deleted_id])
+            .await?,
+        Some(live_archive.timestamp_range)
+    );
+    assert_eq!(
+        connection.get_space_savings().await?,
+        SpaceSavings {
+            num_uncompressed_bytes: BASE_ARCHIVE.num_uncompressed_bytes,
+            num_compressed_bytes: BASE_ARCHIVE.num_compressed_bytes,
+        }
+    );
+    assert_eq!(
+        connection
+            .get_column_names_by_types(deleted_id, &[ColumnType::Timestamp])
+            .await?,
+        Vec::<String>::new()
     );
     Ok(())
 }
@@ -912,6 +942,184 @@ async fn stored_dataset_rows_are_revalidated() -> anyhow::Result<()> {
     assert!(
         matches!(error, Error::InvalidStoredRetentionPeriod { dataset_id: id } if id == dataset_id),
         "unexpected error: {error:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires MariaDB"]
+async fn get_timestamp_bounds_covers_the_given_datasets_across_batches() -> anyhow::Result<()> {
+    let test_db = TestDb::create("get_timestamp_bounds").await;
+    let first_dataset_id = test_db.create_dataset(&dataset_descriptor("first")).await;
+    let second_dataset_id = test_db.create_dataset(&dataset_descriptor("second")).await;
+    let third_dataset_id = test_db.create_dataset(&dataset_descriptor("third")).await;
+    test_db
+        .insert_archives(
+            first_dataset_id,
+            &[
+                ArchiveDescriptor {
+                    uuid: archive_uuid(1),
+                    timestamp_range: timestamp_range(10, 20),
+                    ..BASE_ARCHIVE
+                },
+                ArchiveDescriptor {
+                    uuid: archive_uuid(2),
+                    timestamp_range: timestamp_range(15, 25),
+                    ..BASE_ARCHIVE
+                },
+            ],
+        )
+        .await;
+    test_db
+        .insert_archives(
+            second_dataset_id,
+            &[ArchiveDescriptor {
+                uuid: archive_uuid(3),
+                timestamp_range: timestamp_range(30, 40),
+                ..BASE_ARCHIVE
+            }],
+        )
+        .await;
+    test_db
+        .insert_archives(
+            third_dataset_id,
+            &[ArchiveDescriptor {
+                uuid: archive_uuid(4),
+                ..BASE_ARCHIVE
+            }],
+        )
+        .await;
+
+    let mut connection = test_db.client.acquire().await?;
+    assert_eq!(connection.get_timestamp_bounds(&[]).await?, None);
+    assert_eq!(
+        connection
+            .get_timestamp_bounds(&[DatasetId::from(100)])
+            .await?,
+        None
+    );
+    assert_eq!(
+        connection.get_timestamp_bounds(&[first_dataset_id]).await?,
+        Some(timestamp_range(10, 25))
+    );
+    assert_eq!(
+        connection
+            .get_timestamp_bounds(&[first_dataset_id, third_dataset_id])
+            .await?,
+        Some(timestamp_range(0, 25))
+    );
+
+    for (first_index, second_index) in [(999, 1000), (1000, 999)] {
+        let mut dataset_ids: Vec<DatasetId> = (100..2100).map(DatasetId::from).collect();
+        dataset_ids[first_index] = first_dataset_id;
+        dataset_ids[second_index] = second_dataset_id;
+        assert_eq!(
+            connection.get_timestamp_bounds(&dataset_ids).await?,
+            Some(timestamp_range(10, 40))
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires MariaDB"]
+async fn get_space_savings_sums_the_sizes_of_every_dataset() -> anyhow::Result<()> {
+    let test_db = TestDb::create("get_space_savings").await;
+    let first_dataset_id = test_db.create_dataset(&dataset_descriptor("first")).await;
+    let second_dataset_id = test_db.create_dataset(&dataset_descriptor("second")).await;
+
+    let mut connection = test_db.client.acquire().await?;
+    assert_eq!(
+        connection.get_space_savings().await?,
+        SpaceSavings {
+            num_uncompressed_bytes: 0,
+            num_compressed_bytes: 0,
+        }
+    );
+
+    test_db
+        .insert_archives(
+            first_dataset_id,
+            &[ArchiveDescriptor {
+                uuid: archive_uuid(1),
+                num_uncompressed_bytes: 1000,
+                num_compressed_bytes: 10,
+                ..BASE_ARCHIVE
+            }],
+        )
+        .await;
+    test_db
+        .insert_archives(
+            second_dataset_id,
+            &[ArchiveDescriptor {
+                uuid: archive_uuid(2),
+                num_uncompressed_bytes: 3000,
+                num_compressed_bytes: 30,
+                ..BASE_ARCHIVE
+            }],
+        )
+        .await;
+    assert_eq!(
+        connection.get_space_savings().await?,
+        SpaceSavings {
+            num_uncompressed_bytes: 4000,
+            num_compressed_bytes: 40,
+        }
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires MariaDB"]
+async fn get_column_names_by_types_selects_the_distinct_names_of_the_dataset() -> anyhow::Result<()>
+{
+    let test_db = TestDb::create("get_column_names_by_types").await;
+    let dataset_id = test_db.create_dataset(&dataset_descriptor("logs")).await;
+    let other_dataset_id = test_db.create_dataset(&dataset_descriptor("other")).await;
+    for (id, name, column_type) in [
+        (dataset_id, "z_ts", ColumnType::Timestamp),
+        (dataset_id, "ts", ColumnType::Timestamp),
+        (dataset_id, "ts", ColumnType::DeprecatedDateString),
+        (dataset_id, "TS", ColumnType::DeprecatedDateString),
+        (dataset_id, "count", ColumnType::Integer),
+        (other_dataset_id, "other_ts", ColumnType::Timestamp),
+    ] {
+        sqlx::query(&format!(
+            "INSERT INTO `{}` (`dataset_id`, `name`, `type`) VALUES (?, ?, ?)",
+            test_db.tables.column_metadata()
+        ))
+        .bind(id)
+        .bind(name)
+        .bind(column_type)
+        .execute(&test_db.pool)
+        .await?;
+    }
+
+    let mut connection = test_db.client.acquire().await?;
+    assert_eq!(
+        connection
+            .get_column_names_by_types(
+                dataset_id,
+                &[
+                    ColumnType::Timestamp,
+                    ColumnType::DeprecatedDateString,
+                    ColumnType::Timestamp,
+                ],
+            )
+            .await?,
+        ["TS", "ts", "z_ts"]
+    );
+    assert_eq!(
+        connection
+            .get_column_names_by_types(dataset_id, &[ColumnType::Integer])
+            .await?,
+        ["count"]
+    );
+    assert_eq!(
+        connection
+            .get_column_names_by_types(dataset_id, &[])
+            .await?,
+        Vec::<String>::new()
     );
     Ok(())
 }

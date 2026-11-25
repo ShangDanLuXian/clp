@@ -233,26 +233,10 @@ impl Database {
 
     /// # Returns
     ///
-    /// The column-metadata table name (`<prefix><dataset>_column_metadata`).
-    #[must_use]
-    pub fn column_metadata_table_name(&self, dataset: &DatasetName) -> String {
-        format!("{}{dataset}_column_metadata", self.table_prefix)
-    }
-
-    /// # Returns
-    ///
     /// The datasets table name `<prefix>datasets`.
     #[must_use]
     pub fn datasets_table_name(&self) -> String {
         format!("{}datasets", self.table_prefix)
-    }
-
-    /// # Returns
-    ///
-    /// The files table name (`<prefix><dataset>_files`).
-    #[must_use]
-    pub fn files_table_name(&self, dataset: &DatasetName) -> String {
-        format!("{}{dataset}_files", self.table_prefix)
     }
 
     /// # Returns

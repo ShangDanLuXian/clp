@@ -2,6 +2,7 @@
 
 mod archive;
 mod dataset;
+mod statistics;
 
 use std::collections::HashMap;
 use std::num::NonZeroU32;
@@ -14,9 +15,12 @@ use clp_rust_utils::types::DatasetId;
 
 use crate::error::Error;
 use crate::types::ArchiveDescriptor;
+use crate::types::ArchiveTimestampRange;
+use crate::types::ColumnType;
 use crate::types::Dataset;
 use crate::types::DatasetDescriptor;
 use crate::types::QueryArchive;
+use crate::types::SpaceSavings;
 
 /// Reads of datasets. Every read skips datasets marked as deleted.
 #[async_trait]
@@ -171,6 +175,65 @@ pub trait ArchiveManagement {
         compression_job_id: CompressionJobId,
         archives: &[ArchiveDescriptor],
     ) -> Result<(), Error>;
+}
+
+/// Aggregate reads of the metadata, for the `WebUI`. Every read skips datasets marked as deleted.
+#[async_trait]
+pub trait MetadataStatistics {
+    /// # Parameters
+    ///
+    /// * `dataset_ids` - The datasets whose archives to cover.
+    ///
+    /// # Returns
+    ///
+    /// The range from the smallest begin timestamp to the largest end timestamp over the archives
+    /// of the live datasets among `dataset_ids`, or `None` if there are none, on success.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    ///
+    /// * [`Error::InvalidArchiveTimestampRange`] if the smallest stored begin timestamp is after
+    ///   the largest stored end timestamp, which only a reversed stored range can cause.
+    /// * [`Error::Sqlx`] if a statement fails or a row can't be decoded.
+    async fn get_timestamp_bounds(
+        &mut self,
+        dataset_ids: &[DatasetId],
+    ) -> Result<Option<ArchiveTimestampRange>, Error>;
+
+    /// # Returns
+    ///
+    /// The uncompressed and compressed sizes summed over the archives of every live dataset on
+    /// success.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    ///
+    /// * [`Error::Sqlx`] if a statement fails or a row can't be decoded.
+    async fn get_space_savings(&mut self) -> Result<SpaceSavings, Error>;
+
+    /// # Parameters
+    ///
+    /// * `dataset_id` - The dataset whose columns to read.
+    /// * `types` - The column types to select.
+    ///
+    /// # Returns
+    ///
+    /// The distinct names of the dataset's columns with one of `types`, ordered by name, on
+    /// success.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    ///
+    /// * [`Error::Sqlx`] if a statement fails or a row can't be decoded (e.g. a stored name that
+    ///   isn't UTF-8).
+    async fn get_column_names_by_types(
+        &mut self,
+        dataset_id: DatasetId,
+        types: &[ColumnType],
+    ) -> Result<Vec<String>, Error>;
 }
 
 /// The maximum number of values in an `IN` list or rows in a multi-row insert.

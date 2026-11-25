@@ -16,6 +16,9 @@ pub enum ClientError {
     #[error("`sqlx::Error`: {0}")]
     Sql(#[from] sqlx::Error),
 
+    #[error("`clp_metadata_db::Error`: {0}")]
+    MetadataDb(#[from] clp_metadata_db::Error),
+
     #[error("`mongodb::error::Error`: {0}")]
     Mongo(#[from] mongodb::error::Error),
 
@@ -78,6 +81,9 @@ pub enum ClientError {
 
     #[error("compression job ID {0} is out of range")]
     CompressionJobIdOutOfRange(u64),
+
+    #[error("total archive size {0} is out of range")]
+    ArchiveSizeOutOfRange(u64),
 
     #[error(transparent)]
     Telemetry(#[from] opentelemetry_otlp::ExporterBuildError),
