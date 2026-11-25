@@ -1122,7 +1122,6 @@ mod tests {
     async fn submit_passes_the_dataset_id_and_fails_for_a_deleted_dataset() -> anyhow::Result<()> {
         use clp_metadata_db::Dataset;
         use clp_metadata_db::DatasetLookup;
-        use clp_rust_utils::clp_config::package::config::Database;
 
         let db_pool = create_test_db("submit").await;
         let submitter = RecordingSubmitter::default();
@@ -1181,13 +1180,9 @@ mod tests {
             expected_submissions
         );
 
-        sqlx::query(&format!(
-            "UPDATE `{}` SET `is_deleted` = TRUE WHERE `name` = ?",
-            Database::default().metadata_tables().datasets()
-        ))
-        .bind(&dataset)
-        .execute(&handle.context.db_pool)
-        .await?;
+        let mut transaction = handle.context.metadata_db_client.begin().await?;
+        transaction.mark_dataset_deleted(&dataset).await?;
+        transaction.commit().await?;
         let error = handle
             .submit(input_sources())
             .await

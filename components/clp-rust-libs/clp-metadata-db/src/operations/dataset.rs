@@ -131,6 +131,38 @@ impl DatasetManagement for ClpDbTransaction<'_> {
             .ok_or(Error::DatasetNotFound)?
             .into_matching_dataset_id(descriptor)
     }
+
+    async fn mark_dataset_deleted(&mut self, name: &DatasetName) -> Result<DatasetId, Error> {
+        let HandleParts { tables, connection } = self.parts();
+
+        // The exclusive lock waits for the transactions that hold a shared lock on the row
+        // (`insert_archives`, `create_or_get_dataset`), and makes theirs wait for this one, so an
+        // archive insert and the mark never interleave.
+        let select_query = format!(
+            "SELECT `id`, `is_deleted` FROM `{}` WHERE `name` = ? FOR UPDATE",
+            tables.datasets()
+        );
+        let Some((id, is_deleted)) = sqlx::query_as::<_, (DatasetId, bool)>(&select_query)
+            .bind(name)
+            .fetch_optional(&mut *connection)
+            .await?
+        else {
+            return Err(Error::DatasetNotFound);
+        };
+        if is_deleted {
+            return Err(Error::DatasetDeleted);
+        }
+
+        let update_query = format!(
+            "UPDATE `{}` SET `is_deleted` = TRUE WHERE `id` = ?",
+            tables.datasets()
+        );
+        sqlx::query(&update_query)
+            .bind(id)
+            .execute(connection)
+            .await?;
+        Ok(id)
+    }
 }
 
 /// The table names and transaction connection that [`DatasetManagement::create_or_get_dataset`]
@@ -182,7 +214,8 @@ impl DatasetCreation<'_> {
         name: &DatasetName,
     ) -> Result<Option<LockedDatasetRow>, Error> {
         // A locking read, unlike a consistent read, sees rows committed after the transaction's
-        // snapshot, such as a concurrent creator's.
+        // snapshot, such as a concurrent creator's. The shared lock keeps `mark_dataset_deleted`
+        // waiting until the caller's transaction ends.
         let query = format!(
             "SELECT {DATASET_COLUMNS}, `is_deleted` FROM `{}` WHERE `name` = ? LOCK IN SHARE MODE",
             self.tables.datasets()

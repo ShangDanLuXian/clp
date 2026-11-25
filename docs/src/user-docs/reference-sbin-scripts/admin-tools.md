@@ -137,16 +137,10 @@ sbin/admin-tools/dataset-manager.sh --help
 Currently, `dataset-manager.sh` is only supported for `clp-json` (not `clp-text`).
 :::
 
-When deleting a dataset, the script removes the dataset's archives and metadata entirely. If you
-only want to delete some archives from the dataset, use [archive-manager.sh](#archive-managersh)
-instead.
-
-:::{warning}
-When deleting a dataset, `dataset-manager.sh` removes all files under the dataset's storage
-directory (`key_prefix` in object storage). Therefore, any non-archive files in this storage
-directory will also be deleted. Users should avoid storing non-archive files in the archive storage
-directory.
-:::
+When deleting a dataset, the script marks the dataset as deleted: it's no longer listed or
+searchable, and logs can no longer be compressed into it. The dataset's archives and their storage
+are kept, and the dataset's name can't be used for a new dataset. If you only want to delete some
+archives from the dataset, use [archive-manager.sh](#archive-managersh) instead.
 
 ### Examples
 
@@ -163,10 +157,3 @@ directory.
     ```
 
     * Replace `<dataset_0>`, `<dataset_1>`, etc. with the names of the datasets to delete.
-
-### Limitations
-
-* `dataset-manager.sh` is not supported for Kubernetes (Helm) deployments when using filesystem
-  storage (`archive_output.storage.type: "fs"`). The script relies on bind-mounting the archive
-  directory into a Docker container, which is not possible when archives are backed by
-  PersistentVolumeClaims inside the cluster.

@@ -297,6 +297,7 @@ mod tests {
     use clp_metadata_db::DatasetManagement;
     use clp_metadata_db::Error;
     use clp_rust_utils::clp_config::package::config::Database;
+    use clp_rust_utils::dataset::DatasetName;
     use clp_rust_utils::job_config::COMPRESSION_JOBS_TABLE_NAME;
     use clp_rust_utils::job_config::CompressionJobId;
     use clp_rust_utils::job_config::CompressionJobStatus;
@@ -591,13 +592,11 @@ mod tests {
     {
         let (pool, client) = create_test_db("commit_into_deleted_dataset").await;
         let dataset_id = create_dataset(&client, "logs").await;
-        sqlx::query(&format!(
-            "UPDATE `{}` SET `is_deleted` = TRUE WHERE `name` = ?",
-            Database::default().metadata_tables().datasets()
-        ))
-        .bind("logs")
-        .execute(&pool)
-        .await?;
+        let mut transaction = client.begin().await?;
+        transaction
+            .mark_dataset_deleted(&"logs".parse::<DatasetName>()?)
+            .await?;
+        transaction.commit().await?;
         let spider_job_id = JobId::from(1);
         let job_id = insert_job(&pool, spider_job_id, CompressionJobStatus::Running).await;
 

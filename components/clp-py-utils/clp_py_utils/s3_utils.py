@@ -1,4 +1,3 @@
-import os
 import re
 from collections.abc import Generator
 from pathlib import Path
@@ -10,21 +9,10 @@ from botocore.config import Config
 from job_orchestration.scheduler.job_config import S3InputConfig
 
 from clp_py_utils.clp_config import (
-    ARCHIVE_MANAGER_ACTION_NAME,
     AwsAuthentication,
     AwsAuthType,
-    ClpConfig,
-    COMPRESSION_SCHEDULER_COMPONENT_NAME,
-    COMPRESSION_WORKER_COMPONENT_NAME,
-    FsStorage,
-    GARBAGE_COLLECTOR_COMPONENT_NAME,
-    QUERY_SCHEDULER_COMPONENT_NAME,
-    QUERY_WORKER_COMPONENT_NAME,
     S3Config,
     S3Credentials,
-    S3Storage,
-    StorageType,
-    WEBUI_COMPONENT_NAME,
 )
 from clp_py_utils.core import FileMetadata
 
@@ -105,85 +93,6 @@ def get_credential_env_vars(auth: AwsAuthentication) -> dict[str, str]:
     if aws_session_token is not None:
         env_vars[AWS_ENV_VAR_SESSION_TOKEN] = aws_session_token
     return env_vars
-
-
-def generate_container_auth_options(
-    clp_config: ClpConfig, container_type: str
-) -> tuple[bool, list[str]]:
-    """
-    Generates Docker container authentication options for AWS S3 access based on the given type.
-    Handles authentication methods that require extra configuration (profile, env_vars).
-
-    :param clp_config: ClpConfig containing storage configurations.
-    :param container_type: Type of the calling container.
-    :return: Tuple of (whether aws config mount is needed, credential env_vars to set).
-    :raises: ValueError if environment variables are not set correctly.
-    """
-    output_storages_by_component_type: list[S3Storage | FsStorage]
-    input_storage_needed = False
-
-    if container_type in (
-        COMPRESSION_SCHEDULER_COMPONENT_NAME,
-        COMPRESSION_WORKER_COMPONENT_NAME,
-    ):
-        output_storages_by_component_type = [clp_config.archive_output.storage]
-        input_storage_needed = True
-    elif container_type in (ARCHIVE_MANAGER_ACTION_NAME,):
-        output_storages_by_component_type = [clp_config.archive_output.storage]
-    elif container_type in (WEBUI_COMPONENT_NAME,):
-        output_storages_by_component_type = [clp_config.stream_output.storage]
-    elif container_type in (
-        GARBAGE_COLLECTOR_COMPONENT_NAME,
-        QUERY_SCHEDULER_COMPONENT_NAME,
-        QUERY_WORKER_COMPONENT_NAME,
-    ):
-        output_storages_by_component_type = [
-            clp_config.archive_output.storage,
-            clp_config.stream_output.storage,
-        ]
-    else:
-        raise ValueError(f"Container type {container_type} is not valid.")
-    config_mount = False
-    add_env_vars = False
-
-    for storage in output_storages_by_component_type:
-        if StorageType.S3 == storage.type:
-            auth = storage.s3_config.aws_authentication
-            if AwsAuthType.profile == auth.type:
-                config_mount = True
-            elif AwsAuthType.env_vars == auth.type:
-                add_env_vars = True
-
-    if input_storage_needed and StorageType.S3 == clp_config.logs_input.type:
-        auth = clp_config.logs_input.aws_authentication
-        if AwsAuthType.profile == auth.type:
-            config_mount = True
-        elif AwsAuthType.env_vars == auth.type:
-            add_env_vars = True
-
-    credentials_env_vars = []
-
-    if add_env_vars:
-        access_key_id = os.getenv(AWS_ENV_VAR_ACCESS_KEY_ID)
-        secret_access_key = os.getenv(AWS_ENV_VAR_SECRET_ACCESS_KEY)
-        if access_key_id and secret_access_key:
-            credentials_env_vars.extend(
-                (
-                    f"{AWS_ENV_VAR_ACCESS_KEY_ID}={access_key_id}",
-                    f"{AWS_ENV_VAR_SECRET_ACCESS_KEY}={secret_access_key}",
-                )
-            )
-        else:
-            raise ValueError(
-                f"{AWS_ENV_VAR_ACCESS_KEY_ID} and {AWS_ENV_VAR_SECRET_ACCESS_KEY} "
-                "environment variables not set"
-            )
-        if os.getenv(AWS_ENV_VAR_SESSION_TOKEN):
-            raise ValueError(
-                f"{AWS_ENV_VAR_SESSION_TOKEN} not supported for environmental variable credentials."
-            )
-
-    return config_mount, credentials_env_vars
 
 
 def _create_s3_client(
@@ -344,46 +253,6 @@ def s3_put(s3_config: S3Config, src_file: Path, dest_path: str) -> None:
         s3_client.put_object(
             Bucket=s3_config.bucket, Body=file_data, Key=s3_config.key_prefix + dest_path
         )
-
-
-def s3_delete_by_key_prefix(
-    endpoint_url: str | None,
-    region_code: str | None,
-    bucket_name: str,
-    key_prefix: str,
-    s3_auth: AwsAuthentication,
-) -> None:
-    """
-    Deletes all objects under the S3 path `bucket_name`/`key_prefix`.
-
-    :param endpoint_url:
-    :param region_code:
-    :param bucket_name:
-    :param key_prefix:
-    :param s3_auth:
-    :raises: ValueError if any parameter is invalid.
-    :raises: Propagates `boto3.client.delete_objects`'s exceptions.
-    """
-    if not bool(bucket_name):
-        raise ValueError("Bucket name is not specified")
-    if not bool(key_prefix):
-        raise ValueError("Key prefix is not specified")
-
-    boto3_config = Config(retries=dict(total_max_attempts=3, mode="adaptive"))
-    s3_client = _create_s3_client(endpoint_url, region_code, s3_auth, boto3_config)
-
-    paginator = s3_client.get_paginator("list_objects_v2")
-    for page in paginator.paginate(
-        Bucket=bucket_name,
-        Prefix=key_prefix,
-        PaginationConfig={"PageSize": S3_OBJECT_DELETION_BATCH_SIZE_MAX},
-    ):
-        contents = page.get("Contents", None)
-        if contents is None:
-            continue
-
-        deletion_config = {"Objects": [{"Key": obj["Key"]} for obj in contents]}
-        s3_client.delete_objects(Bucket=bucket_name, Delete=deletion_config)
 
 
 def s3_delete_objects(s3_config: S3Config, object_keys: set[str]) -> None:

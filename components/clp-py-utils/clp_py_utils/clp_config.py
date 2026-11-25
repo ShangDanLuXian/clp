@@ -58,9 +58,6 @@ SPIDER_RESOURCE_GROUPS_CREDENTIALS_NAME = "spider_resource_groups"
 COMPRESSION_RESOURCE_GROUP_NAME = "compression"
 QUERY_RESOURCE_GROUP_NAME = "query"
 
-# Action names
-ARCHIVE_MANAGER_ACTION_NAME = "archive_manager"
-
 QUERY_JOBS_TABLE_NAME = "query_jobs"
 QUERY_TASKS_TABLE_NAME = "query_tasks"
 COMPRESSION_JOBS_TABLE_NAME = "compression_jobs"

@@ -43,6 +43,7 @@ COPY --link --chown=${UID} ./build/python-libs/ lib/python3/site-packages/
 COPY --link --chown=${UID} ./build/rust-targets/release/api_server bin/
 COPY --link --chown=${UID} ./build/rust-targets/release/archive-manager bin/
 COPY --link --chown=${UID} ./build/rust-targets/release/compression-coordinator bin/
+COPY --link --chown=${UID} ./build/rust-targets/release/dataset-manager bin/
 COPY --link --chown=${UID} ./build/rust-targets/release/db-table-creator bin/
 COPY --link --chown=${UID} ./build/rust-targets/release/log-ingestor bin/
 COPY --link --chown=${UID} ./build/rust-targets/release/query-coordinator bin/
