@@ -22,6 +22,7 @@ pub use operations::DatasetLookup;
 pub use operations::DatasetManagement;
 pub use operations::MetadataStatistics;
 pub use types::ArchiveDescriptor;
+pub use types::ArchiveMetadata;
 pub use types::ArchiveTimestampRange;
 pub use types::ColumnType;
 pub use types::Dataset;

@@ -1,5 +1,7 @@
 //! The archive operations: [`ArchiveLookup`] and [`ArchiveManagement`].
 
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::num::NonZeroU32;
 
 use async_trait::async_trait;
@@ -7,6 +9,7 @@ use clp_rust_utils::clp_config::package::config::MetadataTables;
 use clp_rust_utils::job_config::CompressionJobId;
 use clp_rust_utils::job_config::TimeRange;
 use clp_rust_utils::types::ArchiveId;
+use clp_rust_utils::types::ArchiveUuid;
 use clp_rust_utils::types::DatasetId;
 use sqlx::MySql;
 use sqlx::MySqlConnection;
@@ -21,11 +24,18 @@ use crate::client::HandleParts;
 use crate::error::Error;
 use crate::stored::StoredArchiveUuid;
 use crate::types::ArchiveDescriptor;
+use crate::types::ArchiveMetadata;
 use crate::types::ArchiveTimestampRange;
+use crate::types::InvalidArchiveTimestampRangeError;
 use crate::types::QueryArchive;
 
 /// The span above which an archive also gets a `clp_long_span_archives` row (24 hours).
 const MAX_SPAN_MILLISECS: u64 = 24 * 60 * 60 * 1000;
+
+/// The columns that [`ArchiveMetadataRow`] projects from the archives table aliased `a`, in a
+/// `SELECT` list.
+const ARCHIVE_METADATA_COLUMNS: &str =
+    "a.`id`, a.`dataset_id`, a.`uuid`, a.`begin_timestamp_millisecs`, a.`end_timestamp_millisecs`";
 
 #[async_trait]
 impl<HandleType: Handle> ArchiveLookup for HandleType {
@@ -78,6 +88,110 @@ impl<HandleType: Handle> ArchiveLookup for HandleType {
             .into_iter()
             .map(QueryArchive::from)
             .collect())
+    }
+
+    async fn find_archives_by_time_range(
+        &mut self,
+        dataset_id: DatasetId,
+        time_range: &TimeRange,
+    ) -> Result<Vec<ArchiveMetadata>, Error> {
+        let HandleParts { tables, connection } = self.parts();
+        let mut query_builder = QueryBuilder::<MySql>::new(format!(
+            "SELECT {ARCHIVE_METADATA_COLUMNS} FROM `{}` a JOIN `{}` d ON d.`id` = a.`dataset_id` \
+             WHERE d.`is_deleted` = FALSE AND a.`dataset_id` = ",
+            tables.archives(),
+            tables.datasets()
+        ));
+        query_builder.push_bind(dataset_id);
+        if let Some(begin_timestamp) = time_range.begin_timestamp_millisecs() {
+            query_builder
+                .push(" AND a.`begin_timestamp_millisecs` >= ")
+                .push_bind(begin_timestamp);
+        }
+        if let Some(end_timestamp) = time_range.end_timestamp_millisecs() {
+            query_builder
+                .push(" AND a.`end_timestamp_millisecs` <= ")
+                .push_bind(end_timestamp);
+        }
+        query_builder.push(" ORDER BY a.`begin_timestamp_millisecs`, a.`id`");
+
+        query_builder
+            .build_query_as::<ArchiveMetadataRow>()
+            .fetch_all(connection)
+            .await?
+            .into_iter()
+            .map(|row| Ok(ArchiveMetadata::try_from(row)?))
+            .collect()
+    }
+
+    async fn find_archives_by_ids(
+        &mut self,
+        ids: &[ArchiveId],
+    ) -> Result<Vec<Option<ArchiveMetadata>>, Error> {
+        let HandleParts { tables, connection } = self.parts();
+        let mut archives = HashMap::new();
+        for batch in ids.chunks(MAX_BATCH_SIZE) {
+            let mut query_builder = QueryBuilder::<MySql>::new(format!(
+                "SELECT {ARCHIVE_METADATA_COLUMNS} FROM `{}` a JOIN `{}` d ON d.`id` = \
+                 a.`dataset_id` WHERE d.`is_deleted` = FALSE AND a.`id` IN (",
+                tables.archives(),
+                tables.datasets()
+            ));
+            let mut separated_ids = query_builder.separated(", ");
+            for id in batch {
+                separated_ids.push_bind(id);
+            }
+            query_builder.push(")");
+            for row in query_builder
+                .build_query_as::<ArchiveMetadataRow>()
+                .fetch_all(&mut *connection)
+                .await?
+            {
+                let archive = ArchiveMetadata::try_from(row)?;
+                archives.insert(archive.id, archive);
+            }
+        }
+        Ok(ids.iter().map(|id| archives.get(id).copied()).collect())
+    }
+
+    async fn find_archive_ids_by_uuids(
+        &mut self,
+        dataset_id: DatasetId,
+        uuids: &[ArchiveUuid],
+    ) -> Result<Vec<Option<ArchiveId>>, Error> {
+        let HandleParts { tables, connection } = self.parts();
+        let mut ids = HashMap::new();
+        for batch in uuids.chunks(MAX_BATCH_SIZE) {
+            let mut query_builder = QueryBuilder::<MySql>::new(format!(
+                "SELECT a.`id`, a.`uuid` FROM `{}` a JOIN `{}` d ON d.`id` = a.`dataset_id` WHERE \
+                 d.`is_deleted` = FALSE AND a.`dataset_id` = ",
+                tables.archives(),
+                tables.datasets()
+            ));
+            query_builder
+                .push_bind(dataset_id)
+                .push(" AND a.`uuid` IN (");
+            let mut separated_uuids = query_builder.separated(", ");
+            for uuid in batch {
+                separated_uuids.push_bind(uuid.as_bytes().as_slice());
+            }
+            query_builder.push(")");
+            for row in query_builder
+                .build_query_as::<ArchiveIdRow>()
+                .fetch_all(&mut *connection)
+                .await?
+            {
+                let uuid = row.uuid.value;
+                // The same row comes back again when `uuids` repeats a UUID across batches.
+                if ids
+                    .insert(uuid, row.id)
+                    .is_some_and(|other_id| other_id != row.id)
+                {
+                    return Err(Error::AmbiguousArchiveUuid { uuid });
+                }
+            }
+        }
+        Ok(uuids.iter().map(|uuid| ids.get(uuid).copied()).collect())
     }
 }
 
@@ -156,6 +270,72 @@ impl ArchiveManagement for ClpDbTransaction<'_> {
         }
         Ok(())
     }
+
+    async fn delete_archives(&mut self, ids: &[ArchiveId]) -> Result<Vec<ArchiveId>, Error> {
+        let HandleParts { tables, connection } = self.parts();
+
+        // The exclusive locks keep the rows from changing until they're deleted below, and the read
+        // gives the full primary keys of both tables' rows.
+        let lock_query = format!(
+            "SELECT `id`, `dataset_id`, `begin_timestamp_millisecs`, `end_timestamp_millisecs` \
+             FROM `{}` FORCE INDEX (`auto_inc`) WHERE `id` = ? FOR UPDATE",
+            tables.archives()
+        );
+        let mut found_ids = HashSet::new();
+        let mut archives = Vec::new();
+        for id in ids {
+            if found_ids.contains(id) {
+                continue;
+            }
+            let Some(row) = sqlx::query_as::<_, ArchiveKeyRow>(&lock_query)
+                .bind(id)
+                .fetch_optional(&mut *connection)
+                .await?
+            else {
+                continue;
+            };
+            let archive = ArchiveKey::try_from(row)?;
+            found_ids.insert(archive.id);
+            archives.push(archive);
+        }
+
+        let long_span_query = format!(
+            "DELETE `{0}` FROM `{0}` FORCE INDEX (PRIMARY) WHERE `dataset_id` = ? AND \
+             `end_timestamp_millisecs` = ? AND `archive_id` = ?",
+            tables.long_span_archives()
+        );
+        for archive in archives
+            .iter()
+            .filter(|archive| archive.timestamp_range.span_millisecs() > MAX_SPAN_MILLISECS)
+        {
+            sqlx::query(&long_span_query)
+                .bind(archive.dataset_id)
+                .bind(archive.timestamp_range.end_timestamp_millisecs())
+                .bind(archive.id)
+                .execute(&mut *connection)
+                .await?;
+        }
+
+        let archives_query = format!(
+            "DELETE `{0}` FROM `{0}` FORCE INDEX (PRIMARY) WHERE `dataset_id` = ? AND \
+             `begin_timestamp_millisecs` = ? AND `id` = ?",
+            tables.archives()
+        );
+        for archive in &archives {
+            sqlx::query(&archives_query)
+                .bind(archive.dataset_id)
+                .bind(archive.timestamp_range.begin_timestamp_millisecs())
+                .bind(archive.id)
+                .execute(&mut *connection)
+                .await?;
+        }
+
+        Ok(ids
+            .iter()
+            .copied()
+            .filter(|id| !found_ids.contains(id))
+            .collect())
+    }
 }
 
 /// The target of the archives rows that [`ArchiveManagement::insert_archives`] inserts.
@@ -231,6 +411,73 @@ impl From<QueryArchiveRow> for QueryArchive {
             num_uncompressed_bytes: row.num_uncompressed_bytes,
             end_timestamp_millisecs: row.end_timestamp_millisecs,
         }
+    }
+}
+
+/// The columns of an archives row that [`ARCHIVE_METADATA_COLUMNS`] lists.
+#[derive(sqlx::FromRow)]
+struct ArchiveMetadataRow {
+    id: ArchiveId,
+    dataset_id: DatasetId,
+    #[sqlx(try_from = "Vec<u8>")]
+    uuid: StoredArchiveUuid,
+    begin_timestamp_millisecs: i64,
+    end_timestamp_millisecs: i64,
+}
+
+impl TryFrom<ArchiveMetadataRow> for ArchiveMetadata {
+    type Error = InvalidArchiveTimestampRangeError;
+
+    fn try_from(row: ArchiveMetadataRow) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: row.id,
+            dataset_id: row.dataset_id,
+            uuid: row.uuid.value,
+            timestamp_range: ArchiveTimestampRange::new(
+                row.begin_timestamp_millisecs,
+                row.end_timestamp_millisecs,
+            )?,
+        })
+    }
+}
+
+/// The ID and UUID of an archives row.
+#[derive(sqlx::FromRow)]
+struct ArchiveIdRow {
+    id: ArchiveId,
+    #[sqlx(try_from = "Vec<u8>")]
+    uuid: StoredArchiveUuid,
+}
+
+/// The columns of an archives row that the primary keys of its archives and long-span archives rows
+/// consist of.
+#[derive(sqlx::FromRow)]
+struct ArchiveKeyRow {
+    id: ArchiveId,
+    dataset_id: DatasetId,
+    begin_timestamp_millisecs: i64,
+    end_timestamp_millisecs: i64,
+}
+
+/// The validated primary-key columns of an archives row.
+struct ArchiveKey {
+    id: ArchiveId,
+    dataset_id: DatasetId,
+    timestamp_range: ArchiveTimestampRange,
+}
+
+impl TryFrom<ArchiveKeyRow> for ArchiveKey {
+    type Error = InvalidArchiveTimestampRangeError;
+
+    fn try_from(row: ArchiveKeyRow) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: row.id,
+            dataset_id: row.dataset_id,
+            timestamp_range: ArchiveTimestampRange::new(
+                row.begin_timestamp_millisecs,
+                row.end_timestamp_millisecs,
+            )?,
+        })
     }
 }
 

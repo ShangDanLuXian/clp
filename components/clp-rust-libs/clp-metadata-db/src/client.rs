@@ -82,6 +82,18 @@ impl ClpDbClient {
 
 /// A pooled connection, for reads. Each read runs on its own.
 ///
+/// The write traits are implemented only for [`ClpDbTransaction`], so a write on a connection
+/// doesn't compile:
+///
+/// ```compile_fail,E0599
+/// use clp_metadata_db::ArchiveManagement;
+/// use clp_metadata_db::ClpDbConnection;
+///
+/// async fn delete_archives(connection: &mut ClpDbConnection<'_>) {
+///     let _ = connection.delete_archives(&[]).await;
+/// }
+/// ```
+///
 /// # Type Parameters
 ///
 /// * `'client` - The lifetime of the client that handed out the connection.

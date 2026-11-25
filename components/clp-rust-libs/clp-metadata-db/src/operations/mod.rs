@@ -11,10 +11,13 @@ use async_trait::async_trait;
 use clp_rust_utils::dataset::DatasetName;
 use clp_rust_utils::job_config::CompressionJobId;
 use clp_rust_utils::job_config::TimeRange;
+use clp_rust_utils::types::ArchiveId;
+use clp_rust_utils::types::ArchiveUuid;
 use clp_rust_utils::types::DatasetId;
 
 use crate::error::Error;
 use crate::types::ArchiveDescriptor;
+use crate::types::ArchiveMetadata;
 use crate::types::ArchiveTimestampRange;
 use crate::types::ColumnType;
 use crate::types::Dataset;
@@ -145,6 +148,80 @@ pub trait ArchiveLookup {
         retention_period_minutes: Option<NonZeroU32>,
         job_creation_timestamp_millisecs: i64,
     ) -> Result<Vec<QueryArchive>, Error>;
+
+    /// # Parameters
+    ///
+    /// * `dataset_id` - The dataset whose archives to select.
+    /// * `time_range` - The range that the selected archives' timestamp ranges lie within.
+    ///
+    /// # Returns
+    ///
+    /// The archives of the live dataset whose timestamp range lies within `time_range`, as
+    /// `archive_manager.py` selects them, on success.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    ///
+    /// * [`Error::InvalidArchiveTimestampRange`] if a selected archive's stored begin timestamp is
+    ///   after its end timestamp.
+    /// * [`Error::Sqlx`] if a statement fails or a row can't be decoded (e.g. a stored UUID that
+    ///   isn't 16 bytes).
+    async fn find_archives_by_time_range(
+        &mut self,
+        dataset_id: DatasetId,
+        time_range: &TimeRange,
+    ) -> Result<Vec<ArchiveMetadata>, Error>;
+
+    /// Looks up archives by ID, across datasets.
+    ///
+    /// # Parameters
+    ///
+    /// * `ids` - The IDs of the archives to look up.
+    ///
+    /// # Returns
+    ///
+    /// One entry per element of `ids`, in the same order, on success: the archive's metadata, or
+    /// `None` if no archive of a live dataset has that ID.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    ///
+    /// * [`Error::InvalidArchiveTimestampRange`] if a found archive's stored begin timestamp is
+    ///   after its end timestamp.
+    /// * [`Error::Sqlx`] if a statement fails or a row can't be decoded (e.g. a stored UUID that
+    ///   isn't 16 bytes).
+    async fn find_archives_by_ids(
+        &mut self,
+        ids: &[ArchiveId],
+    ) -> Result<Vec<Option<ArchiveMetadata>>, Error>;
+
+    /// Resolves archive UUIDs to archive IDs within one live dataset. It exists only for the
+    /// archive management CLI's UUID mode, for compatibility; new APIs take archive IDs.
+    ///
+    /// # Parameters
+    ///
+    /// * `dataset_id` - The dataset that the archives belong to.
+    /// * `uuids` - The UUIDs of the archives to resolve.
+    ///
+    /// # Returns
+    ///
+    /// One entry per element of `uuids`, in the same order, on success: the archive's ID, or `None`
+    /// if no archive of the dataset has that UUID.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    ///
+    /// * [`Error::AmbiguousArchiveUuid`] if more than one archive of the dataset has the same UUID.
+    /// * [`Error::Sqlx`] if a statement fails or a row can't be decoded (e.g. a stored UUID that
+    ///   isn't 16 bytes).
+    async fn find_archive_ids_by_uuids(
+        &mut self,
+        dataset_id: DatasetId,
+        uuids: &[ArchiveUuid],
+    ) -> Result<Vec<Option<ArchiveId>>, Error>;
 }
 
 /// Writes to archives. Implemented only for [`crate::ClpDbTransaction`]: the guarantees below last
@@ -175,6 +252,27 @@ pub trait ArchiveManagement {
         compression_job_id: CompressionJobId,
         archives: &[ArchiveDescriptor],
     ) -> Result<(), Error>;
+
+    /// Deletes the archives with the given IDs, across datasets: their `clp_long_span_archives`
+    /// rows, then their `clp_archives` rows. The deletion takes effect when this transaction
+    /// commits.
+    ///
+    /// # Parameters
+    ///
+    /// * `ids` - The IDs of the archives to delete.
+    ///
+    /// # Returns
+    ///
+    /// The IDs among `ids` that match no archive, in input order, on success.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    ///
+    /// * [`Error::InvalidArchiveTimestampRange`] if a matched archive's stored begin timestamp is
+    ///   after its end timestamp.
+    /// * [`Error::Sqlx`] if a statement fails or a row can't be decoded.
+    async fn delete_archives(&mut self, ids: &[ArchiveId]) -> Result<Vec<ArchiveId>, Error>;
 }
 
 /// Aggregate reads of the metadata, for the `WebUI`. Every read skips datasets marked as deleted.

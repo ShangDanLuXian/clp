@@ -14,6 +14,7 @@ use std::time::Duration;
 use clp_metadata_db::ArchiveDescriptor;
 use clp_metadata_db::ArchiveLookup;
 use clp_metadata_db::ArchiveManagement;
+use clp_metadata_db::ArchiveMetadata;
 use clp_metadata_db::ArchiveTimestampRange;
 use clp_metadata_db::ClpDbClient;
 use clp_metadata_db::ColumnType;
@@ -37,6 +38,8 @@ use clp_rust_utils::types::DatasetId;
 use sqlx::MySqlPool;
 use sqlx::mysql::MySqlPoolOptions;
 use tokio::sync::Barrier;
+use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 use tokio::task::JoinSet;
 
 const BASE_ARCHIVE: ArchiveDescriptor = ArchiveDescriptor {
@@ -49,6 +52,8 @@ const BASE_ARCHIVE: ArchiveDescriptor = ArchiveDescriptor {
 const COMPRESSION_JOB_ID: CompressionJobId = 7;
 
 const DAY_MILLISECS: i64 = 24 * 60 * 60 * 1000;
+
+const DELETION_STEP_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// A freshly created database with the shared metadata tables, and a client of it.
 struct TestDb {
@@ -161,26 +166,17 @@ impl TestDb {
             .commit()
             .await
             .expect("the transaction should commit");
-        let id_query = format!(
-            "SELECT `id` FROM `{}` WHERE `dataset_id` = ? AND `uuid` = ?",
-            self.tables.archives()
-        );
-        let mut ids = Vec::with_capacity(archives.len());
-        for archive in archives {
-            let ids_of_uuid: Vec<ArchiveId> = sqlx::query_scalar(&id_query)
-                .bind(dataset_id)
-                .bind(archive.uuid.as_bytes().as_slice())
-                .fetch_all(&self.pool)
-                .await
-                .expect("the archive UUIDs should resolve");
-            assert_eq!(
-                ids_of_uuid.len(),
-                1,
-                "every inserted archive should have one ID"
-            );
-            ids.extend(ids_of_uuid);
-        }
-        ids
+        let uuids: Vec<ArchiveUuid> = archives.iter().map(|archive| archive.uuid).collect();
+        self.client
+            .acquire()
+            .await
+            .expect("a connection should be acquired")
+            .find_archive_ids_by_uuids(dataset_id, &uuids)
+            .await
+            .expect("the archive UUIDs should resolve")
+            .into_iter()
+            .map(|id| id.expect("every inserted archive should have an ID"))
+            .collect()
     }
 
     /// Marks the dataset named `name` as deleted in its own transaction.
@@ -235,6 +231,128 @@ impl TestDb {
         .fetch_one(&self.pool)
         .await
         .expect("the archives rows should be counted")
+    }
+}
+
+/// A `delete_archives` call running in its own transaction on a spawned task, which commits only
+/// once told to.
+struct Deletion {
+    connection_id: Option<oneshot::Receiver<u64>>,
+    deleted: oneshot::Receiver<()>,
+    commit: oneshot::Sender<()>,
+    task: JoinHandle<anyhow::Result<Vec<ArchiveId>>>,
+}
+
+impl Deletion {
+    /// Spawns a task that begins a transaction, deletes the archives `ids` in it, then commits it
+    /// once [`Self::commit`] is called.
+    ///
+    /// # Returns
+    ///
+    /// The running deletion.
+    fn spawn(client: Arc<ClpDbClient>, ids: Vec<ArchiveId>) -> Self {
+        let (connection_id_sender, connection_id) = oneshot::channel();
+        let (deleted_sender, deleted) = oneshot::channel();
+        let (commit, commit_receiver) = oneshot::channel();
+        let task = tokio::spawn(async move {
+            let mut transaction = client.begin().await?;
+            let id: u64 = sqlx::query_scalar("SELECT CONNECTION_ID()")
+                .fetch_one(&mut **transaction.sqlx_transaction())
+                .await?;
+            connection_id_sender
+                .send(id)
+                .expect("the test should wait for the connection ID");
+            let missing_ids = transaction.delete_archives(&ids).await?;
+            deleted_sender
+                .send(())
+                .expect("the test should wait for the deletion");
+            tokio::time::timeout(DELETION_STEP_TIMEOUT, commit_receiver)
+                .await
+                .expect("the test should let the deletion commit")
+                .expect("the test should let the deletion commit");
+            transaction.commit().await?;
+            Ok(missing_ids)
+        });
+        Self {
+            connection_id: Some(connection_id),
+            deleted,
+            commit,
+            task,
+        }
+    }
+
+    /// Waits until `delete_archives` either returns or waits on a lock.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    ///
+    /// * Forwards [`sqlx::query_scalar::QueryScalar::fetch_one`]'s return values on failure.
+    ///
+    /// # Panics
+    ///
+    /// Panics if:
+    ///
+    /// * The deletion doesn't report its connection ID in time.
+    /// * The deletion neither returns nor waits on a lock after polling for a while.
+    /// * It's called twice.
+    async fn wait_until_returned_or_waiting(&mut self, pool: &MySqlPool) -> anyhow::Result<()> {
+        const POLL_INTERVAL: Duration = Duration::from_millis(10);
+        const MAX_NUM_POLLS: usize = 1000;
+
+        let connection_id = tokio::time::timeout(
+            DELETION_STEP_TIMEOUT,
+            self.connection_id
+                .take()
+                .expect("the wait should run only once"),
+        )
+        .await
+        .expect("the deletion should report its connection ID in time")
+        .expect("the deletion should report its connection ID");
+        for _ in 0..MAX_NUM_POLLS {
+            if self.deleted.try_recv().is_ok() {
+                return Ok(());
+            }
+            let is_waiting: bool = sqlx::query_scalar(
+                "SELECT COUNT(*) > 0 FROM information_schema.INNODB_TRX WHERE \
+                 `trx_mysql_thread_id` = ? AND `trx_state` = 'LOCK WAIT'",
+            )
+            .bind(connection_id)
+            .fetch_one(pool)
+            .await?;
+            if is_waiting {
+                return Ok(());
+            }
+            tokio::time::sleep(POLL_INTERVAL).await;
+        }
+        panic!("the deletion should either return or wait on a lock");
+    }
+
+    /// Lets the deletion commit and waits for it to finish.
+    ///
+    /// # Returns
+    ///
+    /// The IDs that `delete_archives` reported as missing on success.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    ///
+    /// * [`tokio::task::JoinError`] if the deletion task panics.
+    /// * Forwards [`ClpDbClient::begin`]'s return values on failure.
+    /// * Forwards [`sqlx::query_scalar::QueryScalar::fetch_one`]'s return values on failure.
+    /// * Forwards [`ArchiveManagement::delete_archives`]'s return values on failure.
+    /// * Forwards [`clp_metadata_db::ClpDbTransaction::commit`]'s return values on failure.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the deletion doesn't finish in time.
+    async fn commit(self) -> anyhow::Result<Vec<ArchiveId>> {
+        // The send fails only if the task has already failed, which joining it reports.
+        let _ = self.commit.send(());
+        tokio::time::timeout(DELETION_STEP_TIMEOUT, self.task)
+            .await
+            .expect("the deletion should finish")?
     }
 }
 
@@ -524,10 +642,10 @@ async fn lookups_and_statistics_skip_deleted_datasets() -> anyhow::Result<()> {
         timestamp_range: timestamp_range(0, 30),
         ..BASE_ARCHIVE
     };
-    test_db
+    let live_archive_ids = test_db
         .insert_archives(live_id, std::slice::from_ref(&live_archive))
         .await;
-    test_db
+    let deleted_archive_ids = test_db
         .insert_archives(deleted_id, std::slice::from_ref(&deleted_archive))
         .await;
     sqlx::query(&format!(
@@ -562,6 +680,27 @@ async fn lookups_and_statistics_skip_deleted_datasets() -> anyhow::Result<()> {
             .find_archives_for_query(deleted_id, &TimeRange::default(), None, 0)
             .await?,
         []
+    );
+    assert_eq!(
+        connection
+            .find_archives_by_time_range(deleted_id, &TimeRange::default())
+            .await?,
+        []
+    );
+    assert_eq!(
+        connection
+            .find_archives_by_ids(&[deleted_archive_ids[0], live_archive_ids[0]])
+            .await?
+            .into_iter()
+            .map(|archive| archive.map(|archive| archive.id))
+            .collect::<Vec<_>>(),
+        [None, Some(live_archive_ids[0])]
+    );
+    assert_eq!(
+        connection
+            .find_archive_ids_by_uuids(deleted_id, &[deleted_archive.uuid])
+            .await?,
+        [None]
     );
     assert_eq!(
         connection
@@ -664,6 +803,24 @@ async fn insert_archives_stores_the_archives_and_their_long_span_references() ->
     let after_millisecs: i64 = sqlx::query_scalar(db_clock_query)
         .fetch_one(&test_db.pool)
         .await?;
+
+    let mut connection = test_db.client.acquire().await?;
+    let expected_archives: Vec<Option<ArchiveMetadata>> = ids
+        .iter()
+        .zip(&archives)
+        .map(|(id, archive)| {
+            Some(ArchiveMetadata {
+                id: *id,
+                dataset_id,
+                uuid: archive.uuid,
+                timestamp_range: archive.timestamp_range,
+            })
+        })
+        .collect();
+    assert_eq!(
+        connection.find_archives_by_ids(&ids).await?,
+        expected_archives
+    );
 
     let stored_row = sqlx::query_as::<_, StoredArchiveRow>(&format!(
         "SELECT `num_uncompressed_bytes`, `num_compressed_bytes`, `compression_job_id`, \
@@ -901,6 +1058,381 @@ async fn find_archives_for_query_applies_the_time_and_retention_filters() -> any
         );
     }
     Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires MariaDB"]
+async fn find_archives_by_time_range_selects_the_archives_within_the_range() -> anyhow::Result<()> {
+    let test_db = TestDb::create("find_archives_by_time_range").await;
+    let dataset_id = test_db.create_dataset(&dataset_descriptor("logs")).await;
+    let other_dataset_id = test_db.create_dataset(&dataset_descriptor("other")).await;
+    let archives = [
+        ArchiveDescriptor {
+            uuid: archive_uuid(1),
+            timestamp_range: timestamp_range(10, 20),
+            ..BASE_ARCHIVE
+        },
+        ArchiveDescriptor {
+            uuid: archive_uuid(2),
+            ..BASE_ARCHIVE
+        },
+        ArchiveDescriptor {
+            uuid: archive_uuid(3),
+            timestamp_range: timestamp_range(15, 30),
+            ..BASE_ARCHIVE
+        },
+    ];
+    let ids = test_db.insert_archives(dataset_id, &archives).await;
+    test_db
+        .insert_archives(
+            other_dataset_id,
+            &[ArchiveDescriptor {
+                uuid: archive_uuid(4),
+                timestamp_range: timestamp_range(10, 20),
+                ..BASE_ARCHIVE
+            }],
+        )
+        .await;
+    let archive_metadata = |index: usize| ArchiveMetadata {
+        id: ids[index],
+        dataset_id,
+        uuid: archives[index].uuid,
+        timestamp_range: archives[index].timestamp_range,
+    };
+
+    let mut connection = test_db.client.acquire().await?;
+    for (time_range, expected_indices) in [
+        (TimeRange::default(), vec![1, 0, 2]),
+        (time_range(Some(10), None), vec![0, 2]),
+        (time_range(None, Some(20)), vec![1, 0]),
+        (time_range(Some(10), Some(20)), vec![0]),
+        (time_range(Some(0), Some(0)), vec![1]),
+        (time_range(Some(11), Some(30)), vec![2]),
+    ] {
+        assert_eq!(
+            connection
+                .find_archives_by_time_range(dataset_id, &time_range)
+                .await?,
+            expected_indices
+                .iter()
+                .map(|index| archive_metadata(*index))
+                .collect::<Vec<_>>(),
+            "time range {time_range:?}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires MariaDB"]
+async fn find_archives_by_ids_aligns_the_results_with_the_input_across_batches()
+-> anyhow::Result<()> {
+    const NUM_ARCHIVES: u64 = 1500;
+
+    let test_db = TestDb::create("find_archives_by_ids").await;
+    let first_dataset_id = test_db.create_dataset(&dataset_descriptor("first")).await;
+    let second_dataset_id = test_db.create_dataset(&dataset_descriptor("second")).await;
+    let archives: Vec<ArchiveDescriptor> = (0..NUM_ARCHIVES)
+        .map(|seed| ArchiveDescriptor {
+            uuid: archive_uuid(seed),
+            timestamp_range: timestamp_range(0, i64::try_from(seed).expect("seed should fit")),
+            ..BASE_ARCHIVE
+        })
+        .collect();
+    let first_ids = test_db
+        .insert_archives(first_dataset_id, &archives[..1])
+        .await;
+    let second_ids = test_db
+        .insert_archives(second_dataset_id, &archives[1..])
+        .await;
+    let missing_id = ArchiveId::from(u64::MAX);
+
+    let mut ids = vec![second_ids[1200], missing_id, first_ids[0], second_ids[1200]];
+    ids.extend(&second_ids);
+    ids.push(first_ids[0]);
+    let expected: Vec<Option<ArchiveMetadata>> = ids
+        .iter()
+        .map(|id| {
+            if *id == first_ids[0] {
+                Some(ArchiveMetadata {
+                    id: *id,
+                    dataset_id: first_dataset_id,
+                    uuid: archives[0].uuid,
+                    timestamp_range: archives[0].timestamp_range,
+                })
+            } else {
+                second_ids
+                    .iter()
+                    .position(|second_id| second_id == id)
+                    .map(|index| ArchiveMetadata {
+                        id: *id,
+                        dataset_id: second_dataset_id,
+                        uuid: archives[index + 1].uuid,
+                        timestamp_range: archives[index + 1].timestamp_range,
+                    })
+            }
+        })
+        .collect();
+    assert_eq!(expected[1], None);
+
+    let mut connection = test_db.client.acquire().await?;
+    assert_eq!(connection.find_archives_by_ids(&ids).await?, expected);
+    assert_eq!(connection.find_archives_by_ids(&[]).await?, []);
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires MariaDB"]
+async fn find_archive_ids_by_uuids_aligns_the_results_and_rejects_ambiguous_uuids()
+-> anyhow::Result<()> {
+    let test_db = TestDb::create("find_archive_ids_by_uuids").await;
+    let dataset_id = test_db.create_dataset(&dataset_descriptor("logs")).await;
+    let other_dataset_id = test_db.create_dataset(&dataset_descriptor("other")).await;
+    let archive = ArchiveDescriptor {
+        uuid: archive_uuid(1),
+        ..BASE_ARCHIVE
+    };
+    let other_archive = ArchiveDescriptor {
+        uuid: archive_uuid(2),
+        ..BASE_ARCHIVE
+    };
+    let ids = test_db
+        .insert_archives(dataset_id, &[archive.clone(), other_archive.clone()])
+        .await;
+    test_db
+        .insert_archives(other_dataset_id, std::slice::from_ref(&archive))
+        .await;
+
+    let mut connection = test_db.client.acquire().await?;
+    let mut uuids = vec![other_archive.uuid, archive_uuid(3), archive.uuid];
+    uuids.extend((10..1010).map(archive_uuid));
+    uuids.push(other_archive.uuid);
+    let mut expected = vec![Some(ids[1]), None, Some(ids[0])];
+    expected.extend([None; 1000]);
+    expected.push(Some(ids[1]));
+    assert_eq!(
+        connection
+            .find_archive_ids_by_uuids(dataset_id, &uuids)
+            .await?,
+        expected
+    );
+
+    let mut transaction = test_db.client.begin().await?;
+    transaction
+        .insert_archives(
+            dataset_id,
+            COMPRESSION_JOB_ID,
+            std::slice::from_ref(&archive),
+        )
+        .await?;
+    let error = transaction
+        .find_archive_ids_by_uuids(dataset_id, &[archive.uuid])
+        .await
+        .expect_err("a UUID of two archives should be rejected");
+    assert!(
+        matches!(error, Error::AmbiguousArchiveUuid { uuid } if uuid == archive.uuid),
+        "unexpected error: {error:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires MariaDB"]
+async fn delete_archives_removes_the_rows_and_reports_missing_ids() -> anyhow::Result<()> {
+    const NUM_ARCHIVES: u64 = 1500;
+
+    let test_db = TestDb::create("delete_archives").await;
+    let dataset_id = test_db.create_dataset(&dataset_descriptor("logs")).await;
+    let other_dataset_id = test_db.create_dataset(&dataset_descriptor("other")).await;
+    let archives: Vec<ArchiveDescriptor> = (0..NUM_ARCHIVES)
+        .map(|seed| ArchiveDescriptor {
+            uuid: archive_uuid(seed),
+            timestamp_range: if seed % 500 == 0 {
+                timestamp_range(-DAY_MILLISECS, DAY_MILLISECS)
+            } else {
+                timestamp_range(0, 1)
+            },
+            ..BASE_ARCHIVE
+        })
+        .collect();
+    let ids = test_db.insert_archives(dataset_id, &archives).await;
+    let other_ids = test_db
+        .insert_archives(
+            other_dataset_id,
+            &[ArchiveDescriptor {
+                uuid: archive_uuid(NUM_ARCHIVES),
+                timestamp_range: timestamp_range(0, 2 * DAY_MILLISECS),
+                ..BASE_ARCHIVE
+            }],
+        )
+        .await;
+    let kept_id = ids[1];
+    let missing_id = ArchiveId::from(u64::MAX);
+
+    let mut deleted_ids: Vec<ArchiveId> = ids.iter().copied().filter(|id| *id != kept_id).collect();
+    deleted_ids.insert(1, missing_id);
+    deleted_ids.push(ids[0]);
+    deleted_ids.push(missing_id);
+    let mut transaction = test_db.client.begin().await?;
+    assert_eq!(
+        transaction.delete_archives(&deleted_ids).await?,
+        [missing_id, missing_id]
+    );
+    transaction.commit().await?;
+
+    assert_eq!(test_db.num_archives(dataset_id).await, 1);
+    assert_eq!(test_db.long_span_archives(dataset_id).await, []);
+    let mut connection = test_db.client.acquire().await?;
+    assert_eq!(
+        connection
+            .find_archives_by_ids(&[kept_id, ids[0], other_ids[0]])
+            .await?
+            .into_iter()
+            .map(|archive| archive.map(|archive| archive.id))
+            .collect::<Vec<_>>(),
+        [Some(kept_id), None, Some(other_ids[0])]
+    );
+    assert_eq!(test_db.long_span_archives(other_dataset_id).await.len(), 1);
+
+    let mut transaction = test_db.client.begin().await?;
+    assert_eq!(transaction.delete_archives(&[]).await?, []);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires MariaDB"]
+async fn delete_archives_does_not_deadlock_with_a_concurrent_insert_archives() -> anyhow::Result<()>
+{
+    const NUM_ITERATIONS: u64 = 3;
+    const NUM_ARCHIVES: u64 = 10;
+    const NUM_DELETED_ARCHIVES: usize = 8;
+
+    let test_db = TestDb::create("delete_archives_concurrent_insert").await;
+    let client = Arc::new(ClpDbClient::new(test_db.pool.clone(), &Database::default()));
+    for iteration in 0..NUM_ITERATIONS {
+        let dataset_id = test_db
+            .create_dataset(&dataset_descriptor(&format!("logs_{iteration}")))
+            .await;
+        let archives: Vec<ArchiveDescriptor> = (1..=NUM_ARCHIVES)
+            .map(|index| {
+                let begin = i64::try_from(index * 100).expect("the begin should fit in `i64`");
+                ArchiveDescriptor {
+                    uuid: archive_uuid(iteration * 100 + index),
+                    timestamp_range: timestamp_range(begin, begin + 1),
+                    ..BASE_ARCHIVE
+                }
+            })
+            .collect();
+        let ids = test_db.insert_archives(dataset_id, &archives).await;
+
+        // The archive inserted before the deletion sorts after every existing archive in the
+        // archives table's primary key order, and the one inserted after it sorts before them.
+        let late_archive = ArchiveDescriptor {
+            uuid: archive_uuid(iteration * 100 + NUM_ARCHIVES + 1),
+            timestamp_range: timestamp_range(5000, 5001),
+            ..BASE_ARCHIVE
+        };
+        let early_archive = ArchiveDescriptor {
+            uuid: archive_uuid(iteration * 100 + NUM_ARCHIVES + 2),
+            timestamp_range: timestamp_range(1, 2),
+            ..BASE_ARCHIVE
+        };
+        let mut inserting = client.begin().await?;
+        inserting
+            .insert_archives(
+                dataset_id,
+                COMPRESSION_JOB_ID,
+                std::slice::from_ref(&late_archive),
+            )
+            .await?;
+
+        let mut deletion =
+            Deletion::spawn(Arc::clone(&client), ids[..NUM_DELETED_ARCHIVES].to_vec());
+        deletion
+            .wait_until_returned_or_waiting(&test_db.pool)
+            .await?;
+
+        tokio::time::timeout(
+            DELETION_STEP_TIMEOUT,
+            inserting.insert_archives(
+                dataset_id,
+                COMPRESSION_JOB_ID,
+                std::slice::from_ref(&early_archive),
+            ),
+        )
+        .await
+        .expect("the second insertion should finish")?;
+        tokio::time::timeout(DELETION_STEP_TIMEOUT, inserting.commit())
+            .await
+            .expect("the insertion should commit")?;
+        assert_eq!(deletion.commit().await?, [], "iteration {iteration}");
+
+        assert_eq!(
+            test_db.num_archives(dataset_id).await,
+            i64::try_from(ids.len() - NUM_DELETED_ARCHIVES + 2)?,
+            "iteration {iteration}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires MariaDB"]
+async fn stored_archive_rows_are_revalidated() -> anyhow::Result<()> {
+    let test_db = TestDb::create("stored_archive_rows_revalidated").await;
+    let dataset_id = test_db.create_dataset(&dataset_descriptor("logs")).await;
+    let ids = test_db
+        .insert_archives(
+            dataset_id,
+            &[ArchiveDescriptor {
+                uuid: archive_uuid(1),
+                timestamp_range: timestamp_range(1, 2),
+                ..BASE_ARCHIVE
+            }],
+        )
+        .await;
+    sqlx::query(&format!(
+        "UPDATE `{}` SET `begin_timestamp_millisecs` = 3 WHERE `id` = ?",
+        test_db.tables.archives()
+    ))
+    .bind(ids[0])
+    .execute(&test_db.pool)
+    .await?;
+
+    let mut connection = test_db.client.acquire().await?;
+    let error = connection
+        .find_archives_by_ids(&ids)
+        .await
+        .expect_err("a reversed stored range should be rejected");
+    assert!(
+        matches!(&error, Error::InvalidArchiveTimestampRange(source)
+            if *source == timestamp_range_error(3, 2)),
+        "unexpected error: {error:?}"
+    );
+    let mut transaction = test_db.client.begin().await?;
+    let error = transaction
+        .delete_archives(&ids)
+        .await
+        .expect_err("a reversed stored range should be rejected");
+    assert!(
+        matches!(error, Error::InvalidArchiveTimestampRange(_)),
+        "unexpected error: {error:?}"
+    );
+    Ok(())
+}
+
+/// # Returns
+///
+/// The error that [`ArchiveTimestampRange::new`] returns for `[begin, end]`.
+///
+/// # Panics
+///
+/// Panics if `[begin, end]` is a valid range.
+fn timestamp_range_error(
+    begin: i64,
+    end: i64,
+) -> clp_metadata_db::InvalidArchiveTimestampRangeError {
+    ArchiveTimestampRange::new(begin, end).expect_err("the range should be invalid")
 }
 
 #[tokio::test]

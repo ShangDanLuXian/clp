@@ -169,6 +169,15 @@ pub struct ArchiveDescriptor {
     pub num_compressed_bytes: u64,
 }
 
+/// A stored archive, as manual deletion selects it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ArchiveMetadata {
+    pub id: ArchiveId,
+    pub dataset_id: DatasetId,
+    pub uuid: ArchiveUuid,
+    pub timestamp_range: ArchiveTimestampRange,
+}
+
 /// A stored archive, as a query selects it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct QueryArchive {
