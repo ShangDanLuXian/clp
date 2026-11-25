@@ -1,6 +1,8 @@
 import asyncio
 import pathlib
+import posixpath
 import time
+import uuid
 from contextlib import closing
 
 from clp_py_utils.clp_config import (
@@ -13,8 +15,11 @@ from clp_py_utils.clp_config import (
 from clp_py_utils.clp_logging import configure_logging, get_logger
 from clp_py_utils.clp_metadata_db_utils import (
     delete_archives_from_metadata_db,
+    delete_archives_from_shared_metadata_tables,
     fetch_existing_datasets,
     get_archives_table_name,
+    LiveDataset,
+    SharedArchiveKey,
 )
 from clp_py_utils.sql_adapter import SqlAdapter
 
@@ -26,6 +31,8 @@ from job_orchestration.garbage_collector.constants import (
 from job_orchestration.garbage_collector.utils import (
     DeletionCandidatesBuffer,
     execute_deletion,
+    execute_deletion_by_storage_paths,
+    validate_storage_path,
     validate_storage_type,
 )
 from job_orchestration.scheduler.constants import QueryJobStatus
@@ -92,6 +99,136 @@ def _delete_expired_archives(
     candidates_buffer.clear()
     logger.info(
         f"Deleted {num_candidates_to_delete} archive(s){dataset_log_msg}: {deleted_candidates}"
+    )
+
+
+def _delete_expired_clp_s_archives(
+    db_conn,
+    db_cursor,
+    table_prefix: str,
+    archive_expiry_epoch_secs: int,
+    candidates_buffer: DeletionCandidatesBuffer,
+    archive_output_config: ArchiveOutput,
+    dataset: LiveDataset,
+) -> None:
+    """
+    Deletes the archives of one clp-s dataset whose end timestamp is before the expiry, first from
+    the shared metadata tables, then from storage under the dataset's archive storage path.
+
+    The candidates are persisted to the recovery file, as full storage paths, before the metadata
+    deletion commits, so that their storage can still be deleted after a failure.
+
+    :param db_conn:
+    :param db_cursor:
+    :param table_prefix:
+    :param archive_expiry_epoch_secs:
+    :param candidates_buffer:
+    :param archive_output_config:
+    :param dataset:
+    :raises: Propagates `validate_storage_path`'s exceptions.
+    :raises: Propagates `delete_archives_from_shared_metadata_tables`'s exceptions.
+    :raises: Propagates `execute_deletion_by_storage_paths`'s exceptions.
+    """
+    # Validate before deleting any metadata: a path that fails validation after the commit would
+    # be persisted in the recovery file and fail every later sweep.
+    validate_storage_path(archive_output_config, dataset.archive_storage_path)
+
+    archive_end_ts_upper_bound = archive_expiry_epoch_secs * SECOND_TO_MILLISECOND
+
+    # Archives without timestamps store 0 as their end timestamp and are never expired.
+    db_cursor.execute(
+        f"""
+        SELECT id, uuid, begin_timestamp_millisecs, end_timestamp_millisecs
+        FROM `{get_archives_table_name(table_prefix, None)}`
+        WHERE dataset_id = %s
+        AND end_timestamp_millisecs < %s
+        AND end_timestamp_millisecs != 0
+        """,
+        [dataset.id, archive_end_ts_upper_bound],
+    )
+
+    results = db_cursor.fetchall()
+    if len(results) != 0:
+        # Storage keys use the UUID's hyphenated text form, not the stored `BINARY(16)`.
+        storage_paths = [
+            posixpath.join(dataset.archive_storage_path, str(uuid.UUID(bytes=result["uuid"])))
+            for result in results
+        ]
+        archives = [
+            SharedArchiveKey(
+                id=result["id"],
+                begin_timestamp_millisecs=result["begin_timestamp_millisecs"],
+                end_timestamp_millisecs=result["end_timestamp_millisecs"],
+            )
+            for result in results
+        ]
+        delete_archives_from_shared_metadata_tables(db_cursor, table_prefix, dataset.id, archives)
+
+        for storage_path in storage_paths:
+            candidates_buffer.add_candidate(storage_path)
+
+        candidates_buffer.persist_new_candidates()
+        db_conn.commit()
+
+    candidates_to_delete = candidates_buffer.get_candidates()
+    num_candidates_to_delete = len(candidates_to_delete)
+    if 0 == num_candidates_to_delete:
+        logger.debug(
+            f"No archives in dataset `{dataset.name}` matched the expiry criteria:"
+            f" `end_ts < {archive_end_ts_upper_bound}`."
+        )
+        return
+
+    execute_deletion_by_storage_paths(archive_output_config, candidates_to_delete)
+
+    deleted_candidates = list(candidates_to_delete)
+    candidates_buffer.clear()
+    logger.info(
+        f"Deleted {num_candidates_to_delete} archive(s) while collecting dataset `{dataset.name}`:"
+        f" {deleted_candidates}"
+    )
+
+
+def _delete_recovered_clp_s_archives(
+    candidates_buffer: DeletionCandidatesBuffer,
+    archive_output_config: ArchiveOutput,
+    recovery_file: pathlib.Path,
+) -> None:
+    """
+    Deletes the storage of clp-s archives left in the recovery file by a previous failed sweep.
+    These are full storage paths, independent of any dataset, so they're deleted even if no dataset
+    is live.
+
+    :param candidates_buffer:
+    :param archive_output_config:
+    :param recovery_file: The file `candidates_buffer` was read from.
+    :raises ValueError: If the storage type is FS and a candidate isn't an absolute path, e.g., if
+        the recovery file was written by a release before v0.15.0, which wrote paths relative to the
+        configured archive directory.
+    :raises: Propagates `execute_deletion_by_storage_paths`'s exceptions.
+    """
+    candidates_to_delete = candidates_buffer.get_candidates()
+    num_candidates_to_delete = len(candidates_to_delete)
+    if 0 == num_candidates_to_delete:
+        return
+
+    try:
+        for candidate in candidates_to_delete:
+            validate_storage_path(archive_output_config, candidate)
+    except ValueError as e:
+        raise ValueError(
+            f"Recovery file `{recovery_file}` holds an invalid archive storage path. A recovery"
+            " file written by a release before v0.15.0 holds relative paths and must be removed"
+            " after deleting the archives it lists."
+        ) from e
+
+    execute_deletion_by_storage_paths(archive_output_config, candidates_to_delete)
+
+    deleted_candidates = list(candidates_to_delete)
+    candidates_buffer.clear()
+    logger.info(
+        f"Deleted {num_candidates_to_delete} archive(s) left by a previous sweep:"
+        f" {deleted_candidates}"
     )
 
 
