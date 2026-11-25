@@ -26,8 +26,8 @@ use crate::clp_config::package::config::CLP_METADATA_TABLE_PREFIX;
 /// same rules as its [`FromStr`] implementation, or from a `null` or missing value, which gives the
 /// default dataset name ([`DatasetName::default_name`]).
 ///
-/// A dataset name binds to and decodes from MySQL as a string, validated on decode by the same
-/// rules.
+/// A dataset name binds to MySQL as a string, and decodes from a string or binary column, validated
+/// on decode by the same rules.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(try_from = "Option<String>", into = "String")]
 pub struct DatasetName {
@@ -119,7 +119,9 @@ impl sqlx::Type<MySql> for DatasetName {
     }
 
     fn compatible(ty: &MySqlTypeInfo) -> bool {
-        <str as sqlx::Type<MySql>>::compatible(ty)
+        // The server reports a column with a binary collation, like `clp_datasets.name`
+        // (`utf8mb4_bin`), as binary. Decoding still checks that the value is valid UTF-8.
+        <str as sqlx::Type<MySql>>::compatible(ty) || <[u8] as sqlx::Type<MySql>>::compatible(ty)
     }
 }
 
@@ -258,8 +260,14 @@ mod tests {
         for name in [
             "-",
             " ",
+            " leading_space",
+            "trailing_space ",
             "bad-name",
             "bad name",
+            "no\u{a0}break_space",
+            "ideographic\u{3000}space",
+            "tab\tname",
+            "line\nbreak",
             "bad.name",
             "bad`name",
             "e\u{301}",

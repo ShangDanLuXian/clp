@@ -80,6 +80,41 @@ pub struct ParseArchiveUuidError {
     source: uuid::Error,
 }
 
+/// A dataset's ID, the dataset's identifier in the metadata database (`clp_datasets.id`).
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct DatasetId {
+    value: u16,
+}
+
+impl Display for DatasetId {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        self.value.fmt(formatter)
+    }
+}
+
+impl From<u16> for DatasetId {
+    fn from(value: u16) -> Self {
+        Self { value }
+    }
+}
+
+crate::impl_sqlx_type!(DatasetId => u16);
+
+impl sqlx::Encode<'_, MySql> for DatasetId {
+    fn encode_by_ref(&self, buf: &mut Vec<u8>) -> Result<IsNull, BoxDynError> {
+        <u16 as sqlx::Encode<MySql>>::encode_by_ref(&self.value, buf)
+    }
+}
+
+impl<'decode> sqlx::Decode<'decode, MySql> for DatasetId {
+    fn decode(value: MySqlValueRef<'decode>) -> Result<Self, BoxDynError> {
+        Ok(Self {
+            value: <u16 as sqlx::Decode<MySql>>::decode(value)?,
+        })
+    }
+}
+
 /// The token that identifies a session to the query tasks streaming results to it.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(transparent)]
