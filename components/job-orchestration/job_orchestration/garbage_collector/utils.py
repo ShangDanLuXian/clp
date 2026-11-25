@@ -37,14 +37,7 @@ def execute_fs_deletion(fs_storage_config: FsStorage, candidate: str) -> None:
     :param fs_storage_config:
     :param candidate: Relative path of the file or directory to delete.
     """
-    path_to_delete = fs_storage_config.directory / candidate
-    if not path_to_delete.exists():
-        return
-
-    if path_to_delete.is_dir():
-        shutil.rmtree(path_to_delete)
-    else:
-        os.remove(path_to_delete)
+    _delete_fs_path(fs_storage_config.directory / candidate)
 
 
 def execute_deletion(output_config: ArchiveOutput, deletion_candidates: set[str]) -> None:
@@ -56,6 +49,52 @@ def execute_deletion(output_config: ArchiveOutput, deletion_candidates: set[str]
     elif StorageType.FS == storage_type:
         for candidate in deletion_candidates:
             execute_fs_deletion(storage_config, candidate)
+    else:
+        raise ValueError(f"Unsupported Storage type: {storage_type}")
+
+
+def validate_storage_path(output_config: ArchiveOutput, storage_path: str) -> None:
+    """
+    Validates that a full storage path can be passed to `execute_deletion_by_storage_paths`.
+
+    :param output_config:
+    :param storage_path:
+    :raises ValueError: If the storage type is FS and `storage_path` isn't absolute.
+    """
+    if (
+        StorageType.FS == output_config.storage.type
+        and not pathlib.Path(storage_path).is_absolute()
+    ):
+        raise ValueError(f"Archive storage path `{storage_path}` isn't absolute.")
+
+
+def execute_deletion_by_storage_paths(
+    output_config: ArchiveOutput, storage_paths: set[str]
+) -> None:
+    """
+    Deletes archives given by their full storage paths: absolute filesystem paths, or S3 object keys
+    within the configured bucket. Unlike `execute_deletion`, the paths aren't relative to the
+    configured archive directory or key prefix, since each dataset stores its own storage path.
+
+    :param output_config:
+    :param storage_paths:
+    :raises ValueError: If the storage type is unsupported.
+    :raises: Propagates `s3_delete_objects`'s exceptions.
+    :raises: Propagates `validate_storage_path`'s exceptions.
+    :raises: Propagates `_delete_fs_path`'s exceptions.
+    """
+    storage_config = output_config.storage
+    storage_type = storage_config.type
+
+    if StorageType.S3 == storage_type:
+        # `s3_delete_objects` prepends `key_prefix` to each key, and these keys are already full.
+        s3_config = storage_config.s3_config.model_copy(update={"key_prefix": ""})
+        s3_delete_objects(s3_config, storage_paths)
+    elif StorageType.FS == storage_type:
+        for storage_path in storage_paths:
+            validate_storage_path(output_config, storage_path)
+        for storage_path in storage_paths:
+            _delete_fs_path(pathlib.Path(storage_path))
     else:
         raise ValueError(f"Unsupported Storage type: {storage_type}")
 
@@ -120,3 +159,20 @@ class DeletionCandidatesBuffer:
         self._candidates.clear()
         if self._recovery_file_path.exists():
             os.unlink(self._recovery_file_path)
+
+
+def _delete_fs_path(path: pathlib.Path) -> None:
+    """
+    Deletes a file or a directory tree. The function performs no action if `path` doesn't exist.
+
+    :param path:
+    :raises: Propagates `shutil.rmtree`'s exceptions.
+    :raises: Propagates `os.remove`'s exceptions.
+    """
+    if not path.exists():
+        return
+
+    if path.is_dir():
+        shutil.rmtree(path)
+    else:
+        os.remove(path)
