@@ -107,6 +107,33 @@ pub struct InvalidArchiveTimestampRangeError {
     end_timestamp_millisecs: i64,
 }
 
+/// The type of a dataset's column.
+///
+/// Mirror of `clp_s::NodeType` (`components/core/src/clp_s/SchemaTree.hpp`). Must be kept in sync.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, sqlx::Type)]
+#[repr(u8)]
+pub enum ColumnType {
+    Integer = 0,
+    Float = 1,
+    ClpString = 2,
+    VarString = 3,
+    Boolean = 4,
+    Object = 5,
+    UnstructuredArray = 6,
+    NullValue = 7,
+    DeprecatedDateString = 8,
+    StructurizedArray = 9,
+    Metadata = 10,
+    DeltaInteger = 11,
+    FormattedFloat = 12,
+    DictionaryFloat = 13,
+    Timestamp = 14,
+    StructurizedText = 15,
+    ParentRule = 16,
+    UnstructurizedText = 17,
+    Unknown = 18,
+}
+
 /// A dataset's configurable settings, stored in its `clp_datasets` row.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DatasetConfig {
@@ -149,6 +176,13 @@ pub struct QueryArchive {
     pub uuid: ArchiveUuid,
     pub num_uncompressed_bytes: u64,
     pub end_timestamp_millisecs: i64,
+}
+
+/// The sizes of a set of archives.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SpaceSavings {
+    pub num_uncompressed_bytes: u64,
+    pub num_compressed_bytes: u64,
 }
 
 /// The fields of an [`ArchiveTimestampRange`] before its invariant is checked.

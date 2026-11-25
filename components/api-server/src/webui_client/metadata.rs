@@ -4,6 +4,10 @@ use std::collections::HashSet;
 
 use chrono::DateTime;
 use chrono::Utc;
+use clp_metadata_db::ArchiveTimestampRange;
+use clp_metadata_db::ColumnType;
+use clp_metadata_db::DatasetLookup;
+use clp_metadata_db::MetadataStatistics;
 use clp_rust_utils::clp_config::package::config::StorageEngine;
 use clp_rust_utils::dataset::DatasetName;
 use clp_rust_utils::job_config::COMPRESSION_JOBS_TABLE_NAME;
@@ -12,6 +16,7 @@ use clp_rust_utils::job_config::QUERY_JOBS_TABLE_NAME;
 use clp_rust_utils::job_config::QUERY_TASKS_TABLE_NAME;
 use clp_rust_utils::job_config::QueryJobId;
 use clp_rust_utils::serde::ZstdMsgpack;
+use clp_rust_utils::types::DatasetId;
 use serde::Deserialize;
 use serde::Serialize;
 use utoipa::ToSchema;
@@ -28,13 +33,35 @@ pub struct TimeRange {
     pub end_timestamp: i64,
 }
 
+impl From<ArchiveTimestampRange> for TimeRange {
+    fn from(range: ArchiveTimestampRange) -> Self {
+        Self {
+            begin_timestamp: range.begin_timestamp_millisecs(),
+            end_timestamp: range.end_timestamp_millisecs(),
+        }
+    }
+}
+
 /// Aggregated space-savings statistics.
-#[derive(Debug, Serialize, sqlx::FromRow, ToSchema)]
+#[derive(Debug, PartialEq, Eq, Serialize, sqlx::FromRow, ToSchema)]
 pub struct SpaceSavings {
     /// Total uncompressed size of all archives, in bytes.
     pub total_uncompressed_size: i64,
     /// Total compressed size of all archives, in bytes.
     pub total_compressed_size: i64,
+}
+
+impl TryFrom<clp_metadata_db::SpaceSavings> for SpaceSavings {
+    type Error = ClientError;
+
+    fn try_from(space_savings: clp_metadata_db::SpaceSavings) -> Result<Self, Self::Error> {
+        let to_signed =
+            |size: u64| i64::try_from(size).map_err(|_| ClientError::ArchiveSizeOutOfRange(size));
+        Ok(Self {
+            total_uncompressed_size: to_signed(space_savings.num_uncompressed_bytes)?,
+            total_compressed_size: to_signed(space_savings.num_compressed_bytes)?,
+        })
+    }
 }
 
 /// Ingestion details statistics.
@@ -84,6 +111,25 @@ pub struct CompressionMetadata {
     /// The display fields of the job's stored config. All other fields, including storage
     /// credentials, are dropped.
     pub clp_config: CompressionMetadataDisplayConfig,
+}
+
+impl TryFrom<CompressionMetadataRowProjection> for CompressionMetadata {
+    type Error = ClientError;
+
+    fn try_from(row: CompressionMetadataRowProjection) -> Result<Self, Self::Error> {
+        let clp_config = ZstdMsgpack::deserialize(&row.clp_config)?;
+        Ok(Self {
+            id: row.id,
+            status: row.status,
+            status_msg: row.status_msg,
+            start_time: row.start_time,
+            update_time: row.update_time,
+            duration: row.duration,
+            uncompressed_size: row.uncompressed_size,
+            compressed_size: row.compressed_size,
+            clp_config,
+        })
+    }
 }
 
 /// The display subset of a stored compression job config, as returned in
@@ -550,6 +596,175 @@ impl WebuiClient {
     }
 }
 
+/// Reads the clp-s metadata behind the `WebUI`'s metadata routes.
+///
+/// # Type Parameters
+///
+/// * `'metadata_db_lifetime` - The lifetime of the metadata database handle.
+/// * `MetadataDbType` - The type of the metadata database handle that the metadata is read from.
+struct ClpSMetadataReader<'metadata_db_lifetime, MetadataDbType: DatasetLookup + MetadataStatistics>
+{
+    metadata_db: &'metadata_db_lifetime mut MetadataDbType,
+}
+
+impl<'metadata_db_lifetime, MetadataDbType: DatasetLookup + MetadataStatistics>
+    ClpSMetadataReader<'metadata_db_lifetime, MetadataDbType>
+{
+    /// Factory function.
+    ///
+    /// # Returns
+    ///
+    /// A newly created [`ClpSMetadataReader`] that reads from `metadata_db`.
+    const fn new(metadata_db: &'metadata_db_lifetime mut MetadataDbType) -> Self {
+        Self { metadata_db }
+    }
+
+    /// # Returns
+    ///
+    /// The names of the live datasets, ordered by name, on success.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    ///
+    /// * Forwards [`DatasetLookup::get_datasets`]'s return values on failure.
+    async fn get_dataset_names(&mut self) -> Result<Vec<DatasetName>, ClientError> {
+        Ok(self
+            .metadata_db
+            .get_datasets()
+            .await?
+            .into_iter()
+            .map(|dataset| dataset.name)
+            .collect())
+    }
+
+    /// # Returns
+    ///
+    /// The earliest and latest log entry timestamps across the archives of `datasets`, or `None`
+    /// when they have no archives, on success.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    ///
+    /// * Forwards [`Self::get_dataset_ids`]'s return values on failure.
+    /// * Forwards [`MetadataStatistics::get_timestamp_bounds`]'s return values on failure.
+    async fn get_time_range(
+        &mut self,
+        datasets: &[DatasetName],
+    ) -> Result<Option<TimeRange>, ClientError> {
+        let dataset_ids = self.get_dataset_ids(datasets).await?;
+        Ok(self
+            .metadata_db
+            .get_timestamp_bounds(&dataset_ids)
+            .await?
+            .map(TimeRange::from))
+    }
+
+    /// # Returns
+    ///
+    /// The total uncompressed and compressed sizes of the archives of every live dataset on
+    /// success.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    ///
+    /// * Forwards [`MetadataStatistics::get_space_savings`]'s return values on failure.
+    /// * Forwards [`SpaceSavings::try_from`]'s return values on failure.
+    async fn get_space_savings(&mut self) -> Result<SpaceSavings, ClientError> {
+        SpaceSavings::try_from(self.metadata_db.get_space_savings().await?)
+    }
+
+    /// # Returns
+    ///
+    /// The ingestion details across the archives of every live dataset, or `None` when there are no
+    /// archives, on success.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    ///
+    /// * Forwards [`DatasetLookup::get_datasets`]'s return values on failure.
+    /// * Forwards [`MetadataStatistics::get_timestamp_bounds`]'s return values on failure.
+    async fn get_ingestion_details(&mut self) -> Result<Option<IngestionDetails>, ClientError> {
+        let dataset_ids: Vec<DatasetId> = self
+            .metadata_db
+            .get_datasets()
+            .await?
+            .into_iter()
+            .map(|dataset| dataset.id)
+            .collect();
+        let bounds = self.metadata_db.get_timestamp_bounds(&dataset_ids).await?;
+        // clp-s has no files table, so it reports no files or messages, as it did when it had
+        // per-dataset files tables that it never filled.
+        Ok(bounds.map(|range| IngestionDetails {
+            begin_timestamp: range.begin_timestamp_millisecs(),
+            end_timestamp: range.end_timestamp_millisecs(),
+            num_files: 0,
+            num_messages: 0,
+        }))
+    }
+
+    /// # Returns
+    ///
+    /// The distinct names of the timestamp columns of the dataset named `dataset`, ordered by name,
+    /// on success.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    ///
+    /// * [`ClientError::DatasetNotFound`] if `dataset` doesn't exist.
+    /// * Forwards [`DatasetLookup::get_dataset_by_name`]'s return values on failure.
+    /// * Forwards [`MetadataStatistics::get_column_names_by_types`]'s return values on failure.
+    async fn get_timestamp_column_names(
+        &mut self,
+        dataset: &DatasetName,
+    ) -> Result<Vec<String>, ClientError> {
+        let dataset_id = self
+            .metadata_db
+            .get_dataset_by_name(dataset)
+            .await?
+            .ok_or_else(|| ClientError::DatasetNotFound(dataset.clone()))?
+            .id;
+        Ok(self
+            .metadata_db
+            .get_column_names_by_types(
+                dataset_id,
+                &[ColumnType::Timestamp, ColumnType::DeprecatedDateString],
+            )
+            .await?)
+    }
+
+    /// # Returns
+    ///
+    /// The IDs of the datasets named in `datasets`, in the same order, on success.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    ///
+    /// * [`ClientError::DatasetNotFound`] if any of `datasets` doesn't exist. The first missing
+    ///   dataset in `datasets` is reported.
+    /// * Forwards [`DatasetLookup::get_dataset_ids_by_names`]'s return values on failure.
+    async fn get_dataset_ids(
+        &mut self,
+        datasets: &[DatasetName],
+    ) -> Result<Vec<DatasetId>, ClientError> {
+        let dataset_ids = self.metadata_db.get_dataset_ids_by_names(datasets).await?;
+        datasets
+            .iter()
+            .map(|dataset| {
+                dataset_ids
+                    .get(dataset)
+                    .copied()
+                    .ok_or_else(|| ClientError::DatasetNotFound(dataset.clone()))
+            })
+            .collect()
+    }
+}
+
 /// A projection of the earliest and latest log entry timestamps aggregated over archives. Both are
 /// `NULL` when there are no archives to aggregate.
 #[derive(Debug, sqlx::FromRow)]
@@ -627,28 +842,18 @@ struct CompressionMetadataRowProjection {
     clp_config: Vec<u8>,
 }
 
-impl TryFrom<CompressionMetadataRowProjection> for CompressionMetadata {
-    type Error = ClientError;
-
-    fn try_from(row: CompressionMetadataRowProjection) -> Result<Self, Self::Error> {
-        let clp_config = ZstdMsgpack::deserialize(&row.clp_config)?;
-        Ok(Self {
-            id: row.id,
-            status: row.status,
-            status_msg: row.status_msg,
-            start_time: row.start_time,
-            update_time: row.update_time,
-            duration: row.duration,
-            uncompressed_size: row.uncompressed_size,
-            compressed_size: row.compressed_size,
-            clp_config,
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
+    use async_trait::async_trait;
     use chrono::DateTime;
+    use clp_metadata_db::ArchiveTimestampRange;
+    use clp_metadata_db::ColumnType;
+    use clp_metadata_db::Dataset;
+    use clp_metadata_db::DatasetConfig;
+    use clp_metadata_db::DatasetLookup;
+    use clp_metadata_db::MetadataStatistics;
     use clp_rust_utils::clp_config::AwsAuthentication;
     use clp_rust_utils::clp_config::AwsCredentials;
     use clp_rust_utils::clp_config::S3Config;
@@ -662,17 +867,153 @@ mod tests {
     use clp_rust_utils::job_config::OutputConfig;
     use clp_rust_utils::job_config::S3InputConfig;
     use clp_rust_utils::serde::ZstdMsgpack;
+    use clp_rust_utils::types::DatasetId;
     use non_empty_string::NonEmptyString;
 
+    use super::ClpSMetadataReader;
     use super::CompressionMetadata;
     use super::CompressionMetadataRowProjection;
     use super::IngestionDetails;
     use super::IngestionDetailsRowProjection;
     use super::QuerySpeed;
     use super::QuerySpeedRowProjection;
+    use super::SpaceSavings;
     use super::TimeRange;
     use super::TimeRangeRowProjection;
+    use crate::error::ClientError;
     use crate::webui_client::WebuiClient;
+
+    /// A column-metadata row.
+    struct StoredColumn {
+        dataset_id: DatasetId,
+        name: &'static str,
+        column_type: ColumnType,
+    }
+
+    /// A metadata database holding the given live datasets, their archives' timestamp bounds and
+    /// their columns, which records the datasets it receives timestamp-bound reads for.
+    #[derive(Default)]
+    struct MockMetadataDb {
+        /// The live datasets, ordered by name as the real lookup guarantees.
+        datasets: Vec<Dataset>,
+
+        timestamp_bounds: HashMap<DatasetId, ArchiveTimestampRange>,
+
+        columns: Vec<StoredColumn>,
+
+        timestamp_bounds_reads: Vec<Vec<DatasetId>>,
+    }
+
+    impl MockMetadataDb {
+        /// Factory function.
+        ///
+        /// # Returns
+        ///
+        /// A metadata database holding the live datasets named `names`, with IDs from `1` in the
+        /// order of `names`.
+        ///
+        /// # Panics
+        ///
+        /// Panics if `names` isn't ordered, or if any of them isn't a valid dataset name.
+        fn with_datasets(names: &[&str]) -> Self {
+            assert!(names.is_sorted(), "the datasets should be ordered by name");
+            let datasets = (1..)
+                .zip(names)
+                .map(|(id, name)| Dataset {
+                    id: DatasetId::from(id),
+                    name: name.parse().expect("the dataset name should be valid"),
+                    config: DatasetConfig {
+                        archive_storage_path: format!("/var/data/archives/{name}"),
+                        retention_period_minutes: None,
+                    },
+                })
+                .collect();
+            Self {
+                datasets,
+                ..Self::default()
+            }
+        }
+    }
+
+    #[async_trait]
+    impl DatasetLookup for MockMetadataDb {
+        async fn get_datasets(&mut self) -> Result<Vec<Dataset>, clp_metadata_db::Error> {
+            Ok(self.datasets.clone())
+        }
+
+        async fn get_dataset_by_name(
+            &mut self,
+            name: &DatasetName,
+        ) -> Result<Option<Dataset>, clp_metadata_db::Error> {
+            Ok(self
+                .datasets
+                .iter()
+                .find(|dataset| dataset.name == *name)
+                .cloned())
+        }
+
+        async fn get_dataset_ids_by_names(
+            &mut self,
+            names: &[DatasetName],
+        ) -> Result<HashMap<DatasetName, DatasetId>, clp_metadata_db::Error> {
+            Ok(self
+                .datasets
+                .iter()
+                .filter(|dataset| names.contains(&dataset.name))
+                .map(|dataset| (dataset.name.clone(), dataset.id))
+                .collect())
+        }
+    }
+
+    #[async_trait]
+    impl MetadataStatistics for MockMetadataDb {
+        async fn get_timestamp_bounds(
+            &mut self,
+            dataset_ids: &[DatasetId],
+        ) -> Result<Option<ArchiveTimestampRange>, clp_metadata_db::Error> {
+            self.timestamp_bounds_reads.push(dataset_ids.to_vec());
+            let ranges: Vec<&ArchiveTimestampRange> = dataset_ids
+                .iter()
+                .filter_map(|dataset_id| self.timestamp_bounds.get(dataset_id))
+                .collect();
+            let begin = ranges
+                .iter()
+                .map(|range| range.begin_timestamp_millisecs())
+                .min();
+            let end = ranges
+                .iter()
+                .map(|range| range.end_timestamp_millisecs())
+                .max();
+            Ok(begin
+                .zip(end)
+                .map(|(begin, end)| ArchiveTimestampRange::new(begin, end))
+                .transpose()?)
+        }
+
+        async fn get_space_savings(
+            &mut self,
+        ) -> Result<clp_metadata_db::SpaceSavings, clp_metadata_db::Error> {
+            unreachable!("the space savings are converted without reading the metadata database")
+        }
+
+        async fn get_column_names_by_types(
+            &mut self,
+            dataset_id: DatasetId,
+            types: &[ColumnType],
+        ) -> Result<Vec<String>, clp_metadata_db::Error> {
+            let mut names: Vec<String> = self
+                .columns
+                .iter()
+                .filter(|column| {
+                    column.dataset_id == dataset_id && types.contains(&column.column_type)
+                })
+                .map(|column| column.name.to_owned())
+                .collect();
+            names.sort();
+            names.dedup();
+            Ok(names)
+        }
+    }
 
     fn non_empty(value: &str) -> NonEmptyString {
         NonEmptyString::new(value.to_owned()).expect("the test value should be non-empty")
@@ -933,6 +1274,163 @@ mod tests {
                 }
             })
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn clp_s_time_range_reports_the_first_missing_dataset() -> anyhow::Result<()> {
+        let mut metadata_db = MockMetadataDb::with_datasets(&["logs", "other"]);
+        let datasets: Vec<DatasetName> = vec![
+            "logs".parse()?,
+            "missing_first".parse()?,
+            "other".parse()?,
+            "missing_second".parse()?,
+        ];
+
+        let error = ClpSMetadataReader::new(&mut metadata_db)
+            .get_time_range(&datasets)
+            .await
+            .expect_err("a missing dataset should fail the read");
+
+        let ClientError::DatasetNotFound(missing_dataset) = error else {
+            panic!("unexpected error: {error:?}");
+        };
+        assert_eq!(missing_dataset, "missing_first".parse::<DatasetName>()?);
+        assert_eq!(
+            metadata_db.timestamp_bounds_reads,
+            Vec::<Vec<DatasetId>>::new()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn clp_s_time_range_covers_only_the_given_datasets() -> anyhow::Result<()> {
+        let mut metadata_db = MockMetadataDb::with_datasets(&["first", "second", "third"]);
+        metadata_db.timestamp_bounds = HashMap::from([
+            (DatasetId::from(1), ArchiveTimestampRange::new(10, 20)?),
+            (DatasetId::from(2), ArchiveTimestampRange::new(1, 5)?),
+            (DatasetId::from(3), ArchiveTimestampRange::new(15, 30)?),
+        ]);
+
+        let time_range = ClpSMetadataReader::new(&mut metadata_db)
+            .get_time_range(&["third".parse()?, "first".parse()?])
+            .await?;
+
+        assert_eq!(
+            time_range,
+            Some(TimeRange {
+                begin_timestamp: 10,
+                end_timestamp: 30,
+            })
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn clp_s_ingestion_details_cover_every_live_dataset_without_files_or_messages()
+    -> anyhow::Result<()> {
+        let mut metadata_db = MockMetadataDb::with_datasets(&["first", "second"]);
+        assert_eq!(
+            ClpSMetadataReader::new(&mut metadata_db)
+                .get_ingestion_details()
+                .await?,
+            None
+        );
+
+        metadata_db.timestamp_bounds = HashMap::from([
+            (DatasetId::from(1), ArchiveTimestampRange::new(10, 20)?),
+            (DatasetId::from(2), ArchiveTimestampRange::new(1, 5)?),
+        ]);
+        assert_eq!(
+            ClpSMetadataReader::new(&mut metadata_db)
+                .get_ingestion_details()
+                .await?,
+            Some(IngestionDetails {
+                begin_timestamp: 1,
+                end_timestamp: 20,
+                num_files: 0,
+                num_messages: 0,
+            })
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn clp_s_timestamp_column_names_are_the_timestamp_columns_of_the_dataset()
+    -> anyhow::Result<()> {
+        let mut metadata_db = MockMetadataDb::with_datasets(&["logs", "other"]);
+        metadata_db.columns = vec![
+            StoredColumn {
+                dataset_id: DatasetId::from(1),
+                name: "ts",
+                column_type: ColumnType::Timestamp,
+            },
+            StoredColumn {
+                dataset_id: DatasetId::from(1),
+                name: "date",
+                column_type: ColumnType::DeprecatedDateString,
+            },
+            StoredColumn {
+                dataset_id: DatasetId::from(1),
+                name: "count",
+                column_type: ColumnType::Integer,
+            },
+            StoredColumn {
+                dataset_id: DatasetId::from(2),
+                name: "other_ts",
+                column_type: ColumnType::Timestamp,
+            },
+        ];
+
+        assert_eq!(
+            ClpSMetadataReader::new(&mut metadata_db)
+                .get_timestamp_column_names(&"logs".parse()?)
+                .await?,
+            vec!["date".to_owned(), "ts".to_owned()]
+        );
+
+        let error = ClpSMetadataReader::new(&mut metadata_db)
+            .get_timestamp_column_names(&"missing".parse()?)
+            .await
+            .expect_err("a missing dataset should fail the read");
+        let ClientError::DatasetNotFound(missing_dataset) = error else {
+            panic!("unexpected error: {error:?}");
+        };
+        assert_eq!(missing_dataset, "missing".parse::<DatasetName>()?);
+        Ok(())
+    }
+
+    #[test]
+    fn clp_s_space_savings_reject_sizes_above_i64_max() -> anyhow::Result<()> {
+        assert_eq!(
+            SpaceSavings::try_from(clp_metadata_db::SpaceSavings {
+                num_uncompressed_bytes: 100,
+                num_compressed_bytes: 10,
+            })?,
+            SpaceSavings {
+                total_uncompressed_size: 100,
+                total_compressed_size: 10,
+            }
+        );
+
+        let out_of_range_size = u64::try_from(i64::MAX)? + 1;
+        for space_savings in [
+            clp_metadata_db::SpaceSavings {
+                num_uncompressed_bytes: out_of_range_size,
+                num_compressed_bytes: 10,
+            },
+            clp_metadata_db::SpaceSavings {
+                num_uncompressed_bytes: 100,
+                num_compressed_bytes: out_of_range_size,
+            },
+        ] {
+            let error = SpaceSavings::try_from(space_savings)
+                .expect_err("a size above `i64::MAX` should be rejected");
+            assert!(
+                matches!(error, ClientError::ArchiveSizeOutOfRange(size) if size == out_of_range_size),
+                "unexpected error: {error:?}"
+            );
+        }
         Ok(())
     }
 }

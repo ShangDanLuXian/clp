@@ -40,6 +40,7 @@ fn log_unexpected_error(operation: &str, error: &ClientError) {
             LogsInputError::NotFound(_) | LogsInputError::OutsideMountPoint(_),
         ) => {}
         ClientError::Sql(_)
+        | ClientError::MetadataDb(_)
         | ClientError::Mongo(_)
         | ClientError::QueryNotSucceeded
         | ClientError::Io(_)
@@ -59,6 +60,7 @@ fn log_unexpected_error(operation: &str, error: &ClientError) {
             | LogsInputError::Unresolvable { .. },
         )
         | ClientError::CompressionJobIdOutOfRange(_)
+        | ClientError::ArchiveSizeOutOfRange(_)
         | ClientError::Telemetry(_) => {
             tracing::error!(operation, error = ? error, "WebUI API request failed.");
         }

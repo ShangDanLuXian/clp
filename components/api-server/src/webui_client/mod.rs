@@ -2,6 +2,7 @@
 
 mod compression;
 mod logs_input;
+#[expect(dead_code, reason = "wired up by the shared metadata tables switch")]
 mod metadata;
 mod stream_files;
 

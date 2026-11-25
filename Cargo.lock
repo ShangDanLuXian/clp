@@ -101,10 +101,12 @@ version = "0.13.1-dev"
 dependencies = [
  "anyhow",
  "async-stream",
+ "async-trait",
  "aws-sdk-s3",
  "axum",
  "chrono",
  "clap",
+ "clp-metadata-db",
  "clp-rust-utils",
  "futures",
  "http-body-util",
