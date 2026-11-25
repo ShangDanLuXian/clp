@@ -10,9 +10,11 @@ path = "src/lib.rs"
 [dependencies]
 async-trait = { workspace = true }
 clp-rust-utils = { workspace = true }
+serde = { workspace = true }
 sqlx = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }
+serde_json = { workspace = true }
 tokio = { workspace = true, features = ["macros", "sync"] }

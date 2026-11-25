@@ -11,6 +11,7 @@ use clp_rust_utils::job_config::CompressionJobId;
 use clp_rust_utils::task_io::compression::ClpSCompressionOption;
 use clp_rust_utils::task_io::compression::FsInputSource;
 use clp_rust_utils::task_io::compression::S3InputSource;
+use clp_rust_utils::types::DatasetId;
 use serde::Deserialize;
 use serde::Serialize;
 use spider_core::task::ExecutionPolicy;
@@ -30,6 +31,13 @@ pub enum CompressionJobOutcome {
 
     /// The job was cancelled before reaching completion.
     Cancelled,
+}
+
+/// The dataset a compression job compresses into.
+#[derive(Debug, PartialEq, Eq)]
+pub struct TargetDataset {
+    pub name: DatasetName,
+    pub id: DatasetId,
 }
 
 /// Associates a compression input manifest with its Spider task and input type.
@@ -84,7 +92,7 @@ pub trait CompressionJobSubmitter: Clone + Send + Sync {
         compression_job_id: CompressionJobId,
         resource_group_id: ResourceGroupId,
         clp_s_option: ClpSCompressionOption,
-        dataset: DatasetName,
+        dataset: TargetDataset,
         input_sources: Vec<(ManifestType, ExecutionPolicy)>,
         commit_task_execution_policy: ExecutionPolicy,
     ) -> Result<JobId, Error>;

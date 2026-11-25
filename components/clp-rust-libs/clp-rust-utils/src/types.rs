@@ -13,11 +13,73 @@ use sqlx::error::BoxDynError;
 use sqlx::mysql::MySqlTypeInfo;
 use sqlx::mysql::MySqlValueRef;
 
-/// An archive's UUID. External storage keys and database values use its canonical text form.
+/// The 16 bytes of a UUID.
+pub type UuidBytes = uuid::Bytes;
+
+/// An archive's ID, the archive's identifier in the metadata database (`clp_archives.id`). IDs grow
+/// in insertion order.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
+pub struct ArchiveId {
+    value: u64,
+}
+
+impl Display for ArchiveId {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        self.value.fmt(formatter)
+    }
+}
+
+impl From<u64> for ArchiveId {
+    fn from(value: u64) -> Self {
+        Self { value }
+    }
+}
+
+crate::impl_sqlx_type!(ArchiveId => u64);
+
+impl sqlx::Encode<'_, MySql> for ArchiveId {
+    fn encode_by_ref(&self, buf: &mut Vec<u8>) -> Result<IsNull, BoxDynError> {
+        <u64 as sqlx::Encode<MySql>>::encode_by_ref(&self.value, buf)
+    }
+}
+
+impl<'decode> sqlx::Decode<'decode, MySql> for ArchiveId {
+    fn decode(value: MySqlValueRef<'decode>) -> Result<Self, BoxDynError> {
+        Ok(Self {
+            value: <u64 as sqlx::Decode<MySql>>::decode(value)?,
+        })
+    }
+}
+
+/// An archive's UUID, which names the archive's storage object. External storage keys and the
+/// [`sqlx`] encoding use its canonical text form.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(transparent)]
 pub struct ArchiveUuid {
     value: uuid::Uuid,
+}
+
+impl ArchiveUuid {
+    /// Factory function.
+    ///
+    /// # Returns
+    ///
+    /// The archive UUID whose bytes are `bytes`.
+    #[must_use]
+    pub const fn from_bytes(bytes: UuidBytes) -> Self {
+        Self {
+            value: uuid::Uuid::from_bytes(bytes),
+        }
+    }
+
+    /// # Returns
+    ///
+    /// The 16 bytes of the archive UUID.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &UuidBytes {
+        self.value.as_bytes()
+    }
 }
 
 impl FromStr for ArchiveUuid {

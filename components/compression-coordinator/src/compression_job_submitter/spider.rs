@@ -3,7 +3,6 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
-use clp_rust_utils::dataset::DatasetName;
 use clp_rust_utils::job_config::CompressionJobId;
 use clp_rust_utils::task_io::compression::ClpSCompressionOption;
 use spider_client::SpiderClient;
@@ -24,6 +23,7 @@ use spider_core::types::io::TaskGraphInputBuilder;
 use crate::compression_job_submitter::CompressionJobOutcome;
 use crate::compression_job_submitter::CompressionJobSubmitter;
 use crate::compression_job_submitter::CompressionManifest;
+use crate::compression_job_submitter::TargetDataset;
 use crate::error::Error;
 
 #[async_trait]
@@ -39,7 +39,7 @@ impl CompressionJobSubmitter for SpiderClient {
         compression_job_id: CompressionJobId,
         resource_group_id: ResourceGroupId,
         clp_s_option: ClpSCompressionOption,
-        dataset: DatasetName,
+        dataset: TargetDataset,
         input_sources: Vec<(ManifestType, ExecutionPolicy)>,
         commit_task_execution_policy: ExecutionPolicy,
     ) -> Result<JobId, Error> {
@@ -131,7 +131,7 @@ impl CompressionJobSubmitter for SpiderClient {
 /// * Forwards [`TaskGraphInputBuilder::append_task_input`]'s return values on failure.
 fn build_compression_task_graph<ManifestType: CompressionManifest>(
     clp_s_option: &ClpSCompressionOption,
-    dataset: &DatasetName,
+    dataset: &TargetDataset,
     input_sources: Vec<(ManifestType, ExecutionPolicy)>,
     commit_task_execution_policy: ExecutionPolicy,
 ) -> Result<(TaskGraph, TaskGraphInput), Error> {
@@ -149,7 +149,8 @@ fn build_compression_task_graph<ManifestType: CompressionManifest>(
 
     let mut inputs = TaskGraphInputBuilder::new();
     let compression_option_input = inputs.create_shared_input_payload(clp_s_option)?;
-    let dataset_input = inputs.create_shared_input_payload(dataset)?;
+    let dataset_input = inputs.create_shared_input_payload(&dataset.name)?;
+    let dataset_id_input = inputs.create_shared_input_payload(&dataset.id)?;
     for (input_source, execution_policy) in input_sources {
         graph.insert_task(TaskDescriptor {
             tdl_context: TdlContext {
@@ -162,6 +163,7 @@ fn build_compression_task_graph<ManifestType: CompressionManifest>(
                     "ClpSCompressionOption",
                 )?),
                 DataTypeDescriptor::Value(ValueTypeDescriptor::struct_from_name("DatasetName")?),
+                DataTypeDescriptor::Value(ValueTypeDescriptor::struct_from_name("DatasetId")?),
                 DataTypeDescriptor::Value(ValueTypeDescriptor::struct_from_name(
                     ManifestType::TYPE_NAME,
                 )?),
@@ -173,6 +175,7 @@ fn build_compression_task_graph<ManifestType: CompressionManifest>(
         })?;
         inputs.append_shared_task_input(compression_option_input)?;
         inputs.append_shared_task_input(dataset_input)?;
+        inputs.append_shared_task_input(dataset_id_input)?;
         inputs.append_task_input(&input_source)?;
     }
 
@@ -184,8 +187,10 @@ mod tests {
     use std::fmt::Debug;
 
     use clp_rust_utils::clp_config::AwsAuthentication;
+    use clp_rust_utils::dataset::DatasetName;
     use clp_rust_utils::task_io::compression::FsInputSource;
     use clp_rust_utils::task_io::compression::S3InputSource;
+    use clp_rust_utils::types::DatasetId;
     use clp_rust_utils::types::non_empty_string::ExpectedNonEmpty;
     use non_empty_string::NonEmptyString;
     use serde::de::DeserializeOwned;
@@ -226,7 +231,10 @@ mod tests {
             unstructured: false,
         };
 
-        let dataset = DatasetName::default();
+        let dataset = TargetDataset {
+            name: DatasetName::default(),
+            id: DatasetId::from(3),
+        };
         let policy = ExecutionPolicy {
             max_num_retry: 2,
             ..ExecutionPolicy::default()
@@ -252,9 +260,14 @@ mod tests {
             }
         );
         assert_eq!(task.get_execution_policy(), &policy);
-        for (index, expected_type) in ["ClpSCompressionOption", "DatasetName", type_name]
-            .into_iter()
-            .enumerate()
+        for (index, expected_type) in [
+            "ClpSCompressionOption",
+            "DatasetName",
+            "DatasetId",
+            type_name,
+        ]
+        .into_iter()
+        .enumerate()
         {
             assert_eq!(
                 graph
@@ -299,9 +312,13 @@ mod tests {
             rmp_serde::from_slice::<ClpSCompressionOption>(payloads[0])?,
             OPTIONS
         );
-        assert_eq!(rmp_serde::from_slice::<DatasetName>(payloads[1])?, dataset);
         assert_eq!(
-            &rmp_serde::from_slice::<ManifestType>(payloads[2])?,
+            rmp_serde::from_slice::<DatasetName>(payloads[1])?,
+            dataset.name
+        );
+        assert_eq!(rmp_serde::from_slice::<DatasetId>(payloads[2])?, dataset.id);
+        assert_eq!(
+            &rmp_serde::from_slice::<ManifestType>(payloads[3])?,
             manifest
         );
         Ok(())
