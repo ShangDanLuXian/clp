@@ -8,16 +8,23 @@ name = "clp_package_cli"
 path = "src/lib.rs"
 
 [[bin]]
+name = "archive-manager"
+path = "src/bin/archive_manager.rs"
+
+[[bin]]
 name = "db-table-creator"
 path = "src/bin/db_table_creator.rs"
 
 [dependencies]
 anyhow = { workspace = true }
+aws-sdk-s3 = { workspace = true }
 clap = { workspace = true }
 clp-metadata-db = { workspace = true }
 clp-rust-utils = { workspace = true }
+non-empty-string = { workspace = true }
 secrecy = { workspace = true }
-tokio = { workspace = true, features = ["macros"] }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["fs", "macros"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 

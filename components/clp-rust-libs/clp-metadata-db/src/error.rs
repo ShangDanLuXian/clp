@@ -1,5 +1,6 @@
 //! The error type of every metadata database operation.
 
+use clp_rust_utils::types::ArchiveUuid;
 use clp_rust_utils::types::DatasetId;
 
 use crate::types::DatasetConfig;
@@ -28,6 +29,11 @@ pub enum Error {
     /// settings than requested.
     #[error("the dataset exists with other settings: {existing:?}")]
     DatasetConfigMismatch { existing: DatasetConfig },
+
+    /// [`crate::ArchiveLookup::find_archive_ids_by_uuids`] found more than one archive with the
+    /// same UUID.
+    #[error("more than one archive has the UUID {uuid}")]
+    AmbiguousArchiveUuid { uuid: ArchiveUuid },
 
     /// Forwarded `sqlx` errors, including row decode errors (e.g. a UUID that isn't 16 bytes).
     #[error(transparent)]

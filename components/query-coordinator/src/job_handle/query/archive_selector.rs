@@ -165,6 +165,7 @@ mod tests {
 
     use async_trait::async_trait;
     use clp_metadata_db::ArchiveLookup;
+    use clp_metadata_db::ArchiveMetadata as StoredArchiveMetadata;
     use clp_metadata_db::Dataset;
     use clp_metadata_db::DatasetLookup;
     use clp_metadata_db::QueryArchive;
@@ -173,6 +174,7 @@ mod tests {
     use clp_rust_utils::job_config::SearchQuery;
     use clp_rust_utils::job_config::TimeRange;
     use clp_rust_utils::types::ArchiveId;
+    use clp_rust_utils::types::ArchiveUuid;
     use clp_rust_utils::types::DatasetId;
     use clp_rust_utils::types::non_empty_string::ExpectedNonEmpty;
     use non_empty_string::NonEmptyString;
@@ -246,6 +248,29 @@ mod tests {
                 job_creation_timestamp_millisecs,
             });
             Ok(self.archives.get(&dataset_id).cloned().unwrap_or_default())
+        }
+
+        async fn find_archives_by_time_range(
+            &mut self,
+            _dataset_id: DatasetId,
+            _time_range: &TimeRange,
+        ) -> Result<Vec<StoredArchiveMetadata>, clp_metadata_db::Error> {
+            unreachable!("archive selection doesn't select archives by time range")
+        }
+
+        async fn find_archives_by_ids(
+            &mut self,
+            _ids: &[ArchiveId],
+        ) -> Result<Vec<Option<StoredArchiveMetadata>>, clp_metadata_db::Error> {
+            unreachable!("archive selection doesn't look up archives by ID")
+        }
+
+        async fn find_archive_ids_by_uuids(
+            &mut self,
+            _dataset_id: DatasetId,
+            _uuids: &[ArchiveUuid],
+        ) -> Result<Vec<Option<ArchiveId>>, clp_metadata_db::Error> {
+            unreachable!("archive selection doesn't resolve archive UUIDs")
         }
     }
 
