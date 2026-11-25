@@ -496,10 +496,10 @@ impl ArchiveFinisher {
 ///
 /// Returns an error if:
 ///
-/// * Forwards [`tokio::task::JoinSet::join_next`]'s task-join errors on failure.
+/// * Forwards [`tokio::task::JoinSet::join_next`]'s return values on failure.
 /// * Forwards [`ArchiveFinisher::finish`]'s return values on failure.
 /// * Forwards [`run_clp_s`]'s return values on failure.
-/// * Forwards [`drain_finishers`]'s collected error, if any.
+/// * Forwards [`drain_finishers`]'s return values on failure.
 ///
 /// # Panics
 ///

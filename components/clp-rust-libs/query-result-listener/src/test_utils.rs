@@ -13,10 +13,10 @@ use crate::encoding::ResultEncoding;
 /// The UUID of the archive that the tests' query tasks search.
 pub const ARCHIVE_UUID: &str = "018e90e5-8b2a-4a61-a2fc-cac799936caf";
 
-/// The ID of an archive other than [`ARCHIVE_UUID`].
+/// The UUID of an archive other than [`ARCHIVE_UUID`].
 pub const OTHER_ARCHIVE_UUID: &str = "4b0c2f8e-6d13-4f4e-9a57-1c2d3e4f5a6b";
 
-/// The ID of an archive for which a [`FallibleQueryResultEncoder`] can't be created.
+/// The UUID of an archive for which a [`FallibleQueryResultEncoder`] can't be created.
 pub const UNENCODABLE_ARCHIVE_UUID: &str = "9c3e5a71-2f4b-4d8e-b6a0-7e1f2d3c4b5a";
 
 /// A message that a [`FallibleQueryResultEncoder`] can't encode.

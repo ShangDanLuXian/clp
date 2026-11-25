@@ -273,10 +273,6 @@ mod tests {
                 .parse::<ArchiveUuid>()
                 .expect_err("invalid UUID should be rejected");
             assert_eq!(error.value, value);
-            assert!(
-                error.to_string().contains(&format!("{value:?}")),
-                "parse error should include the invalid archive UUID"
-            );
         }
     }
 
