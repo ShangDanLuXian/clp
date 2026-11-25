@@ -1,16 +1,11 @@
 //! Shared helpers for archive planning.
 
 use std::collections::HashSet;
-use std::num::NonZeroU64;
 
-use clp_rust_utils::clp_config::package::config::Database;
 use clp_rust_utils::dataset::DatasetName;
 use clp_rust_utils::dataset::NonEmptyDatasetNames;
 use spider_core::task::ExecutionPolicy;
 use spider_core::task::TimeoutPolicy;
-use sqlx::MySqlPool;
-
-use crate::Error;
 
 pub(super) const SEARCH_TIMEOUT_RATES: ArchiveTaskTimeoutRates = ArchiveTaskTimeoutRates {
     soft_millisecs_per_mib: 10,
@@ -59,55 +54,6 @@ impl<'dataset_lifetime> From<&'dataset_lifetime NonEmptyDatasetNames>
     }
 }
 
-/// Checks that every requested dataset exists in the metadata database.
-///
-/// # Errors
-///
-/// Returns an error if:
-///
-/// * [`Error::InvalidQueryJobConfig`] if any requested dataset doesn't exist.
-/// * Forwards [`sqlx::query::QueryScalar::fetch_one`]'s return values on failure.
-pub(super) async fn ensure_datasets_exist(
-    db_pool: &MySqlPool,
-    db_config: &Database,
-    datasets: &NonEmptyDatasetNameSet<'_>,
-) -> Result<(), Error> {
-    let datasets_table = db_config.datasets_table_name();
-    let mut query_builder = sqlx::QueryBuilder::<sqlx::MySql>::new(format!(
-        "SELECT COUNT(*) FROM `{datasets_table}` WHERE CAST(`name` AS BINARY) IN ("
-    ));
-    let mut separated_datasets = query_builder.separated(", ");
-    for dataset in datasets.iter() {
-        separated_datasets.push_bind(dataset);
-    }
-    query_builder.push(")");
-
-    let num_existing_datasets: i64 = query_builder
-        .build_query_scalar()
-        .fetch_one(db_pool)
-        .await?;
-    if usize::try_from(num_existing_datasets).ok() != Some(datasets.len()) {
-        return Err(Error::InvalidQueryJobConfig(
-            "one or more requested datasets don't exist".to_owned(),
-        ));
-    }
-
-    Ok(())
-}
-
-/// Computes the retention cutoff relative to the job's creation time.
-///
-/// # Returns
-///
-/// The inclusive lower bound on archive end timestamps in Unix epoch milliseconds.
-pub(super) const fn retention_cutoff_millisecs(
-    job_creation_timestamp_millisecs: i64,
-    archive_retention_period_millisecs: NonZeroU64,
-) -> i64 {
-    job_creation_timestamp_millisecs
-        .saturating_sub_unsigned(archive_retention_period_millisecs.get())
-}
-
 /// Derives a task's execution policy from the size of the archive it processes.
 ///
 /// The soft timeout is an aggressive estimate of the task's execution time, whereas the hard
@@ -150,26 +96,8 @@ pub(super) fn task_execution_policy(
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU64;
-
     use super::SEARCH_TIMEOUT_RATES;
-    use super::retention_cutoff_millisecs;
     use super::task_execution_policy;
-
-    #[test]
-    fn retention_cutoff_is_relative_to_job_creation() {
-        assert_eq!(
-            retention_cutoff_millisecs(
-                1500,
-                NonZeroU64::new(1000).expect("1000 is a positive retention period")
-            ),
-            500
-        );
-        assert_eq!(
-            retention_cutoff_millisecs(i64::MIN, NonZeroU64::MIN),
-            i64::MIN
-        );
-    }
 
     #[test]
     fn search_task_timeouts_scale_with_archive_size_and_respect_limits() {

@@ -1,25 +1,85 @@
-//! The archive operations: [`ArchiveManagement`].
+//! The archive operations: [`ArchiveLookup`] and [`ArchiveManagement`].
+
+use std::num::NonZeroU32;
 
 use async_trait::async_trait;
 use clp_rust_utils::clp_config::package::config::MetadataTables;
 use clp_rust_utils::job_config::CompressionJobId;
+use clp_rust_utils::job_config::TimeRange;
 use clp_rust_utils::types::ArchiveId;
 use clp_rust_utils::types::DatasetId;
 use sqlx::MySql;
 use sqlx::MySqlConnection;
 use sqlx::QueryBuilder;
 
+use super::ArchiveLookup;
 use super::ArchiveManagement;
 use super::MAX_BATCH_SIZE;
 use crate::client::ClpDbTransaction;
 use crate::client::Handle;
 use crate::client::HandleParts;
 use crate::error::Error;
+use crate::stored::StoredArchiveUuid;
 use crate::types::ArchiveDescriptor;
 use crate::types::ArchiveTimestampRange;
+use crate::types::QueryArchive;
 
 /// The span above which an archive also gets a `clp_long_span_archives` row (24 hours).
 const MAX_SPAN_MILLISECS: u64 = 24 * 60 * 60 * 1000;
+
+#[async_trait]
+impl<HandleType: Handle> ArchiveLookup for HandleType {
+    async fn find_archives_for_query(
+        &mut self,
+        dataset_id: DatasetId,
+        time_range: &TimeRange,
+        retention_period_minutes: Option<NonZeroU32>,
+        job_creation_timestamp_millisecs: i64,
+    ) -> Result<Vec<QueryArchive>, Error> {
+        const MILLISECS_PER_MINUTE: u64 = 60 * 1000;
+
+        let HandleParts { tables, connection } = self.parts();
+        let mut query_builder = QueryBuilder::<MySql>::new(format!(
+            "SELECT a.`id`, a.`uuid`, a.`num_uncompressed_bytes`, a.`end_timestamp_millisecs` \
+             FROM `{}` a JOIN `{}` d ON d.`id` = a.`dataset_id` WHERE d.`is_deleted` = FALSE AND \
+             a.`dataset_id` = ",
+            tables.archives(),
+            tables.datasets()
+        ));
+        query_builder.push_bind(dataset_id);
+        if let Some(end_timestamp) = time_range.end_timestamp_millisecs() {
+            query_builder
+                .push(" AND a.`begin_timestamp_millisecs` <= ")
+                .push_bind(end_timestamp);
+        }
+        if let Some(begin_timestamp) = time_range.begin_timestamp_millisecs() {
+            query_builder
+                .push(" AND a.`end_timestamp_millisecs` >= ")
+                .push_bind(begin_timestamp);
+        }
+        if let Some(retention_period_minutes) = retention_period_minutes {
+            let retention_cutoff_millisecs = job_creation_timestamp_millisecs
+                .saturating_sub_unsigned(
+                    u64::from(retention_period_minutes.get()).saturating_mul(MILLISECS_PER_MINUTE),
+                );
+            query_builder
+                .push(" AND (a.`end_timestamp_millisecs` >= ")
+                .push_bind(retention_cutoff_millisecs)
+                .push(" OR a.`end_timestamp_millisecs` = ")
+                .push_bind(ArchiveTimestampRange::WITHOUT_TIMESTAMPS.end_timestamp_millisecs())
+                .push(")");
+        }
+        query_builder.push(" ORDER BY a.`end_timestamp_millisecs` DESC");
+
+        Ok(query_builder
+            .build_query_as::<QueryArchiveRow>()
+            .fetch_all(connection)
+            .await?
+            .into_iter()
+            .map(QueryArchive::from)
+            .collect())
+    }
+}
 
 #[async_trait]
 impl ArchiveManagement for ClpDbTransaction<'_> {
@@ -150,6 +210,27 @@ impl ArchiveInsertion<'_> {
         });
         let result = query_builder.build().execute(&mut *self.connection).await?;
         Ok(ArchiveId::from(result.last_insert_id()))
+    }
+}
+
+/// The columns of an archives row that a query selects.
+#[derive(sqlx::FromRow)]
+struct QueryArchiveRow {
+    id: ArchiveId,
+    #[sqlx(try_from = "Vec<u8>")]
+    uuid: StoredArchiveUuid,
+    num_uncompressed_bytes: u64,
+    end_timestamp_millisecs: i64,
+}
+
+impl From<QueryArchiveRow> for QueryArchive {
+    fn from(row: QueryArchiveRow) -> Self {
+        Self {
+            id: row.id,
+            uuid: row.uuid.value,
+            num_uncompressed_bytes: row.num_uncompressed_bytes,
+            end_timestamp_millisecs: row.end_timestamp_millisecs,
+        }
     }
 }
 

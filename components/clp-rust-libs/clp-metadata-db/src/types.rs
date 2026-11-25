@@ -3,6 +3,7 @@
 use std::num::NonZeroU32;
 
 use clp_rust_utils::dataset::DatasetName;
+use clp_rust_utils::types::ArchiveId;
 use clp_rust_utils::types::ArchiveUuid;
 use clp_rust_utils::types::DatasetId;
 use serde::Deserialize;
@@ -139,6 +140,15 @@ pub struct ArchiveDescriptor {
     pub timestamp_range: ArchiveTimestampRange,
     pub num_uncompressed_bytes: u64,
     pub num_compressed_bytes: u64,
+}
+
+/// A stored archive, as a query selects it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct QueryArchive {
+    pub id: ArchiveId,
+    pub uuid: ArchiveUuid,
+    pub num_uncompressed_bytes: u64,
+    pub end_timestamp_millisecs: i64,
 }
 
 /// The fields of an [`ArchiveTimestampRange`] before its invariant is checked.

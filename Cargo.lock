@@ -3345,6 +3345,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "clap",
+ "clp-metadata-db",
  "clp-rust-utils",
  "const_format",
  "non-empty-string",
