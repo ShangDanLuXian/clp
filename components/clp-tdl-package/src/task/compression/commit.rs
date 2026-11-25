@@ -441,6 +441,7 @@ mod tests {
     //! `cargo test -p clp-tdl-package -- --ignored`.
 
     use clp_metadata_db::ArchiveDescriptor;
+    use clp_metadata_db::ArchiveLookup;
     use clp_metadata_db::ArchiveTimestampRange;
     use clp_metadata_db::ClpDbClient;
     use clp_metadata_db::DatasetConfig;
@@ -452,6 +453,7 @@ mod tests {
     use clp_rust_utils::job_config::COMPRESSION_JOBS_TABLE_NAME;
     use clp_rust_utils::job_config::CompressionJobId;
     use clp_rust_utils::job_config::CompressionJobStatus;
+    use clp_rust_utils::job_config::TimeRange;
     use clp_rust_utils::task_io::compression::ArchiveMetadata;
     use clp_rust_utils::task_io::compression::CompressionTaskOutput;
     use clp_rust_utils::types::ArchiveUuid;
@@ -619,24 +621,15 @@ mod tests {
     ///
     /// Panics if the archives can't be read.
     async fn archive_uuids(client: &ClpDbClient, dataset_id: DatasetId) -> Vec<ArchiveUuid> {
-        let query = format!(
-            "SELECT `uuid` FROM `{}` WHERE `dataset_id` = ? ORDER BY `end_timestamp_millisecs` \
-             DESC",
-            Database::default().metadata_tables().archives()
-        );
-        let mut transaction = client.begin().await.expect("a transaction should begin");
-        sqlx::query_scalar::<_, Vec<u8>>(&query)
-            .bind(dataset_id)
-            .fetch_all(&mut **transaction.sqlx_transaction())
+        client
+            .acquire()
+            .await
+            .expect("a connection should be acquired")
+            .find_archives_for_query(dataset_id, &TimeRange::default(), None, 0)
             .await
             .expect("the archives should be readable")
             .into_iter()
-            .map(|uuid| {
-                ArchiveUuid::from_bytes(
-                    uuid.try_into()
-                        .expect("a stored archive UUID should be 16 bytes"),
-                )
-            })
+            .map(|archive| archive.uuid)
             .collect()
     }
 

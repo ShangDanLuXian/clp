@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use clp_metadata_db::ArchiveDescriptor;
+use clp_metadata_db::ArchiveLookup;
 use clp_metadata_db::ArchiveManagement;
 use clp_metadata_db::ArchiveTimestampRange;
 use clp_metadata_db::ClpDbClient;
@@ -21,10 +22,12 @@ use clp_metadata_db::DatasetDescriptor;
 use clp_metadata_db::DatasetLookup;
 use clp_metadata_db::DatasetManagement;
 use clp_metadata_db::Error;
+use clp_metadata_db::QueryArchive;
 use clp_rust_utils::clp_config::package::config::Database;
 use clp_rust_utils::clp_config::package::config::MetadataTables;
 use clp_rust_utils::dataset::DatasetName;
 use clp_rust_utils::job_config::CompressionJobId;
+use clp_rust_utils::job_config::TimeRange;
 use clp_rust_utils::types::ArchiveId;
 use clp_rust_utils::types::ArchiveUuid;
 use clp_rust_utils::types::DatasetId;
@@ -297,6 +300,17 @@ fn timestamp_range(begin: i64, end: i64) -> ArchiveTimestampRange {
     ArchiveTimestampRange::new(begin, end).expect("the range should be valid")
 }
 
+/// # Returns
+///
+/// The time range `[begin, end]`, where `None` leaves a side unbounded.
+///
+/// # Panics
+///
+/// Panics if `begin` exceeds `end`.
+fn time_range(begin: Option<i64>, end: Option<i64>) -> TimeRange {
+    TimeRange::new(begin, end).expect("the time range should be valid")
+}
+
 #[tokio::test]
 #[ignore = "requires MariaDB"]
 async fn create_tables_is_idempotent_and_leaves_the_tables_empty() -> anyhow::Result<()> {
@@ -532,6 +546,12 @@ async fn lookups_and_statistics_skip_deleted_datasets() -> anyhow::Result<()> {
             .await?,
         HashMap::from([(live.name, live_id)])
     );
+    assert_eq!(
+        connection
+            .find_archives_for_query(deleted_id, &TimeRange::default(), None, 0)
+            .await?,
+        []
+    );
     Ok(())
 }
 
@@ -763,6 +783,93 @@ async fn insert_archives_sees_a_mark_committed_after_its_snapshot() -> anyhow::R
         matches!(error, Error::DatasetDeleted),
         "unexpected error: {error:?}"
     );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires MariaDB"]
+async fn find_archives_for_query_applies_the_time_and_retention_filters() -> anyhow::Result<()> {
+    const JOB_CREATION_TIMESTAMP_MILLISECS: i64 = 10 * 60 * 1000;
+
+    let test_db = TestDb::create("find_archives_for_query").await;
+    let dataset_id = test_db.create_dataset(&dataset_descriptor("logs")).await;
+    let other_dataset_id = test_db.create_dataset(&dataset_descriptor("other")).await;
+    let minute = 60 * 1000;
+    let archives = [
+        ArchiveDescriptor {
+            uuid: archive_uuid(1),
+            timestamp_range: timestamp_range(minute, 2 * minute),
+            ..BASE_ARCHIVE
+        },
+        ArchiveDescriptor {
+            uuid: archive_uuid(2),
+            timestamp_range: timestamp_range(3 * minute, 5 * minute),
+            num_uncompressed_bytes: 7,
+            ..BASE_ARCHIVE
+        },
+        ArchiveDescriptor {
+            uuid: archive_uuid(3),
+            ..BASE_ARCHIVE
+        },
+        ArchiveDescriptor {
+            uuid: archive_uuid(4),
+            timestamp_range: timestamp_range(6 * minute, 9 * minute),
+            ..BASE_ARCHIVE
+        },
+    ];
+    let ids = test_db.insert_archives(dataset_id, &archives).await;
+    test_db
+        .insert_archives(
+            other_dataset_id,
+            &[ArchiveDescriptor {
+                uuid: archive_uuid(5),
+                timestamp_range: timestamp_range(minute, 9 * minute),
+                ..BASE_ARCHIVE
+            }],
+        )
+        .await;
+    let query_archive = |index: usize| QueryArchive {
+        id: ids[index],
+        uuid: archives[index].uuid,
+        num_uncompressed_bytes: archives[index].num_uncompressed_bytes,
+        end_timestamp_millisecs: archives[index].timestamp_range.end_timestamp_millisecs(),
+    };
+
+    let mut connection = test_db.client.acquire().await?;
+    for (time_range, retention_period_minutes, expected_indices) in [
+        (TimeRange::default(), None, vec![3, 1, 0, 2]),
+        (time_range(Some(5 * minute), None), None, vec![3, 1]),
+        (time_range(None, Some(3 * minute)), None, vec![1, 0, 2]),
+        (
+            time_range(Some(2 * minute), Some(6 * minute)),
+            None,
+            vec![3, 1, 0],
+        ),
+        (time_range(Some(-minute), Some(0)), None, vec![2]),
+        (TimeRange::default(), NonZeroU32::new(5), vec![3, 1, 2]),
+        (TimeRange::default(), NonZeroU32::new(4), vec![3, 2]),
+        (
+            TimeRange::default(),
+            NonZeroU32::new(u32::MAX),
+            vec![3, 1, 0, 2],
+        ),
+    ] {
+        assert_eq!(
+            connection
+                .find_archives_for_query(
+                    dataset_id,
+                    &time_range,
+                    retention_period_minutes,
+                    JOB_CREATION_TIMESTAMP_MILLISECS,
+                )
+                .await?,
+            expected_indices
+                .iter()
+                .map(|index| query_archive(*index))
+                .collect::<Vec<_>>(),
+            "time range {time_range:?}, retention period {retention_period_minutes:?}"
+        );
+    }
     Ok(())
 }
 

@@ -4,16 +4,19 @@ mod archive;
 mod dataset;
 
 use std::collections::HashMap;
+use std::num::NonZeroU32;
 
 use async_trait::async_trait;
 use clp_rust_utils::dataset::DatasetName;
 use clp_rust_utils::job_config::CompressionJobId;
+use clp_rust_utils::job_config::TimeRange;
 use clp_rust_utils::types::DatasetId;
 
 use crate::error::Error;
 use crate::types::ArchiveDescriptor;
 use crate::types::Dataset;
 use crate::types::DatasetDescriptor;
+use crate::types::QueryArchive;
 
 /// Reads of datasets. Every read skips datasets marked as deleted.
 #[async_trait]
@@ -105,6 +108,39 @@ pub trait DatasetManagement {
         &mut self,
         descriptor: &DatasetDescriptor,
     ) -> Result<DatasetId, Error>;
+}
+
+/// Reads of archives. Every read skips the archives of datasets marked as deleted.
+#[async_trait]
+pub trait ArchiveLookup {
+    /// # Parameters
+    ///
+    /// * `dataset_id` - The dataset whose archives to select.
+    /// * `time_range` - The query's time range.
+    /// * `retention_period_minutes` - The package-wide retention period, if any.
+    /// * `job_creation_timestamp_millisecs` - The query job's creation time, which the retention
+    ///   period counts back from.
+    ///
+    /// # Returns
+    ///
+    /// The archives of the live dataset that overlap `time_range` and whose end timestamp is within
+    /// `retention_period_minutes` of `job_creation_timestamp_millisecs` (no bound if `None`),
+    /// ordered by descending end timestamp, on success. Archives without timestamps pass the
+    /// retention bound and come last, as today.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    ///
+    /// * [`Error::Sqlx`] if a statement fails or a row can't be decoded (e.g. a stored UUID that
+    ///   isn't 16 bytes).
+    async fn find_archives_for_query(
+        &mut self,
+        dataset_id: DatasetId,
+        time_range: &TimeRange,
+        retention_period_minutes: Option<NonZeroU32>,
+        job_creation_timestamp_millisecs: i64,
+    ) -> Result<Vec<QueryArchive>, Error>;
 }
 
 /// Writes to archives. Implemented only for [`crate::ClpDbTransaction`]: the guarantees below last

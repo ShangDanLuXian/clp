@@ -2,6 +2,11 @@
 
 mod archive;
 mod query;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "wired up by the shared metadata tables switch")
+)]
+mod shared_tables_selection_options;
 
 use std::num::NonZeroU64;
 use std::num::NonZeroUsize;
