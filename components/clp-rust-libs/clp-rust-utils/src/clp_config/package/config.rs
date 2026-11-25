@@ -225,22 +225,6 @@ impl Database {
 
     /// # Returns
     ///
-    /// The archives table name (`<prefix><dataset>_archives`).
-    #[must_use]
-    pub fn archives_table_name(&self, dataset: &DatasetName) -> String {
-        format!("{}{dataset}_archives", self.table_prefix)
-    }
-
-    /// # Returns
-    ///
-    /// The datasets table name `<prefix>datasets`.
-    #[must_use]
-    pub fn datasets_table_name(&self) -> String {
-        format!("{}datasets", self.table_prefix)
-    }
-
-    /// # Returns
-    ///
     /// The archives table name without a dataset (`<prefix>archives`), used by the CLP storage
     /// engine.
     #[must_use]
