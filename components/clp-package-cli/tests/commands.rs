@@ -24,6 +24,9 @@ use clp_package_cli::archive_manager::ArchiveSelection;
 use clp_package_cli::archive_manager::ArchiveStorage;
 use clp_package_cli::archive_manager::delete_archives;
 use clp_package_cli::archive_manager::preview_deletion;
+use clp_package_cli::dataset_manager::DatasetsToDelete;
+use clp_package_cli::dataset_manager::delete_datasets;
+use clp_package_cli::dataset_manager::list_datasets;
 use clp_package_cli::table_creator::DefaultDataset;
 use clp_package_cli::table_creator::create_tables_and_default_dataset;
 use clp_rust_utils::clp_config::package::config::ArchiveOutput;
@@ -273,7 +276,8 @@ async fn table_creator_gives_default_the_first_id_and_reruns_harmlessly() -> any
 
 #[tokio::test]
 #[ignore = "requires a MariaDB or MySQL server"]
-async fn table_creator_succeeds_if_default_is_configured_differently() -> anyhow::Result<()> {
+async fn table_creator_succeeds_if_default_is_deleted_or_configured_differently()
+-> anyhow::Result<()> {
     let test_db = TestDb::create_empty("table_creator_unusable_default").await;
     let archive_output_in = |directory: &str| ArchiveOutput {
         storage: ArchiveOutputStorage::Fs {
@@ -295,16 +299,29 @@ async fn table_creator_succeeds_if_default_is_configured_differently() -> anyhow
             existing: stored_config.clone(),
         }
     );
-    let mut connection = test_db.client.acquire().await?;
     assert_eq!(
-        connection
-            .get_datasets()
+        list_datasets(&test_db.client)
             .await?
             .into_iter()
             .map(|dataset| dataset.config)
             .collect::<Vec<_>>(),
         vec![stored_config]
     );
+
+    delete_datasets(
+        &test_db.client,
+        DatasetsToDelete::Named(vec![DatasetName::default()]),
+    )
+    .await?;
+    assert_eq!(
+        create_tables_and_default_dataset(
+            &test_db.client,
+            &archive_output_in("/var/data/archives")
+        )
+        .await?,
+        DefaultDataset::Deleted
+    );
+    assert_eq!(list_datasets(&test_db.client).await?, vec![]);
     Ok(())
 }
 
@@ -511,5 +528,73 @@ async fn a_storage_failure_fails_the_deletion_after_trying_every_archive() -> an
     assert_eq!(test_db.archive_ids(writable_id).await, vec![]);
     assert!(is_stored(&read_only_directory, undeletable_archive));
     assert!(!is_stored(&writable_directory, deletable_archive));
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires a MariaDB or MySQL server"]
+async fn deleting_named_datasets_marks_none_if_a_name_is_unknown() -> anyhow::Result<()> {
+    let test_db = TestDb::create("delete_named_datasets").await;
+    let storage = tempfile::tempdir()?;
+    for name in ["logs", "metrics", "traces"] {
+        test_db.create_dataset(name, storage.path()).await;
+    }
+    let logs: DatasetName = "logs".parse()?;
+    let dataset_names = async || -> anyhow::Result<Vec<DatasetName>> {
+        Ok(list_datasets(&test_db.client)
+            .await?
+            .into_iter()
+            .map(|dataset| dataset.name)
+            .collect())
+    };
+
+    let error = delete_datasets(
+        &test_db.client,
+        DatasetsToDelete::Named(vec![logs.clone(), "unknown".parse()?]),
+    )
+    .await
+    .expect_err("an unknown dataset name should abort the deletion");
+    assert_eq!(
+        error.to_string(),
+        "dataset `unknown` doesn't exist; aborting deletion"
+    );
+    assert_eq!(
+        dataset_names().await?,
+        vec![logs.clone(), "metrics".parse()?, "traces".parse()?]
+    );
+
+    assert_eq!(
+        delete_datasets(
+            &test_db.client,
+            DatasetsToDelete::Named(vec![logs.clone(), logs.clone()]),
+        )
+        .await?,
+        vec![logs]
+    );
+    assert_eq!(
+        dataset_names().await?,
+        vec!["metrics".parse()?, "traces".parse()?]
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires a MariaDB or MySQL server"]
+async fn deleting_all_datasets_marks_every_live_dataset() -> anyhow::Result<()> {
+    let test_db = TestDb::create("delete_all_datasets").await;
+    let storage = tempfile::tempdir()?;
+    for name in ["logs", "metrics"] {
+        test_db.create_dataset(name, storage.path()).await;
+    }
+
+    assert_eq!(
+        delete_datasets(&test_db.client, DatasetsToDelete::All).await?,
+        vec!["logs".parse()?, "metrics".parse()?]
+    );
+    assert_eq!(list_datasets(&test_db.client).await?, vec![]);
+    assert_eq!(
+        delete_datasets(&test_db.client, DatasetsToDelete::All).await?,
+        vec![]
+    );
     Ok(())
 }

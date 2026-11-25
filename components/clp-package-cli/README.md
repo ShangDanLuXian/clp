@@ -4,6 +4,7 @@ This Rust crate holds the CLP package's command-line tools for the clp-s metadat
 
 * `db-table-creator`: creates the shared metadata tables and the `default` dataset.
 * `archive-manager`: finds archives, and deletes them from the metadata database and storage.
+* `dataset-manager`: lists datasets, and marks them as deleted.
 
 Each tool reads the package configuration from `--config`, and the database credentials from
 `CLP_DB_USER` and `CLP_DB_PASS`. They only support the clp-s storage engine.

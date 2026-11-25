@@ -36,6 +36,7 @@ use clp_rust_utils::types::ArchiveId;
 use clp_rust_utils::types::ArchiveUuid;
 use clp_rust_utils::types::DatasetId;
 use sqlx::MySqlPool;
+use sqlx::mysql::MySqlDatabaseError;
 use sqlx::mysql::MySqlPoolOptions;
 use tokio::sync::Barrier;
 use tokio::sync::oneshot;
@@ -185,15 +186,19 @@ impl TestDb {
     ///
     /// Panics if the dataset can't be marked.
     async fn mark_dataset_deleted(&self, name: &DatasetName) {
-        let result = sqlx::query(&format!(
-            "UPDATE `{}` SET `is_deleted` = TRUE WHERE `name` = ?",
-            self.tables.datasets()
-        ))
-        .bind(name)
-        .execute(&self.pool)
-        .await
-        .expect("the dataset should be marked as deleted");
-        assert_eq!(result.rows_affected(), 1);
+        let mut transaction = self
+            .client
+            .begin()
+            .await
+            .expect("a transaction should begin");
+        transaction
+            .mark_dataset_deleted(name)
+            .await
+            .expect("the dataset should be marked as deleted");
+        transaction
+            .commit()
+            .await
+            .expect("the transaction should commit");
     }
 
     /// # Returns
@@ -432,6 +437,19 @@ fn time_range(begin: Option<i64>, end: Option<i64>) -> TimeRange {
     TimeRange::new(begin, end).expect("the time range should be valid")
 }
 
+/// # Returns
+///
+/// Whether `error` is a MySQL error with the error number `number`.
+fn is_mysql_error(error: &Error, number: u16) -> bool {
+    matches!(
+        error,
+        Error::Sqlx(sqlx::Error::Database(database_error))
+            if database_error
+                .try_downcast_ref::<MySqlDatabaseError>()
+                .is_some_and(|mysql_error| mysql_error.number() == number)
+    )
+}
+
 #[tokio::test]
 #[ignore = "requires MariaDB"]
 async fn create_tables_is_idempotent_and_leaves_the_tables_empty() -> anyhow::Result<()> {
@@ -621,6 +639,59 @@ async fn concurrent_create_or_get_dataset_converges_to_one_id() -> anyhow::Resul
             "iteration {iteration}"
         );
     }
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires MariaDB"]
+async fn mark_dataset_deleted_reports_missing_and_already_deleted_datasets() -> anyhow::Result<()> {
+    let test_db = TestDb::create("mark_dataset_deleted").await;
+    let logs = dataset_descriptor("logs");
+    let id = test_db.create_dataset(&logs).await;
+
+    let mut transaction = test_db.client.begin().await?;
+    let error = transaction
+        .mark_dataset_deleted(&dataset_name("missing"))
+        .await
+        .expect_err("a missing dataset should be reported");
+    assert!(
+        matches!(error, Error::DatasetNotFound),
+        "unexpected error: {error:?}"
+    );
+    assert_eq!(transaction.mark_dataset_deleted(&logs.name).await?, id);
+    transaction.commit().await?;
+
+    let mut transaction = test_db.client.begin().await?;
+    let error = transaction
+        .mark_dataset_deleted(&logs.name)
+        .await
+        .expect_err("a deleted dataset should be reported");
+    assert!(
+        matches!(error, Error::DatasetDeleted),
+        "unexpected error: {error:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires MariaDB"]
+async fn mark_dataset_deleted_sees_a_mark_committed_after_the_transaction_snapshot()
+-> anyhow::Result<()> {
+    let test_db = TestDb::create("mark_dataset_deleted_snapshot").await;
+    let logs = dataset_descriptor("logs");
+    test_db.create_dataset(&logs).await;
+
+    let mut transaction = test_db.client.begin().await?;
+    assert!(transaction.get_dataset_by_name(&logs.name).await?.is_some());
+    test_db.mark_dataset_deleted(&logs.name).await;
+    let error = transaction
+        .mark_dataset_deleted(&logs.name)
+        .await
+        .expect_err("a dataset marked after the snapshot should be reported");
+    assert!(
+        matches!(error, Error::DatasetDeleted),
+        "unexpected error: {error:?}"
+    );
     Ok(())
 }
 
@@ -970,6 +1041,45 @@ async fn insert_archives_sees_a_mark_committed_after_its_snapshot() -> anyhow::R
         matches!(error, Error::DatasetDeleted),
         "unexpected error: {error:?}"
     );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires MariaDB"]
+async fn insert_archives_holds_off_mark_dataset_deleted_until_the_transaction_ends()
+-> anyhow::Result<()> {
+    const MYSQL_ER_LOCK_WAIT_TIMEOUT: u16 = 1205;
+
+    let test_db = TestDb::create("insert_archives_lock").await;
+    let logs = dataset_descriptor("logs");
+    let id = test_db.create_dataset(&logs).await;
+    let archive = ArchiveDescriptor {
+        uuid: archive_uuid(1),
+        ..BASE_ARCHIVE
+    };
+
+    let mut inserting = test_db.client.begin().await?;
+    inserting
+        .insert_archives(id, COMPRESSION_JOB_ID, std::slice::from_ref(&archive))
+        .await?;
+
+    let mut marking = test_db.client.begin().await?;
+    sqlx::query("SET SESSION innodb_lock_wait_timeout = 1")
+        .execute(&mut **marking.sqlx_transaction())
+        .await?;
+    let error = marking
+        .mark_dataset_deleted(&logs.name)
+        .await
+        .expect_err("the mark should wait for the inserting transaction");
+    assert!(
+        is_mysql_error(&error, MYSQL_ER_LOCK_WAIT_TIMEOUT),
+        "unexpected error: {error:?}"
+    );
+    marking.rollback().await?;
+
+    inserting.commit().await?;
+    test_db.mark_dataset_deleted(&logs.name).await;
+    assert_eq!(test_db.num_archives(id).await, 1);
     Ok(())
 }
 

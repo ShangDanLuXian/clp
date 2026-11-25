@@ -205,9 +205,9 @@ impl ArchiveManagement for ClpDbTransaction<'_> {
     ) -> Result<(), Error> {
         let HandleParts { tables, connection } = self.parts();
 
-        // The shared lock makes a concurrent mark of the dataset as deleted wait until this
-        // transaction ends, and the locking read sees a mark committed after this transaction's
-        // snapshot, so no archive is inserted into a dataset once its mark commits.
+        // The shared lock makes a concurrent `mark_dataset_deleted` wait until this transaction
+        // ends, and the locking read sees a mark committed after this transaction's snapshot, so no
+        // archive is inserted into a dataset once its mark commits.
         let lock_query = format!(
             "SELECT `is_deleted` FROM `{}` WHERE `id` = ? LOCK IN SHARE MODE",
             tables.datasets()

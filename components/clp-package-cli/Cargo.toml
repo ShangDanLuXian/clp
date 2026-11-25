@@ -12,6 +12,10 @@ name = "archive-manager"
 path = "src/bin/archive_manager.rs"
 
 [[bin]]
+name = "dataset-manager"
+path = "src/bin/dataset_manager.rs"
+
+[[bin]]
 name = "db-table-creator"
 path = "src/bin/db_table_creator.rs"
 

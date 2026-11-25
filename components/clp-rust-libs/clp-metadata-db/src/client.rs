@@ -94,6 +94,16 @@ impl ClpDbClient {
 /// }
 /// ```
 ///
+/// ```compile_fail,E0599
+/// use clp_metadata_db::ClpDbConnection;
+/// use clp_metadata_db::DatasetManagement;
+/// use clp_rust_utils::dataset::DatasetName;
+///
+/// async fn mark_dataset_deleted(connection: &mut ClpDbConnection<'_>, name: &DatasetName) {
+///     let _ = connection.mark_dataset_deleted(name).await;
+/// }
+/// ```
+///
 /// # Type Parameters
 ///
 /// * `'client` - The lifetime of the client that handed out the connection.

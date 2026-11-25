@@ -115,6 +115,29 @@ pub trait DatasetManagement {
         &mut self,
         descriptor: &DatasetDescriptor,
     ) -> Result<DatasetId, Error>;
+
+    /// Marks the dataset named `name` as deleted.
+    ///
+    /// Archive inserts into the dataset by other transactions wait until this transaction ends,
+    /// then fail, so commit promptly. Don't call it in a transaction that has already used the same
+    /// dataset in another operation: the lock upgrade can deadlock.
+    ///
+    /// # Parameters
+    ///
+    /// * `name` - The name of the dataset to mark.
+    ///
+    /// # Returns
+    ///
+    /// The marked dataset's ID on success.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    ///
+    /// * [`Error::DatasetNotFound`] if no dataset is named `name`.
+    /// * [`Error::DatasetDeleted`] if the dataset is already marked as deleted.
+    /// * [`Error::Sqlx`] if a statement fails or a row can't be decoded.
+    async fn mark_dataset_deleted(&mut self, name: &DatasetName) -> Result<DatasetId, Error>;
 }
 
 /// Reads of archives. Every read skips the archives of datasets marked as deleted.
@@ -231,7 +254,8 @@ pub trait ArchiveManagement {
     /// Inserts the archives with `creation_timestamp_millisecs` from the DB clock, then a
     /// `clp_long_span_archives` row for each archive spanning more than 24 hours.
     ///
-    /// Until this transaction ends, no other transaction can mark the dataset as deleted.
+    /// Until this transaction ends, no other transaction can mark the dataset as deleted: a
+    /// concurrent [`DatasetManagement::mark_dataset_deleted`] waits for it.
     ///
     /// # Parameters
     ///
