@@ -3,6 +3,7 @@
 use clp_rust_utils::types::DatasetId;
 
 use crate::types::DatasetConfig;
+use crate::types::InvalidArchiveTimestampRangeError;
 
 /// An error returned by a metadata database operation.
 #[derive(Debug, thiserror::Error)]
@@ -14,6 +15,10 @@ pub enum Error {
     /// No live dataset has the given ID or name.
     #[error("the dataset doesn't exist")]
     DatasetNotFound,
+
+    /// A stored archive row has a begin timestamp after its end timestamp.
+    #[error("invalid stored archive timestamp range: {0}")]
+    InvalidArchiveTimestampRange(#[from] InvalidArchiveTimestampRangeError),
 
     /// A stored dataset row has a retention period of zero.
     #[error("dataset {dataset_id} has a stored retention period of zero")]

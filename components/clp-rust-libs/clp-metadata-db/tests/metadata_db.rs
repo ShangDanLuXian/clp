@@ -6,10 +6,14 @@
 //! recreates its own database.
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Duration;
 
+use clp_metadata_db::ArchiveDescriptor;
+use clp_metadata_db::ArchiveManagement;
+use clp_metadata_db::ArchiveTimestampRange;
 use clp_metadata_db::ClpDbClient;
 use clp_metadata_db::Dataset;
 use clp_metadata_db::DatasetConfig;
@@ -20,11 +24,25 @@ use clp_metadata_db::Error;
 use clp_rust_utils::clp_config::package::config::Database;
 use clp_rust_utils::clp_config::package::config::MetadataTables;
 use clp_rust_utils::dataset::DatasetName;
+use clp_rust_utils::job_config::CompressionJobId;
+use clp_rust_utils::types::ArchiveId;
+use clp_rust_utils::types::ArchiveUuid;
 use clp_rust_utils::types::DatasetId;
 use sqlx::MySqlPool;
 use sqlx::mysql::MySqlPoolOptions;
 use tokio::sync::Barrier;
 use tokio::task::JoinSet;
+
+const BASE_ARCHIVE: ArchiveDescriptor = ArchiveDescriptor {
+    uuid: ArchiveUuid::from_bytes([0; 16]),
+    timestamp_range: ArchiveTimestampRange::WITHOUT_TIMESTAMPS,
+    num_uncompressed_bytes: 1000,
+    num_compressed_bytes: 100,
+};
+
+const COMPRESSION_JOB_ID: CompressionJobId = 7;
+
+const DAY_MILLISECS: i64 = 24 * 60 * 60 * 1000;
 
 /// A freshly created database with the shared metadata tables, and a client of it.
 struct TestDb {
@@ -110,6 +128,55 @@ impl TestDb {
         id
     }
 
+    /// Inserts `archives` into the dataset `dataset_id` in their own transaction.
+    ///
+    /// # Returns
+    ///
+    /// The IDs of the archives, in input order.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the archives can't be inserted, or their UUIDs don't resolve to one ID each.
+    async fn insert_archives(
+        &self,
+        dataset_id: DatasetId,
+        archives: &[ArchiveDescriptor],
+    ) -> Vec<ArchiveId> {
+        let mut transaction = self
+            .client
+            .begin()
+            .await
+            .expect("a transaction should begin");
+        transaction
+            .insert_archives(dataset_id, COMPRESSION_JOB_ID, archives)
+            .await
+            .expect("the archives should be inserted");
+        transaction
+            .commit()
+            .await
+            .expect("the transaction should commit");
+        let id_query = format!(
+            "SELECT `id` FROM `{}` WHERE `dataset_id` = ? AND `uuid` = ?",
+            self.tables.archives()
+        );
+        let mut ids = Vec::with_capacity(archives.len());
+        for archive in archives {
+            let ids_of_uuid: Vec<ArchiveId> = sqlx::query_scalar(&id_query)
+                .bind(dataset_id)
+                .bind(archive.uuid.as_bytes().as_slice())
+                .fetch_all(&self.pool)
+                .await
+                .expect("the archive UUIDs should resolve");
+            assert_eq!(
+                ids_of_uuid.len(),
+                1,
+                "every inserted archive should have one ID"
+            );
+            ids.extend(ids_of_uuid);
+        }
+        ids
+    }
+
     /// Marks the dataset named `name` as deleted in its own transaction.
     ///
     /// # Panics
@@ -126,6 +193,60 @@ impl TestDb {
         .expect("the dataset should be marked as deleted");
         assert_eq!(result.rows_affected(), 1);
     }
+
+    /// # Returns
+    ///
+    /// The long-span archives rows of the dataset `dataset_id`, ordered by archive ID.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the rows can't be read.
+    async fn long_span_archives(&self, dataset_id: DatasetId) -> Vec<LongSpanArchiveRow> {
+        sqlx::query_as::<_, LongSpanArchiveRow>(&format!(
+            "SELECT `archive_id`, `begin_timestamp_millisecs`, `end_timestamp_millisecs` FROM \
+             `{}` WHERE `dataset_id` = ? ORDER BY `archive_id`",
+            self.tables.long_span_archives()
+        ))
+        .bind(dataset_id)
+        .fetch_all(&self.pool)
+        .await
+        .expect("the long-span archives rows should be read")
+    }
+
+    /// # Returns
+    ///
+    /// The number of archives rows of the dataset `dataset_id`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the rows can't be counted.
+    async fn num_archives(&self, dataset_id: DatasetId) -> i64 {
+        sqlx::query_scalar(&format!(
+            "SELECT COUNT(*) FROM `{}` WHERE `dataset_id` = ?",
+            self.tables.archives()
+        ))
+        .bind(dataset_id)
+        .fetch_one(&self.pool)
+        .await
+        .expect("the archives rows should be counted")
+    }
+}
+
+/// A row of the long-span archives table.
+#[derive(Debug, Eq, Hash, PartialEq, sqlx::FromRow)]
+struct LongSpanArchiveRow {
+    archive_id: ArchiveId,
+    begin_timestamp_millisecs: i64,
+    end_timestamp_millisecs: i64,
+}
+
+/// The columns of an archives row that the lookups don't return.
+#[derive(sqlx::FromRow)]
+struct StoredArchiveRow {
+    num_uncompressed_bytes: u64,
+    num_compressed_bytes: u64,
+    compression_job_id: CompressionJobId,
+    creation_timestamp_millisecs: i64,
 }
 
 /// # Returns
@@ -156,6 +277,24 @@ fn dataset_descriptor(name: &str) -> DatasetDescriptor {
             retention_period_minutes: None,
         },
     }
+}
+
+/// # Returns
+///
+/// The archive UUID whose bytes encode `seed`.
+fn archive_uuid(seed: u64) -> ArchiveUuid {
+    ArchiveUuid::from_bytes(u128::from(seed).to_be_bytes())
+}
+
+/// # Returns
+///
+/// The archive timestamp range `[begin, end]`.
+///
+/// # Panics
+///
+/// Panics if `begin` exceeds `end`.
+fn timestamp_range(begin: i64, end: i64) -> ArchiveTimestampRange {
+    ArchiveTimestampRange::new(begin, end).expect("the range should be valid")
 }
 
 #[tokio::test]
@@ -357,7 +496,23 @@ async fn lookups_and_statistics_skip_deleted_datasets() -> anyhow::Result<()> {
     let live = dataset_descriptor("live");
     let deleted = dataset_descriptor("deleted");
     let live_id = test_db.create_dataset(&live).await;
-    test_db.create_dataset(&deleted).await;
+    let deleted_id = test_db.create_dataset(&deleted).await;
+    let live_archive = ArchiveDescriptor {
+        uuid: archive_uuid(1),
+        timestamp_range: timestamp_range(10, 20),
+        ..BASE_ARCHIVE
+    };
+    let deleted_archive = ArchiveDescriptor {
+        uuid: archive_uuid(2),
+        timestamp_range: timestamp_range(0, 30),
+        ..BASE_ARCHIVE
+    };
+    test_db
+        .insert_archives(live_id, std::slice::from_ref(&live_archive))
+        .await;
+    test_db
+        .insert_archives(deleted_id, std::slice::from_ref(&deleted_archive))
+        .await;
     test_db.mark_dataset_deleted(&deleted.name).await;
 
     let mut connection = test_db.client.acquire().await?;
@@ -414,6 +569,199 @@ async fn get_dataset_ids_by_names_resolves_names_across_batches() -> anyhow::Res
             .get_dataset_ids_by_names(&[])
             .await?,
         HashMap::new()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires MariaDB"]
+async fn insert_archives_stores_the_archives_and_their_long_span_references() -> anyhow::Result<()>
+{
+    let test_db = TestDb::create("insert_archives").await;
+    let dataset_id = test_db.create_dataset(&dataset_descriptor("logs")).await;
+    let archives = [
+        ArchiveDescriptor {
+            uuid: archive_uuid(1),
+            timestamp_range: timestamp_range(-5, 5),
+            num_uncompressed_bytes: u64::MAX,
+            num_compressed_bytes: 1,
+        },
+        ArchiveDescriptor {
+            uuid: archive_uuid(2),
+            ..BASE_ARCHIVE
+        },
+        ArchiveDescriptor {
+            uuid: archive_uuid(3),
+            timestamp_range: timestamp_range(0, DAY_MILLISECS),
+            ..BASE_ARCHIVE
+        },
+        ArchiveDescriptor {
+            uuid: archive_uuid(4),
+            timestamp_range: timestamp_range(0, DAY_MILLISECS + 1),
+            ..BASE_ARCHIVE
+        },
+        ArchiveDescriptor {
+            uuid: archive_uuid(5),
+            timestamp_range: timestamp_range(i64::MIN, i64::MAX),
+            ..BASE_ARCHIVE
+        },
+    ];
+    let db_clock_query = "SELECT CAST(UNIX_TIMESTAMP(NOW(3)) * 1000 AS SIGNED)";
+    let before_millisecs: i64 = sqlx::query_scalar(db_clock_query)
+        .fetch_one(&test_db.pool)
+        .await?;
+    let ids = test_db.insert_archives(dataset_id, &archives).await;
+    let after_millisecs: i64 = sqlx::query_scalar(db_clock_query)
+        .fetch_one(&test_db.pool)
+        .await?;
+
+    let stored_row = sqlx::query_as::<_, StoredArchiveRow>(&format!(
+        "SELECT `num_uncompressed_bytes`, `num_compressed_bytes`, `compression_job_id`, \
+         `creation_timestamp_millisecs` FROM `{}` WHERE `id` = ?",
+        test_db.tables.archives()
+    ))
+    .bind(ids[0])
+    .fetch_one(&test_db.pool)
+    .await?;
+    assert_eq!(stored_row.num_uncompressed_bytes, u64::MAX);
+    assert_eq!(stored_row.num_compressed_bytes, 1);
+    assert_eq!(stored_row.compression_job_id, COMPRESSION_JOB_ID);
+    assert!(
+        (before_millisecs..=after_millisecs).contains(&stored_row.creation_timestamp_millisecs),
+        "the creation time {} should be within [{before_millisecs}, {after_millisecs}]",
+        stored_row.creation_timestamp_millisecs
+    );
+
+    assert_eq!(
+        test_db.long_span_archives(dataset_id).await,
+        [
+            LongSpanArchiveRow {
+                archive_id: ids[3],
+                begin_timestamp_millisecs: 0,
+                end_timestamp_millisecs: DAY_MILLISECS + 1,
+            },
+            LongSpanArchiveRow {
+                archive_id: ids[4],
+                begin_timestamp_millisecs: i64::MIN,
+                end_timestamp_millisecs: i64::MAX,
+            },
+        ]
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires MariaDB"]
+async fn insert_archives_keeps_long_span_references_aligned_across_batches() -> anyhow::Result<()> {
+    const NUM_ARCHIVES: u64 = 2500;
+    const LONG_SPAN_INDICES: [usize; 6] = [0, 998, 999, 1000, 2001, 2499];
+
+    let test_db = TestDb::create("insert_archives_batches").await;
+    let dataset_id = test_db.create_dataset(&dataset_descriptor("logs")).await;
+    let archives: Vec<ArchiveDescriptor> = (0..NUM_ARCHIVES)
+        .map(|seed| ArchiveDescriptor {
+            uuid: archive_uuid(seed),
+            timestamp_range: timestamp_range(0, 1),
+            ..BASE_ARCHIVE
+        })
+        .enumerate()
+        .map(|(index, archive)| {
+            if LONG_SPAN_INDICES.contains(&index) {
+                ArchiveDescriptor {
+                    timestamp_range: timestamp_range(0, 2 * DAY_MILLISECS),
+                    ..archive
+                }
+            } else {
+                archive
+            }
+        })
+        .collect();
+    let ids = test_db.insert_archives(dataset_id, &archives).await;
+
+    assert!(ids.is_sorted(), "archive IDs should follow the input order");
+    assert_eq!(
+        test_db.num_archives(dataset_id).await,
+        i64::try_from(NUM_ARCHIVES)?
+    );
+    let expected_long_span_archives: HashSet<LongSpanArchiveRow> = LONG_SPAN_INDICES
+        .iter()
+        .map(|index| LongSpanArchiveRow {
+            archive_id: ids[*index],
+            begin_timestamp_millisecs: 0,
+            end_timestamp_millisecs: 2 * DAY_MILLISECS,
+        })
+        .collect();
+    let long_span_archives = test_db.long_span_archives(dataset_id).await;
+    assert_eq!(long_span_archives.len(), LONG_SPAN_INDICES.len());
+    let long_span_archives: HashSet<LongSpanArchiveRow> = long_span_archives.into_iter().collect();
+    assert_eq!(long_span_archives, expected_long_span_archives);
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires MariaDB"]
+async fn insert_archives_rejects_missing_and_deleted_datasets() -> anyhow::Result<()> {
+    let test_db = TestDb::create("insert_archives_rejected").await;
+    let logs = dataset_descriptor("logs");
+    let id = test_db.create_dataset(&logs).await;
+    test_db.mark_dataset_deleted(&logs.name).await;
+    let archive = ArchiveDescriptor {
+        uuid: archive_uuid(1),
+        ..BASE_ARCHIVE
+    };
+
+    let mut transaction = test_db.client.begin().await?;
+    let error = transaction
+        .insert_archives(
+            DatasetId::from(42),
+            COMPRESSION_JOB_ID,
+            std::slice::from_ref(&archive),
+        )
+        .await
+        .expect_err("a missing dataset should be rejected");
+    assert!(
+        matches!(error, Error::DatasetNotFound),
+        "unexpected error: {error:?}"
+    );
+    let error = transaction
+        .insert_archives(id, COMPRESSION_JOB_ID, &[archive])
+        .await
+        .expect_err("a deleted dataset should be rejected");
+    assert!(
+        matches!(error, Error::DatasetDeleted),
+        "unexpected error: {error:?}"
+    );
+    transaction.commit().await?;
+
+    assert_eq!(test_db.num_archives(id).await, 0);
+    assert_eq!(test_db.num_archives(DatasetId::from(42)).await, 0);
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires MariaDB"]
+async fn insert_archives_sees_a_mark_committed_after_its_snapshot() -> anyhow::Result<()> {
+    let test_db = TestDb::create("insert_archives_snapshot").await;
+    let logs = dataset_descriptor("logs");
+    let id = test_db.create_dataset(&logs).await;
+
+    let mut transaction = test_db.client.begin().await?;
+    assert!(transaction.get_dataset_by_name(&logs.name).await?.is_some());
+    test_db.mark_dataset_deleted(&logs.name).await;
+    let error = transaction
+        .insert_archives(
+            id,
+            COMPRESSION_JOB_ID,
+            &[ArchiveDescriptor {
+                uuid: archive_uuid(1),
+                ..BASE_ARCHIVE
+            }],
+        )
+        .await
+        .expect_err("a dataset marked after the snapshot should be rejected");
+    assert!(
+        matches!(error, Error::DatasetDeleted),
+        "unexpected error: {error:?}"
     );
     Ok(())
 }

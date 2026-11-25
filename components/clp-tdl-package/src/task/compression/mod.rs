@@ -9,6 +9,7 @@ use spider_tdl::TaskContext;
 use spider_tdl::TdlError;
 use spider_tdl::task;
 
+#[expect(dead_code, reason = "wired up by the shared metadata tables switch")]
 mod commit;
 mod compress;
 

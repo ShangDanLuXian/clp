@@ -134,6 +134,16 @@ impl ClpDbTransaction<'_> {
     pub async fn rollback(self) -> Result<(), Error> {
         Ok(self.transaction.rollback().await?)
     }
+
+    /// # Returns
+    ///
+    /// The underlying `sqlx` transaction, for statements on tables outside this library (e.g. the
+    /// job tables) that must commit or roll back together with the metadata operations. Take locks
+    /// on rows outside this library before calling library operations in this transaction, so that
+    /// every transaction locks job rows before dataset rows.
+    pub const fn sqlx_transaction(&mut self) -> &mut sqlx::Transaction<'static, MySql> {
+        &mut self.transaction
+    }
 }
 
 impl Handle for ClpDbTransaction<'_> {
